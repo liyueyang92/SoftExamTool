@@ -121,6 +121,27 @@ const customAPI = {
   // Phase 5 — AI Chat with RAG
   aiChat: (args: { question: string; useDocContext?: boolean }) =>
     invokeWithTimeout<{ answer: string; sources: unknown[] }>('ai:chat', args, 60_000),
+
+  // Phase 4 — Study Plans
+  getPlanActive: () => invokeWithTimeout<unknown | null>('plan:getActive'),
+  createPlan: (args: { examDate: string; mode: 'normal' | 'sprint'; config?: Record<string, unknown> }) =>
+    invokeWithTimeout<unknown>('plan:create', args),
+  deletePlan: (id: string) => invokeWithTimeout<void>('plan:delete', id),
+  getPlanTasks: (args: { planId: string; dateFrom?: string; dateTo?: string }) =>
+    invokeWithTimeout<unknown[]>('plan:getTasks', args),
+  updatePlanTask: (args: { taskId: string; changes: { status?: string; actual_count?: number } }) =>
+    invokeWithTimeout<void>('plan:updateTask', args),
+  getPlanStats: (planId: string) => invokeWithTimeout<unknown>('plan:getStats', planId),
+  getPlanCalendar: (args: { planId: string; year: number; month: number }) =>
+    invokeWithTimeout<unknown[]>('plan:getCalendar', args),
+  adaptPlan: (planId: string) => invokeWithTimeout<{ adjustments: unknown[] }>('plan:adapt', planId),
+
+  // Phase 4 — Study Sessions
+  startSession: (args?: { type?: 'manual' | 'pomodoro'; planTaskId?: string }) =>
+    invokeWithTimeout<unknown>('session:start', args),
+  endSession: (args: { id: string; durationMs: number }) =>
+    invokeWithTimeout<void>('session:end', args),
+  getTodaySessions: () => invokeWithTimeout<unknown[]>('session:getToday'),
 }
 
 if (process.contextIsolated) {

@@ -71,4 +71,19 @@ export const IPC = {
 
   // Phase 5 — AI Chat with RAG
   AI_CHAT: 'ai:chat',
+
+  // Phase 4 — Study Plans
+  PLAN_GET_ACTIVE: 'plan:getActive',
+  PLAN_CREATE: 'plan:create',
+  PLAN_DELETE: 'plan:delete',
+  PLAN_GET_TASKS: 'plan:getTasks',
+  PLAN_UPDATE_TASK: 'plan:updateTask',
+  PLAN_GET_STATS: 'plan:getStats',
+  PLAN_GET_CALENDAR: 'plan:getCalendar',
+  PLAN_ADAPT: 'plan:adapt',
+
+  // Phase 4 — Study Sessions
+  SESSION_START: 'session:start',
+  SESSION_END: 'session:end',
+  SESSION_GET_TODAY: 'session:getToday',
 } as const

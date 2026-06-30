@@ -98,6 +98,77 @@ declare global {
 
       // Phase 5 — AI Chat with RAG
       aiChat: (args: { question: string; useDocContext?: boolean }) => Promise<IpcResponse<{ answer: string; sources: unknown[] }>>
+
+      // Phase 4 — Study Plans
+      getPlanActive: () => Promise<IpcResponse<StudyPlan | null>>
+      createPlan: (args: { examDate: string; mode: 'normal' | 'sprint'; config?: Record<string, unknown> }) => Promise<IpcResponse<StudyPlan>>
+      deletePlan: (id: string) => Promise<IpcResponse<void>>
+      getPlanTasks: (args: { planId: string; dateFrom?: string; dateTo?: string }) => Promise<IpcResponse<PlanTask[]>>
+      updatePlanTask: (args: { taskId: string; changes: { status?: string; actual_count?: number } }) => Promise<IpcResponse<void>>
+      getPlanStats: (planId: string) => Promise<IpcResponse<PlanStats>>
+      getPlanCalendar: (args: { planId: string; year: number; month: number }) => Promise<IpcResponse<CalendarDay[]>>
+      adaptPlan: (planId: string) => Promise<IpcResponse<{ adjustments: AdaptAdjustment[] }>>
+
+      // Phase 4 — Study Sessions
+      startSession: (args?: { type?: 'manual' | 'pomodoro'; planTaskId?: string }) => Promise<IpcResponse<StudySession>>
+      endSession: (args: { id: string; durationMs: number }) => Promise<IpcResponse<void>>
+      getTodaySessions: () => Promise<IpcResponse<StudySession[]>>
     }
   }
+}
+
+export interface StudyPlan {
+  id: string
+  mode: 'normal' | 'sprint'
+  exam_date: string
+  config: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface PlanTask {
+  id: string
+  plan_id: string
+  date: string
+  knowledge_tag: string
+  suggested_count: number
+  actual_count: number
+  status: 'pending' | 'in_progress' | 'completed'
+  completed_at: string | null
+}
+
+export interface CalendarDay {
+  date: string
+  total: number
+  completed: number
+}
+
+export interface TagAccuracy {
+  tag: string
+  total: number
+  correct: number
+  rate: number
+}
+
+export interface PlanStats {
+  today: { total: number; completed: number }
+  streak: number
+  totalStudyMs: number
+  todayStudyMs: number
+  tagAccuracy: TagAccuracy[]
+}
+
+export interface AdaptAdjustment {
+  tag: string
+  change: number
+  reason: string
+}
+
+export interface StudySession {
+  id: string
+  plan_task_id: string | null
+  type: 'manual' | 'pomodoro'
+  started_at: string
+  ended_at: string | null
+  duration_ms: number | null
 }

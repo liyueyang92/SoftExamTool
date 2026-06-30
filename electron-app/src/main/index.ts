@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, dialog, safeStorage } from 'electron'
+import { app, shell, BrowserWindow, dialog, safeStorage, Notification } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -27,6 +27,11 @@ import {
   saveEssayVersion, listEssayVersions, restoreEssayVersion, deleteEssay,
   listEssayMaterials, upsertEssayMaterial, deleteEssayMaterial
 } from './db/essay'
+import {
+  getActivePlan, createPlan, deletePlan, getPlanTasks, getTodayTasks,
+  updatePlanTask, getCalendar, getPlanStats, adaptPlan,
+  startSession, endSession, getTodaySessions
+} from './db/plan'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join as pathJoin } from 'path'
 
@@ -108,6 +113,49 @@ function createWindow(): BrowserWindow {
   }
 
   return win
+}
+
+function checkAndNotify(): void {
+  try {
+    if (!Notification.isSupported()) return
+    const db = getDatabase()
+    const plan = getActivePlan(db)
+    if (!plan?.exam_date) return
+
+    const reminderTime = (appSettings['reminderTime'] as string) ?? '20:00'
+    const [rh, rm] = reminderTime.split(':').map(Number)
+    const now = new Date()
+    const diffMin = Math.abs(now.getHours() * 60 + now.getMinutes() - (rh * 60 + rm))
+    if (diffMin > 30) return
+
+    const today = now.toISOString().slice(0, 10)
+    if (appSettings['lastNotifyDate'] === today) return
+
+    const todayTasks = getTodayTasks(db, plan.id)
+    const pendingCount = todayTasks.filter((t) => t.status !== 'completed').length
+    const examDate = new Date(plan.exam_date)
+    const daysLeft = Math.max(0, Math.ceil((examDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+
+    appSettings['lastNotifyDate'] = today
+
+    if (pendingCount > 0) {
+      new Notification({
+        title: '软考备考提醒',
+        body: `距考试还有 ${daysLeft} 天，今日还有 ${pendingCount} 个任务待完成，加油！`,
+      }).show()
+    } else if (daysLeft <= 7) {
+      new Notification({
+        title: '冲刺提醒',
+        body: `距考试仅剩 ${daysLeft} 天！今日任务已完成，请继续复习薄弱知识点。`,
+      }).show()
+    }
+  } catch { /* non-critical */ }
+}
+
+function setupNotificationTimer(): void {
+  // Check shortly after startup, then every hour
+  setTimeout(() => checkAndNotify(), 15_000)
+  setInterval(() => checkAndNotify(), 60 * 60 * 1000)
 }
 
 function registerIpcHandlers(): void {
@@ -495,6 +543,39 @@ function registerIpcHandlers(): void {
     }
     return res.json()
   })
+
+  // Phase 4 — Study Plans
+  registerHandler(IPC.PLAN_GET_ACTIVE, async () => getActivePlan(db))
+  registerHandler(IPC.PLAN_CREATE, async (args) => {
+    const { examDate, mode, config } = args as { examDate: string; mode: 'normal' | 'sprint'; config?: Record<string, unknown> }
+    return createPlan(db, examDate, mode, config)
+  })
+  registerHandler(IPC.PLAN_DELETE, async (id) => deletePlan(db, id as string))
+  registerHandler(IPC.PLAN_GET_TASKS, async (args) => {
+    const { planId, dateFrom, dateTo } = args as { planId: string; dateFrom?: string; dateTo?: string }
+    return getPlanTasks(db, planId, dateFrom, dateTo)
+  })
+  registerHandler(IPC.PLAN_UPDATE_TASK, async (args) => {
+    const { taskId, changes } = args as { taskId: string; changes: { status?: string; actual_count?: number } }
+    updatePlanTask(db, taskId, changes)
+  })
+  registerHandler(IPC.PLAN_GET_STATS, async (planId) => getPlanStats(db, planId as string))
+  registerHandler(IPC.PLAN_GET_CALENDAR, async (args) => {
+    const { planId, year, month } = args as { planId: string; year: number; month: number }
+    return getCalendar(db, planId, year, month)
+  })
+  registerHandler(IPC.PLAN_ADAPT, async (planId) => adaptPlan(db, planId as string))
+
+  // Phase 4 — Study Sessions
+  registerHandler(IPC.SESSION_START, async (args) => {
+    const { type, planTaskId } = (args ?? {}) as { type?: 'manual' | 'pomodoro'; planTaskId?: string }
+    return startSession(db, type ?? 'manual', planTaskId)
+  })
+  registerHandler(IPC.SESSION_END, async (args) => {
+    const { id, durationMs } = args as { id: string; durationMs: number }
+    endSession(db, id, durationMs)
+  })
+  registerHandler(IPC.SESSION_GET_TODAY, async () => getTodaySessions(db))
 }
 
 app.whenReady().then(async () => {
@@ -526,6 +607,7 @@ app.whenReady().then(async () => {
   })
 
   registerIpcHandlers()
+  setupNotificationTimer()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
