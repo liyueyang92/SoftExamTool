@@ -167,3 +167,80 @@ async def test_connection(req: TestConnectionRequest):
         return {'ok': True, 'reply': reply.strip()[:100]}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+ESSAY_SUGGEST_PROMPT = """你是软考系统架构设计师论文写作辅导专家。
+用户正在写论文的某个段落，请根据段落名称和当前内容给出具体的写作建议。
+要求：
+1. 指出当前内容的不足（如果有）
+2. 给出3-5条具体的改进建议
+3. 建议要贴合软考论文的评分标准：技术深度、实践性、规范性
+以简洁的中文回答，每条建议以"·"开头。"""
+
+RAG_SYSTEM_PROMPT = """你是软考系统架构设计师备考助手，擅长软件架构、系统设计相关知识。
+请根据提供的参考资料回答用户问题。如果参考资料与问题相关，优先使用参考资料的内容；
+如果参考资料不相关或不足，可以补充你自己的专业知识。
+回答时请：
+1. 用简洁清晰的中文
+2. 如果引用了参考资料，在末尾注明"（参考：第X页）"
+3. 结合软考考试的重点和考查方式"""
+
+
+class EssaySuggestRequest(BaseModel):
+    ai_config: dict
+    section_key: str
+    section_label: str
+    current_content: str
+    word_target: int
+
+
+@router.post('/essay-suggest')
+async def essay_suggest(req: EssaySuggestRequest):
+    provider = build_provider(req.ai_config)
+    user_msg = (
+        f'段落：{req.section_label}（目标字数约{req.word_target}字）\n'
+        f'当前内容（{len(req.current_content.replace(chr(32), ""))}字）：\n{req.current_content[:1500]}'
+    )
+    try:
+        reply = await provider.chat([
+            {'role': 'system', 'content': ESSAY_SUGGEST_PROMPT},
+            {'role': 'user', 'content': user_msg},
+        ], temperature=0.7)
+        return {'suggestions': reply.strip()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ChatRequest(BaseModel):
+    ai_config: dict
+    question: str
+    doc_chunks: list[dict] = []   # [{content, page_num, doc_title}]
+
+
+@router.post('/chat')
+async def ai_chat(req: ChatRequest):
+    provider = build_provider(req.ai_config)
+
+    context_text = ''
+    if req.doc_chunks:
+        parts = [
+            f'【第{c.get("page_num", "?")}页 · {c.get("doc_title", "文档")}】\n{c["content"][:500]}'
+            for c in req.doc_chunks[:5]
+        ]
+        context_text = '\n\n---\n\n'.join(parts)
+
+    messages = [{'role': 'system', 'content': RAG_SYSTEM_PROMPT}]
+    if context_text:
+        messages.append({'role': 'user', 'content': f'参考资料：\n{context_text}\n\n问题：{req.question}'})
+    else:
+        messages.append({'role': 'user', 'content': req.question})
+
+    try:
+        reply = await provider.chat(messages, temperature=0.5)
+        sources = [
+            {'page_num': c.get('page_num'), 'doc_title': c.get('doc_title', '文档')}
+            for c in req.doc_chunks[:5]
+        ] if req.doc_chunks else []
+        return {'answer': reply.strip(), 'sources': sources}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

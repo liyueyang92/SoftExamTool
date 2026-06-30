@@ -42,4 +42,33 @@ export const IPC = {
   AI_TEST_CONNECTION: 'ai:testConnection',
   AI_GET_CONFIG: 'ai:getConfig',
   AI_SET_CONFIG: 'ai:setConfig',
+
+  // Phase 5 — Crawler
+  CRAWLER_LIST_RULES: 'crawler:listRules',
+  CRAWLER_UPSERT_RULE: 'crawler:upsertRule',
+  CRAWLER_DELETE_RULE: 'crawler:deleteRule',
+  CRAWLER_TEST: 'crawler:test',
+  CRAWLER_RUN: 'crawler:run',
+  CRAWLER_LIST_RUNS: 'crawler:listRuns',
+
+  // Phase 5 — Knowledge Graph
+  GRAPH_BUILD: 'graph:build',
+
+  // Phase 5 — Essay
+  ESSAY_LIST: 'essay:list',
+  ESSAY_CREATE: 'essay:create',
+  ESSAY_GET: 'essay:get',
+  ESSAY_UPDATE_SECTION: 'essay:updateSection',
+  ESSAY_UPDATE_META: 'essay:updateMeta',
+  ESSAY_SAVE_VERSION: 'essay:saveVersion',
+  ESSAY_LIST_VERSIONS: 'essay:listVersions',
+  ESSAY_RESTORE_VERSION: 'essay:restoreVersion',
+  ESSAY_DELETE: 'essay:delete',
+  ESSAY_LIST_MATERIALS: 'essay:listMaterials',
+  ESSAY_UPSERT_MATERIAL: 'essay:upsertMaterial',
+  ESSAY_DELETE_MATERIAL: 'essay:deleteMaterial',
+  ESSAY_AI_SUGGEST: 'essay:aiSuggest',
+
+  // Phase 5 — AI Chat with RAG
+  AI_CHAT: 'ai:chat',
 } as const

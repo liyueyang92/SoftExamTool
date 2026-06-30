@@ -88,6 +88,39 @@ const customAPI = {
     invokeWithTimeout<{ questions: unknown[] }>('ai:generateQuestions', args, 120_000),
   gradeEssay: (args: unknown) =>
     invokeWithTimeout<unknown>('ai:gradeEssay', args, 120_000),
+
+  // Phase 5 — Crawler
+  listCrawlerRules: () => invokeWithTimeout<unknown[]>('crawler:listRules'),
+  upsertCrawlerRule: (args: unknown) => invokeWithTimeout<unknown>('crawler:upsertRule', args),
+  deleteCrawlerRule: (id: string) => invokeWithTimeout<void>('crawler:deleteRule', id),
+  testCrawl: (args: unknown) => invokeWithTimeout<{ count: number; samples: unknown[] }>('crawler:test', args, 30_000),
+  runCrawl: (args: { ruleId: string }) => invokeWithTimeout<{ taskId: string; runId: string }>('crawler:run', args),
+  listCrawlerRuns: (ruleId: string) => invokeWithTimeout<unknown[]>('crawler:listRuns', ruleId),
+
+  // Phase 5 — Knowledge Graph
+  buildGraph: () => invokeWithTimeout<{ nodes: unknown[]; edges: unknown[] }>('graph:build'),
+
+  // Phase 5 — Essay
+  listEssays: () => invokeWithTimeout<unknown[]>('essay:list'),
+  createEssay: (args?: { title?: string }) => invokeWithTimeout<unknown>('essay:create', args),
+  getEssay: (id: string) => invokeWithTimeout<{ essay: unknown; sections: unknown[] } | null>('essay:get', id),
+  updateEssaySection: (args: { essayId: string; sectionKey: string; content: string }) =>
+    invokeWithTimeout<unknown>('essay:updateSection', args),
+  updateEssayMeta: (args: { id: string; title?: string; question?: string }) =>
+    invokeWithTimeout<void>('essay:updateMeta', args),
+  saveEssayVersion: (essayId: string) => invokeWithTimeout<unknown>('essay:saveVersion', essayId),
+  listEssayVersions: (essayId: string) => invokeWithTimeout<unknown[]>('essay:listVersions', essayId),
+  restoreEssayVersion: (args: { essayId: string; versionId: string }) =>
+    invokeWithTimeout<void>('essay:restoreVersion', args),
+  deleteEssay: (id: string) => invokeWithTimeout<void>('essay:delete', id),
+  listEssayMaterials: () => invokeWithTimeout<unknown[]>('essay:listMaterials'),
+  upsertEssayMaterial: (args: unknown) => invokeWithTimeout<unknown>('essay:upsertMaterial', args),
+  deleteEssayMaterial: (id: string) => invokeWithTimeout<void>('essay:deleteMaterial', id),
+  essayAiSuggest: (args: unknown) => invokeWithTimeout<{ suggestions: string }>('essay:aiSuggest', args, 60_000),
+
+  // Phase 5 — AI Chat with RAG
+  aiChat: (args: { question: string; useDocContext?: boolean }) =>
+    invokeWithTimeout<{ answer: string; sources: unknown[] }>('ai:chat', args, 60_000),
 }
 
 if (process.contextIsolated) {

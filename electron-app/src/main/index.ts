@@ -18,6 +18,15 @@ import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
   deleteDocument, insertChunks, getChunks
 } from './db/documents'
+import {
+  listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
+  createCrawlerRun, updateCrawlerRun, listCrawlerRuns, addCrawledCount
+} from './db/crawler'
+import {
+  listEssays, createEssay, getEssay, updateEssaySection, updateEssayMeta,
+  saveEssayVersion, listEssayVersions, restoreEssayVersion, deleteEssay,
+  listEssayMaterials, upsertEssayMaterial, deleteEssayMaterial
+} from './db/essay'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join as pathJoin } from 'path'
 
@@ -292,6 +301,183 @@ function registerIpcHandlers(): void {
     if (!res.ok) {
       const err = await res.json() as { detail?: string }
       throw Object.assign(new Error(err.detail ?? 'Generation failed'), { code: 'AI_GEN_FAILED' })
+    }
+    return res.json()
+  })
+
+  // Phase 5 — Crawler
+  registerHandler(IPC.CRAWLER_LIST_RULES, async () => listCrawlerRules(db))
+
+  registerHandler(IPC.CRAWLER_UPSERT_RULE, async (args) =>
+    upsertCrawlerRule(db, args as Parameters<typeof upsertCrawlerRule>[1]))
+
+  registerHandler(IPC.CRAWLER_DELETE_RULE, async (id) => deleteCrawlerRule(db, id as string))
+
+  registerHandler(IPC.CRAWLER_LIST_RUNS, async (ruleId) => listCrawlerRuns(db, ruleId as string))
+
+  registerHandler(IPC.CRAWLER_TEST, async (args) => {
+    const { rule, test_url } = args as { rule: unknown; test_url: string }
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/crawler/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ rule, test_url }),
+    })
+    if (!res.ok) {
+      const err = await res.json() as { detail?: string }
+      throw Object.assign(new Error(err.detail ?? 'Test failed'), { code: 'CRAWLER_TEST_FAILED' })
+    }
+    return res.json()
+  })
+
+  registerHandler(IPC.CRAWLER_RUN, async (args) => {
+    const { ruleId } = args as { ruleId: string }
+    const rules = listCrawlerRules(db)
+    const rule = rules.find((r) => r.id === ruleId)
+    if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
+
+    const run = createCrawlerRun(db, ruleId)
+    const taskId = taskManager!.createTask('crawl', { ruleId, runId: run.id })
+    wsClient.connect(taskId)
+
+    wsClient.onComplete(taskId, (_, result) => {
+      const { questions, total_found } = result as { questions: unknown[]; total_found: number; rule_id: string }
+      try {
+        const saved = batchInsertQuestions(db, questions.map((q) => ({ ...(q as object), source_type: 'crawled' })) as Parameters<typeof batchInsertQuestions>[1])
+        updateCrawlerRun(db, run.id, {
+          status: 'completed',
+          total_found,
+          total_saved: saved,
+          ended_at: new Date().toISOString(),
+        })
+        addCrawledCount(db, ruleId, saved)
+        taskManager!.updateTask(taskId, 'completed', { saved })
+      } catch (e) {
+        console.error('[Crawler] Failed to save questions:', e)
+      }
+    })
+    wsClient.onError(taskId, (_, error) => {
+      updateCrawlerRun(db, run.id, { status: 'failed', ended_at: new Date().toISOString(), error_msg: String(error) })
+      taskManager!.updateTask(taskId, 'failed', { error })
+    })
+
+    fetch(`http://127.0.0.1:${pythonManager.port}/crawler/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ rule, task_id: taskId, rule_id: ruleId }),
+    }).catch((e) => console.error('[Crawler] Run request failed:', e))
+
+    return { taskId, runId: run.id }
+  })
+
+  // Phase 5 — Knowledge Graph (computed in main process from SQLite)
+  registerHandler(IPC.GRAPH_BUILD, async () => {
+    const chunks = db.prepare("SELECT knowledge_tags FROM doc_chunks WHERE knowledge_tags != '[]'").all() as { knowledge_tags: string }[]
+    const questions = db.prepare("SELECT knowledge_tags FROM questions WHERE knowledge_tags != '[]'").all() as { knowledge_tags: string }[]
+
+    const qCounts: Record<string, number> = {}
+    const dCounts: Record<string, number> = {}
+    const coOcc: Record<string, number> = {}
+
+    for (const q of questions) {
+      const tags: string[] = JSON.parse(q.knowledge_tags ?? '[]')
+      for (const t of tags) qCounts[t] = (qCounts[t] ?? 0) + 1
+    }
+    for (const c of chunks) {
+      const tags: string[] = JSON.parse(c.knowledge_tags ?? '[]')
+      for (const t of tags) dCounts[t] = (dCounts[t] ?? 0) + 1
+      for (let i = 0; i < tags.length; i++) {
+        for (let j = i + 1; j < tags.length; j++) {
+          const key = [tags[i], tags[j]].sort().join('|||')
+          coOcc[key] = (coOcc[key] ?? 0) + 1
+        }
+      }
+    }
+
+    const allTags = new Set([...Object.keys(qCounts), ...Object.keys(dCounts)])
+    const nodes = Array.from(allTags).map((tag) => ({
+      id: tag,
+      name: tag,
+      questionCount: qCounts[tag] ?? 0,
+      docCount: dCounts[tag] ?? 0,
+      value: (qCounts[tag] ?? 0) + (dCounts[tag] ?? 0),
+    }))
+    const edges = Object.entries(coOcc).map(([key, value]) => {
+      const [source, target] = key.split('|||')
+      return { source, target, value }
+    })
+    return { nodes, edges }
+  })
+
+  // Phase 5 — Essay
+  registerHandler(IPC.ESSAY_LIST, async () => listEssays(db))
+  registerHandler(IPC.ESSAY_CREATE, async (args) => {
+    const { title } = (args ?? {}) as { title?: string }
+    return createEssay(db, title)
+  })
+  registerHandler(IPC.ESSAY_GET, async (id) => getEssay(db, id as string))
+  registerHandler(IPC.ESSAY_UPDATE_SECTION, async (args) => {
+    const { essayId, sectionKey, content } = args as { essayId: string; sectionKey: string; content: string }
+    return updateEssaySection(db, essayId, sectionKey, content)
+  })
+  registerHandler(IPC.ESSAY_UPDATE_META, async (args) => {
+    const { id, ...patch } = args as { id: string; title?: string; question?: string }
+    updateEssayMeta(db, id, patch)
+  })
+  registerHandler(IPC.ESSAY_SAVE_VERSION, async (essayId) => saveEssayVersion(db, essayId as string))
+  registerHandler(IPC.ESSAY_LIST_VERSIONS, async (essayId) => listEssayVersions(db, essayId as string))
+  registerHandler(IPC.ESSAY_RESTORE_VERSION, async (args) => {
+    const { essayId, versionId } = args as { essayId: string; versionId: string }
+    restoreEssayVersion(db, essayId, versionId)
+  })
+  registerHandler(IPC.ESSAY_DELETE, async (id) => deleteEssay(db, id as string))
+  registerHandler(IPC.ESSAY_LIST_MATERIALS, async () => listEssayMaterials(db))
+  registerHandler(IPC.ESSAY_UPSERT_MATERIAL, async (args) =>
+    upsertEssayMaterial(db, args as Parameters<typeof upsertEssayMaterial>[1]))
+  registerHandler(IPC.ESSAY_DELETE_MATERIAL, async (id) => deleteEssayMaterial(db, id as string))
+
+  registerHandler(IPC.ESSAY_AI_SUGGEST, async (args) => {
+    const params = args as { section_key: string; section_label: string; current_content: string; word_target: number }
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/essay-suggest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), ...params }),
+    })
+    if (!res.ok) {
+      const err = await res.json() as { detail?: string }
+      throw Object.assign(new Error(err.detail ?? 'Suggest failed'), { code: 'AI_SUGGEST_FAILED' })
+    }
+    return res.json()
+  })
+
+  // Phase 5 — AI Chat with RAG (FTS5 doc context)
+  registerHandler(IPC.AI_CHAT, async (args) => {
+    const { question, useDocContext = true } = args as { question: string; useDocContext?: boolean }
+    let docChunks: unknown[] = []
+
+    if (useDocContext) {
+      try {
+        const ftsQ = question.replace(/["']/g, ' ')
+        docChunks = db.prepare(`
+          SELECT dc.content, dc.page_num, d.title as doc_title
+          FROM doc_chunks dc
+          JOIN documents d ON d.id = dc.doc_id
+          JOIN doc_chunks_fts f ON dc.id = f.rowid
+          WHERE doc_chunks_fts MATCH ?
+          LIMIT 5
+        `).all(ftsQ) as unknown[]
+      } catch {
+        // FTS not available or no results
+      }
+    }
+
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), question, doc_chunks: docChunks }),
+    })
+    if (!res.ok) {
+      const err = await res.json() as { detail?: string }
+      throw Object.assign(new Error(err.detail ?? 'Chat failed'), { code: 'AI_CHAT_FAILED' })
     }
     return res.json()
   })

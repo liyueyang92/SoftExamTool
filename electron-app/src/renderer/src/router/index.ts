@@ -8,8 +8,11 @@ const router = createRouter({
     { path: '/practice',   name: 'practice',  component: () => import('../views/PracticeView.vue') },
     { path: '/plans',      name: 'plans',     component: () => import('../views/PlansView.vue') },
     { path: '/ai',         name: 'ai',        component: () => import('../views/AiView.vue') },
-    { path: '/documents',  name: 'documents', component: () => import('../views/DocumentsView.vue') },
-    { path: '/settings',   name: 'settings',  component: () => import('../views/SettingsView.vue') },
+    { path: '/documents',       name: 'documents',  component: () => import('../views/DocumentsView.vue') },
+    { path: '/crawler',         name: 'crawler',    component: () => import('../views/CrawlerView.vue') },
+    { path: '/knowledge-graph', name: 'graph',      component: () => import('../views/KnowledgeGraphView.vue') },
+    { path: '/essay',           name: 'essay',      component: () => import('../views/EssayView.vue') },
+    { path: '/settings',        name: 'settings',   component: () => import('../views/SettingsView.vue') },
   ],
 })
 

@@ -11,8 +11,11 @@ const navItems = [
   { to: '/practice',  icon: '✎', label: '练习'   },
   { to: '/plans',     icon: '📅', label: '学习计划' },
   { to: '/ai',        icon: '✦', label: 'AI助手'  },
-  { to: '/documents', icon: '📄', label: '文档库'  },
-  { to: '/settings',  icon: '⚙', label: '设置'   },
+  { to: '/documents',       icon: '📄', label: '文档库'  },
+  { to: '/crawler',         icon: '🕷', label: '爬虫'    },
+  { to: '/knowledge-graph', icon: '◈',  label: '知识图谱' },
+  { to: '/essay',           icon: '✍', label: '论文写作' },
+  { to: '/settings',        icon: '⚙', label: '设置'   },
 ]
 </script>
 

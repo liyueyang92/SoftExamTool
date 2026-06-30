@@ -6,7 +6,36 @@ import { useQuestionStore } from '../stores/question'
 const ai = useAiStore()
 const questionStore = useQuestionStore()
 
-const activeTab = ref<'generate' | 'grade'>('generate')
+const activeTab = ref<'generate' | 'grade' | 'chat'>('generate')
+
+// Chat tab
+interface ChatMessage { role: 'user' | 'assistant'; content: string; sources?: { page_num: number; doc_title: string }[] }
+const chatMessages = ref<ChatMessage[]>([])
+const chatInput = ref('')
+const chatLoading = ref(false)
+const useDocContext = ref(true)
+const chatError = ref('')
+
+async function sendChat() {
+  const q = chatInput.value.trim()
+  if (!q || chatLoading.value) return
+  chatInput.value = ''
+  chatError.value = ''
+  chatMessages.value.push({ role: 'user', content: q })
+  chatLoading.value = true
+  try {
+    const res = await window.electronAPI.aiChat({ question: q, useDocContext: useDocContext.value })
+    if (res.success) {
+      chatMessages.value.push({ role: 'assistant', content: res.data.answer, sources: res.data.sources as { page_num: number; doc_title: string }[] })
+    } else {
+      chatError.value = (res.error as { message: string }).message
+    }
+  } catch (e) {
+    chatError.value = String(e)
+  } finally {
+    chatLoading.value = false
+  }
+}
 
 // Generate tab
 const genParams = ref<GenerateParams>({ count: 5, types: ['single'], knowledge_tags: [], difficulty: undefined })
@@ -73,6 +102,7 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
     <div class="tabs">
       <button class="tab" :class="{ active: activeTab === 'generate' }" @click="activeTab = 'generate'">智能出题</button>
       <button class="tab" :class="{ active: activeTab === 'grade' }" @click="activeTab = 'grade'">AI 评分</button>
+      <button class="tab" :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">AI 问答</button>
     </div>
 
     <!-- Generate Tab -->
@@ -223,6 +253,54 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
         </div>
       </div>
     </div>
+    <!-- Chat Tab -->
+    <div v-if="activeTab === 'chat'" class="tab-panel chat-panel-wrap">
+      <div class="chat-toolbar">
+        <label class="check-label">
+          <input type="checkbox" v-model="useDocContext" />
+          使用文档库作为参考资料（RAG）
+        </label>
+      </div>
+      <div class="chat-messages">
+        <div v-if="chatMessages.length === 0" class="chat-empty">
+          <div style="font-size:36px;margin-bottom:8px">✦</div>
+          <div>向 AI 提问软考架构相关问题</div>
+          <div style="font-size:12px;margin-top:4px;color:#475569">勾选上方选项可引用已导入文档作为参考</div>
+        </div>
+        <template v-else>
+          <div v-for="(msg, i) in chatMessages" :key="i" class="chat-msg" :class="msg.role">
+            <div class="msg-bubble">
+              <div class="msg-content">{{ msg.content }}</div>
+              <div v-if="msg.sources && msg.sources.length" class="msg-sources">
+                <span v-for="(s, j) in msg.sources" :key="j" class="source-chip">
+                  📄 {{ s.doc_title }} p.{{ s.page_num }}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div v-if="chatLoading" class="chat-msg assistant">
+            <div class="msg-bubble loading">
+              <div class="spinner"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="chat-input-row">
+        <p v-if="chatError" class="error-text chat-error">{{ chatError }}</p>
+        <div class="chat-input-wrap">
+          <textarea
+            v-model="chatInput"
+            class="chat-input"
+            rows="2"
+            placeholder="输入问题后按 Ctrl+Enter 发送…"
+            @keydown.ctrl.enter.prevent="sendChat"
+          ></textarea>
+          <button class="send-btn" @click="sendChat" :disabled="chatLoading || !chatInput.trim()">
+            {{ chatLoading ? '…' : '发送' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -299,4 +377,26 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
 .empty-tip { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 200px; color: #475569; font-size: 13px; }
 .spinner { width: 32px; height: 32px; border: 3px solid #334155; border-top-color: #60a5fa; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Chat tab */
+.chat-panel-wrap { display: flex; flex-direction: column; height: 100%; }
+.chat-toolbar { padding: 8px 0; border-bottom: 1px solid #334155; flex-shrink: 0; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 12px 0; display: flex; flex-direction: column; gap: 12px; }
+.chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #475569; font-size: 13px; }
+.chat-msg { display: flex; }
+.chat-msg.user { justify-content: flex-end; }
+.chat-msg.assistant { justify-content: flex-start; }
+.msg-bubble { max-width: 75%; background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; }
+.chat-msg.user .msg-bubble { background: #1e3a5f; border-color: #1d4ed8; }
+.msg-content { font-size: 13px; color: #e2e8f0; line-height: 1.7; white-space: pre-wrap; }
+.msg-sources { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.source-chip { font-size: 11px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 2px 6px; color: #64748b; }
+.msg-bubble.loading { display: flex; align-items: center; justify-content: center; padding: 12px 16px; }
+.chat-input-row { flex-shrink: 0; border-top: 1px solid #334155; padding-top: 10px; }
+.chat-error { margin-bottom: 6px; }
+.chat-input-wrap { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input { flex: 1; background: #1e293b; border: 1px solid #475569; border-radius: 8px; color: #e2e8f0; padding: 8px 12px; font-size: 13px; resize: none; font-family: inherit; }
+.send-btn { background: #1d4ed8; border: none; border-radius: 8px; color: #fff; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; flex-shrink: 0; }
+.send-btn:hover:not(:disabled) { background: #2563eb; }
+.send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

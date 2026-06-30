@@ -69,6 +69,35 @@ declare global {
       testAiConnection: () => Promise<IpcResponse<{ ok: boolean; reply: string }>>
       generateQuestions: (args: unknown) => Promise<IpcResponse<{ questions: unknown[] }>>
       gradeEssay: (args: unknown) => Promise<IpcResponse<unknown>>
+
+      // Phase 5 — Crawler
+      listCrawlerRules: () => Promise<IpcResponse<unknown[]>>
+      upsertCrawlerRule: (args: unknown) => Promise<IpcResponse<unknown>>
+      deleteCrawlerRule: (id: string) => Promise<IpcResponse<void>>
+      testCrawl: (args: unknown) => Promise<IpcResponse<{ count: number; samples: unknown[] }>>
+      runCrawl: (args: { ruleId: string }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
+      listCrawlerRuns: (ruleId: string) => Promise<IpcResponse<unknown[]>>
+
+      // Phase 5 — Knowledge Graph
+      buildGraph: () => Promise<IpcResponse<{ nodes: unknown[]; edges: unknown[] }>>
+
+      // Phase 5 — Essay
+      listEssays: () => Promise<IpcResponse<unknown[]>>
+      createEssay: (args?: { title?: string }) => Promise<IpcResponse<unknown>>
+      getEssay: (id: string) => Promise<IpcResponse<{ essay: unknown; sections: unknown[] } | null>>
+      updateEssaySection: (args: { essayId: string; sectionKey: string; content: string }) => Promise<IpcResponse<unknown>>
+      updateEssayMeta: (args: { id: string; title?: string; question?: string }) => Promise<IpcResponse<void>>
+      saveEssayVersion: (essayId: string) => Promise<IpcResponse<unknown>>
+      listEssayVersions: (essayId: string) => Promise<IpcResponse<unknown[]>>
+      restoreEssayVersion: (args: { essayId: string; versionId: string }) => Promise<IpcResponse<void>>
+      deleteEssay: (id: string) => Promise<IpcResponse<void>>
+      listEssayMaterials: () => Promise<IpcResponse<unknown[]>>
+      upsertEssayMaterial: (args: unknown) => Promise<IpcResponse<unknown>>
+      deleteEssayMaterial: (id: string) => Promise<IpcResponse<void>>
+      essayAiSuggest: (args: unknown) => Promise<IpcResponse<{ suggestions: string }>>
+
+      // Phase 5 — AI Chat with RAG
+      aiChat: (args: { question: string; useDocContext?: boolean }) => Promise<IpcResponse<{ answer: string; sources: unknown[] }>>
     }
   }
 }
