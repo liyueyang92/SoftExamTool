@@ -13,9 +13,11 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
-    "dev:all": "powershell -File ../scripts/dev-start.ps1",
-    "rebuild": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
+    "dev:all": "powershell -ExecutionPolicy Bypass -File ../scripts/dev-start.ps1",
+    "rebuild": "electron-rebuild -f -w better-sqlite3-multiple-ciphers -w keytar",
     "build": "npm run typecheck && electron-vite build",
+    "build:all": "powershell -ExecutionPolicy Bypass -File ../scripts/build-all.ps1",
+    "build:all:skip-python": "powershell -ExecutionPolicy Bypass -File ../scripts/build-all.ps1 -SkipPython",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
@@ -25,7 +27,10 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
-    "better-sqlite3-multiple-ciphers": "^12.11.1"
+    "better-sqlite3-multiple-ciphers": "^12.11.1",
+    "keytar": "^7.9.0",
+    "pinia": "^3.0.4",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "3.0.0",

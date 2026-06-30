@@ -1,0 +1,61 @@
+# build-all.ps1
+# Full release build pipeline: Python service -> Electron installer.
+# Run from the repository root:  .\scripts\build-all.ps1
+#
+# Flags are forwarded to the individual scripts:
+#   -Target  nsis|portable|dir   (forwarded to build-electron.ps1, default: nsis)
+#   -SkipPython                  skip PyInstaller step (use existing resources/)
+#   -SkipTypecheck               skip tsc / vue-tsc
+
+param(
+    [ValidateSet('nsis','portable','dir')]
+    [string]$Target = 'nsis',
+    [switch]$SkipPython,
+    [switch]$SkipTypecheck
+)
+
+$ErrorActionPreference = 'Stop'
+$ScriptsDir = $PSScriptRoot
+$Root       = Split-Path -Parent $ScriptsDir
+$StartTime  = Get-Date
+
+function Step([string]$name, [scriptblock]$block) {
+    Write-Host "`n==============================" -ForegroundColor DarkGray
+    Write-Host " $name" -ForegroundColor White
+    Write-Host "==============================" -ForegroundColor DarkGray
+    $t = Get-Date
+    & $block
+    $elapsed = [math]::Round(((Get-Date) - $t).TotalSeconds, 1)
+    Write-Host "[$name] Completed in $($elapsed)s" -ForegroundColor DarkGreen
+}
+
+# ── Environment summary ──────────────────────────────────────────────────────
+Write-Host "[build-all] Starting full build pipeline" -ForegroundColor Cyan
+Write-Host "  Root:   $Root"
+Write-Host "  Target: $Target"
+node --version 2>&1 | Write-Host
+python --version 2>&1 | Write-Host
+
+# ── Step 1: Python service ───────────────────────────────────────────────────
+if (-not $SkipPython) {
+    Step 'Build Python service' {
+        & (Join-Path $ScriptsDir 'build-python.ps1')
+    }
+} else {
+    Write-Host "[build-all] Skipping Python build (-SkipPython)" -ForegroundColor Yellow
+}
+
+# ── Step 2: Electron app ─────────────────────────────────────────────────────
+Step 'Build Electron app' {
+    $args = @("-Target $Target")
+    if ($SkipTypecheck) { $args += '-SkipTypecheck' }
+    & (Join-Path $ScriptsDir 'build-electron.ps1') -Target $Target -SkipTypecheck:$SkipTypecheck
+}
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+$total = [math]::Round(((Get-Date) - $StartTime).TotalSeconds, 0)
+$releaseDir = Join-Path $Root 'release'
+Write-Host "`n=============================="                    -ForegroundColor Green
+Write-Host " Build complete in $($total)s"                      -ForegroundColor Green
+Write-Host " Release -> $releaseDir"                            -ForegroundColor Green
+Write-Host "=============================="                      -ForegroundColor Green

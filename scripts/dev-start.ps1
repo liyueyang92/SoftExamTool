@@ -1,31 +1,61 @@
-# 一键启动开发环境（在仓库根目录执行：.\scripts\dev-start.ps1）
-# Electron 会自行 spawn Python，此脚本仅用于需要独立观察两侧日志时手动启动 Python
+# dev-start.ps1
+# One-shot dev launcher: Python service (uvicorn --reload) + Electron hot-reload.
+# Usage (from repo root):  .\scripts\dev-start.ps1
+# Usage (via npm):         cd electron-app && npm run dev:all
+#
+# Press Ctrl-C to stop both processes.
+
 $ErrorActionPreference = 'Stop'
-$RootDir = Split-Path -Parent $PSScriptRoot
+$Root   = Split-Path -Parent $PSScriptRoot
+$SvcDir = Join-Path $Root 'python-service'
+$PyExe  = Join-Path $SvcDir '.venv\Scripts\python.exe'
+$AppDir = Join-Path $Root 'electron-app'
 
-$PythonExe = Join-Path $RootDir 'python-service\.venv\Scripts\python.exe'
-$PythonMain = Join-Path $RootDir 'python-service\main.py'
-
-if (-not (Test-Path $PythonExe)) {
-    Write-Host "[Error] Python venv not found. Run: python -m venv python-service/.venv && python-service/.venv/Scripts/pip install -r python-service/requirements.txt" -ForegroundColor Red
-    exit 1
+# ── Validate venv ────────────────────────────────────────────────────────────
+if (-not (Test-Path $PyExe)) {
+    Write-Error "[dev] Python venv not found at $PyExe`nRun: python -m venv python-service/.venv && python-service/.venv/Scripts/pip install -r python-service/requirements.txt"
 }
 
-Write-Host "[Dev] Starting Python service..." -ForegroundColor Cyan
-$pythonProc = Start-Process -FilePath $PythonExe `
-    -ArgumentList $PythonMain `
-    -Environment @{ INTERNAL_PORT = '8765'; INTERNAL_TOKEN = 'dev-token'; LOG_LEVEL = 'DEBUG' } `
+# ── Dev environment — fixed values so Electron main can hard-code them in dev ─
+# These match the defaults in python-service/.env.example and electron-app dev config.
+$env:INTERNAL_PORT  = '8765'
+$env:INTERNAL_TOKEN = 'dev-token-local'
+
+Write-Host "[dev] Starting Python service on port $env:INTERNAL_PORT ..." -ForegroundColor Cyan
+
+# -Environment is PS 7.3+ only; set vars in parent so the child inherits them.
+$PyProc = Start-Process `
+    -FilePath $PyExe `
+    -ArgumentList '-m', 'uvicorn', 'main:app',
+                  '--host', '127.0.0.1',
+                  '--port', "$env:INTERNAL_PORT",
+                  '--reload',
+                  '--log-level', 'info' `
+    -WorkingDirectory $SvcDir `
     -PassThru -NoNewWindow
 
-Write-Host "[Dev] Python PID: $($pythonProc.Id)" -ForegroundColor Cyan
+Write-Host "[dev] Python PID $($PyProc.Id)  Waiting 2s for startup..." -ForegroundColor DarkGray
+Start-Sleep -Seconds 2
 
-Set-Location (Join-Path $RootDir 'electron-app')
 try {
-    npm run dev
-} finally {
-    if (-not $pythonProc.HasExited) {
-        Stop-Process -Id $pythonProc.Id -Force
-        Write-Host "[Dev] Python service stopped." -ForegroundColor Yellow
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$env:INTERNAL_PORT/health" -TimeoutSec 3 -UseBasicParsing
+    if ($r.StatusCode -eq 200) {
+        Write-Host "[dev] Python service ready." -ForegroundColor Green
     }
-    Set-Location $RootDir
+} catch {
+    Write-Warning "[dev] Python /health did not respond — check output above."
+}
+
+Write-Host "[dev] Starting Electron dev server  (Ctrl-C stops both)..." -ForegroundColor Cyan
+
+try {
+    Push-Location $AppDir
+    npx electron-vite dev
+} finally {
+    Pop-Location
+    if ($PyProc -and -not $PyProc.HasExited) {
+        Write-Host "`n[dev] Stopping Python (PID $($PyProc.Id))..." -ForegroundColor DarkGray
+        Stop-Process -Id $PyProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "[dev] Done." -ForegroundColor Green
 }

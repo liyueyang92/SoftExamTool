@@ -1,79 +1,135 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { PythonManager } from './python-manager'
 import { IPC } from './ipc-channels'
 import { verifySQLCipher } from './db/verify'
+import { initDatabase, getDatabase, closeDatabase } from './db/index'
+import { TaskManager } from './task-manager'
+import { WsProgressClient } from './ws-client'
+import { registerHandler } from './ipc-handler'
 
 const pythonManager = new PythonManager()
+const wsClient = new WsProgressClient()
+let taskManager: TaskManager | null = null
+let mainWindow: BrowserWindow | null = null
+
+// In-memory app settings (persisted to userData/settings.json in Phase 2+)
+const appSettings: Record<string, unknown> = {}
 
 function createWindow(): BrowserWindow {
-  const mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
-    }
+      sandbox: false,
+    },
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
+  win.on('ready-to-show', () => win.show())
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
+  win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  return mainWindow
+  return win
+}
+
+function registerIpcHandlers(): void {
+  // Phase 0
+  registerHandler(IPC.PING, async () => {
+    const msg = await pythonManager.ping()
+    return msg
+  })
+
+  // Phase 1 — DB status
+  registerHandler(IPC.DB_STATUS, async () => {
+    const db = getDatabase()
+    const version = db.pragma('user_version', { simple: true }) as number
+    return { ready: true, version }
+  })
+
+  // Phase 1 — Task CRUD
+  registerHandler(IPC.TASK_CREATE, async (args) => {
+    const { type, payload } = args as { type: string; payload: unknown }
+    const id = taskManager!.createTask(type, payload)
+    // open a WebSocket progress channel for this task
+    wsClient.connect(id)
+    return { id }
+  })
+
+  registerHandler(IPC.TASK_GET, async (id) => {
+    return taskManager!.getTask(id as string) ?? null
+  })
+
+  registerHandler(IPC.TASK_CANCEL, async (id) => {
+    taskManager!.cancelTask(id as string)
+    wsClient.disconnect(id as string)
+  })
+
+  // Phase 1 — App settings
+  registerHandler(IPC.APP_GET_SETTINGS, async () => ({ ...appSettings }))
+
+  registerHandler(IPC.APP_SET_SETTING, async (args) => {
+    const { key, value } = args as { key: string; value: unknown }
+    appSettings[key] = value
+  })
 }
 
 app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.softexam')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // Phase 0 验证：SQLCipher 加密数据库
+  // Phase 0: verify SQLCipher (keep for regression safety)
   verifySQLCipher()
 
-  const mainWindow = createWindow()
+  // Phase 1: init encrypted database
+  try {
+    const db = await initDatabase()
+    taskManager = new TaskManager(db)
+    taskManager.recoverOrphanedTasks()
+    console.log('[App] Database ready')
+  } catch (e) {
+    console.error('[App] Database init failed:', e)
+  }
 
-  // Start Python service after window is created
-  pythonManager.start(mainWindow).catch((e) => {
+  mainWindow = createWindow()
+
+  // Phase 1: start Python and wire WebSocket client
+  pythonManager.start(mainWindow).then(() => {
+    wsClient.init(pythonManager.port, pythonManager.token, mainWindow!)
+    console.log('[App] Python ready, WS client initialized')
+  }).catch((e) => {
     console.error('[Python] failed to start:', e)
   })
 
-  // IPC: ping → Python → pong
-  ipcMain.handle(IPC.PING, async () => {
-    try {
-      const msg = await pythonManager.ping()
-      return { success: true, data: msg }
-    } catch (e) {
-      return { success: false, error: String(e) }
-    }
-  })
+  registerIpcHandlers()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      mainWindow = createWindow()
+    }
   })
 })
 
 app.on('window-all-closed', () => {
+  wsClient.disconnectAll()
   pythonManager.stop()
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  closeDatabase()
+  if (process.platform !== 'darwin') app.quit()
 })

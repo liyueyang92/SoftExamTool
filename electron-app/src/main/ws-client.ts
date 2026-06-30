@@ -1,0 +1,84 @@
+import { BrowserWindow } from 'electron'
+import { IPC } from './ipc-channels'
+
+interface ProgressMessage {
+  taskId: string
+  progress: number
+  message: string
+}
+
+interface Connection {
+  ws: WebSocket
+  taskId: string
+  retryDelay: number
+  retryTimer: ReturnType<typeof setTimeout> | null
+  closed: boolean
+}
+
+export class WsProgressClient {
+  private connections = new Map<string, Connection>()
+  private port = 0
+  private token = ''
+  private mainWindow: BrowserWindow | null = null
+
+  init(port: number, token: string, mainWindow: BrowserWindow): void {
+    this.port = port
+    this.token = token
+    this.mainWindow = mainWindow
+  }
+
+  connect(taskId: string): void {
+    if (this.connections.has(taskId)) return
+    this.openConnection(taskId, 1000)
+  }
+
+  private openConnection(taskId: string, retryDelay: number): void {
+    const url = `ws://127.0.0.1:${this.port}/ws/progress/${taskId}?token=${this.token}`
+    const ws = new WebSocket(url)
+    const conn: Connection = { ws, taskId, retryDelay, retryTimer: null, closed: false }
+    this.connections.set(taskId, conn)
+
+    ws.addEventListener('open', () => {
+      console.log(`[WsClient] Connected for task ${taskId}`)
+      conn.retryDelay = 1000
+    })
+
+    ws.addEventListener('message', (event) => {
+      try {
+        const msg = JSON.parse(event.data as string) as ProgressMessage
+        if (!this.mainWindow?.isDestroyed()) {
+          this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, msg)
+        }
+      } catch {
+        // ignore malformed messages
+      }
+    })
+
+    ws.addEventListener('close', () => {
+      if (conn.closed) return
+      const delay = Math.min(conn.retryDelay * 2, 30_000)
+      console.log(`[WsClient] task ${taskId} disconnected, retry in ${delay}ms`)
+      conn.retryTimer = setTimeout(() => {
+        this.connections.delete(taskId)
+        this.openConnection(taskId, delay)
+      }, delay)
+    })
+
+    ws.addEventListener('error', (e) => {
+      console.warn(`[WsClient] task ${taskId} error:`, e)
+    })
+  }
+
+  disconnect(taskId: string): void {
+    const conn = this.connections.get(taskId)
+    if (!conn) return
+    conn.closed = true
+    if (conn.retryTimer) clearTimeout(conn.retryTimer)
+    conn.ws.close()
+    this.connections.delete(taskId)
+  }
+
+  disconnectAll(): void {
+    for (const taskId of [...this.connections.keys()]) this.disconnect(taskId)
+  }
+}

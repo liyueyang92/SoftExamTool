@@ -3,9 +3,11 @@ from fastapi import FastAPI
 from loguru import logger
 from config import settings
 from middleware.auth import TokenAuthMiddleware
+from modules.progress import router as progress_router
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.add_middleware(TokenAuthMiddleware)
+app.include_router(progress_router)
 
 
 @app.get('/health')

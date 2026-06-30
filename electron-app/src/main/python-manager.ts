@@ -25,6 +25,18 @@ export class PythonManager {
   private pollTimer: ReturnType<typeof setTimeout> | null = null
 
   async start(mainWindow: BrowserWindow): Promise<void> {
+    // If INTERNAL_PORT + INTERNAL_TOKEN are pre-set (e.g. by dev-start.ps1),
+    // skip spawning and connect to the already-running external process.
+    const externalPort = parseInt(process.env.INTERNAL_PORT ?? '', 10)
+    const externalToken = process.env.INTERNAL_TOKEN ?? ''
+    if (externalPort && externalToken) {
+      console.log(`[Python] External mode — connecting to pre-started service on port ${externalPort}`)
+      this.port = externalPort
+      this.token = externalToken
+      this.startPolling(mainWindow)
+      return
+    }
+
     this.port = await findFreePort()
     this.token = crypto.randomBytes(32).toString('hex')
 

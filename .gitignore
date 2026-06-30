@@ -31,3 +31,6 @@ resources/python-service/
 # OS
 .DS_Store
 Thumbs.db
+/python-service/build-pyinstaller/
+/electron-app/resources/
+/release/

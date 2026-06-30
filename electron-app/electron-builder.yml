@@ -1,43 +1,74 @@
-appId: com.electron.app
-productName: electron-app
+appId: com.softexam.architect-tool
+productName: SoftExam Architect Tool
+
 directories:
   buildResources: build
+  output: dist
+
+# Files included in the asar archive
 files:
+  - out/**
   - '!**/.vscode/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml,package-lock.json}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{README.md,CHANGELOG.md}'
+  - '!e2e-driver.mjs'
+  - '!scripts/**'
+
+# Native modules must not be asar-packed
 asarUnpack:
-  - resources/**
+  - node_modules/better-sqlite3-multiple-ciphers/**
+  - node_modules/keytar/**
+  - node_modules/bindings/**
+  - node_modules/file-uri-to-path/**
+
+# Bundle the pre-built Python service alongside the app
+extraResources:
+  - from: resources/python-service/
+    to: python-service/
+    filter:
+      - '**/*'
+      - '!**/__pycache__/**'
+      - '!**/*.pyc'
+
+# Windows
 win:
-  executableName: electron-app
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  executableName: SoftExamArchitectTool
+  verifyUpdateCodeSignature: false
+  # Signing: set CSC_LINK and CSC_KEY_PASSWORD env vars, or CERT_FILE / CERT_PASSWORD
+  # via scripts/build-electron.ps1.  Unsigned builds will show SmartScreen warnings.
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
+
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerLanguages: [en_US]
+  artifactName: ${productName}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
-mac:
-  entitlementsInherit: build/entitlements.mac.plist
-  extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
-dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
-  target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
-  category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
-npmRebuild: false
+  createStartMenuShortcut: true
+  # Keep user data on uninstall
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+# Auto-update (Phase 7 — fill in real URL before first release)
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  releaseType: release
+  # owner: your-github-org
+  # repo: soft-exam-tool
+
+# Rebuild native modules for the packaged Electron version
+npmRebuild: true
