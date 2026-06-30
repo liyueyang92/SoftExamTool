@@ -39,9 +39,35 @@ async def push_progress(task_id: str, progress: int, message: str) -> bool:
     if ws is None:
         return False
     try:
-        await ws.send_json({'taskId': task_id, 'progress': progress, 'message': message})
+        await ws.send_json({'type': 'progress', 'taskId': task_id, 'progress': progress, 'message': message})
         return True
     except Exception as e:
         logger.warning('Failed to push progress to task {}: {}', task_id, e)
+        _connections.pop(task_id, None)
+        return False
+
+
+async def push_complete(task_id: str, result: dict) -> bool:
+    ws = _connections.get(task_id)
+    if ws is None:
+        return False
+    try:
+        await ws.send_json({'type': 'complete', 'taskId': task_id, 'result': result})
+        return True
+    except Exception as e:
+        logger.warning('Failed to push complete to task {}: {}', task_id, e)
+        _connections.pop(task_id, None)
+        return False
+
+
+async def push_error(task_id: str, error: str) -> bool:
+    ws = _connections.get(task_id)
+    if ws is None:
+        return False
+    try:
+        await ws.send_json({'type': 'error', 'taskId': task_id, 'error': error})
+        return True
+    except Exception as e:
+        logger.warning('Failed to push error to task {}: {}', task_id, e)
         _connections.pop(task_id, None)
         return False

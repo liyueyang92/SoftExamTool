@@ -1,11 +1,302 @@
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { useAiStore, type GenerateParams } from '../stores/ai'
+import { useQuestionStore } from '../stores/question'
+
+const ai = useAiStore()
+const questionStore = useQuestionStore()
+
+const activeTab = ref<'generate' | 'grade'>('generate')
+
+// Generate tab
+const genParams = ref<GenerateParams>({ count: 5, types: ['single'], knowledge_tags: [], difficulty: undefined })
+const tagInput = ref('')
+const genError = ref('')
+const savingGenerated = ref(false)
+const saveSuccess = ref('')
+
+// Grade tab
+const gradeQ = ref('')
+const gradeRef = ref('')
+const gradeAnswer = ref('')
+const gradeError = ref('')
+
+onMounted(() => ai.loadConfig())
+
+function addGenTag() {
+  const t = tagInput.value.trim()
+  if (!t || genParams.value.knowledge_tags.includes(t)) return
+  genParams.value.knowledge_tags.push(t)
+  tagInput.value = ''
+}
+function removeGenTag(i: number) { genParams.value.knowledge_tags.splice(i, 1) }
+
+async function doGenerate() {
+  genError.value = ''; saveSuccess.value = ''
+  try {
+    await ai.generateQuestions(genParams.value)
+  } catch (e) {
+    genError.value = String(e)
+  }
+}
+
+async function saveGenerated() {
+  savingGenerated.value = true
+  try {
+    const count = await questionStore.batchImport(ai.generatedQuestions.map((q) => ({
+      ...q,
+      source_type: 'ai_generated',
+    })))
+    saveSuccess.value = `已保存 ${count} 道题到题库`
+    ai.generatedQuestions = []
+  } finally {
+    savingGenerated.value = false
+  }
+}
+
+async function doGrade() {
+  gradeError.value = ''
+  try {
+    await ai.gradeEssay({ question: gradeQ.value, reference_points: gradeRef.value || undefined, user_answer: gradeAnswer.value })
+  } catch (e) {
+    gradeError.value = String(e)
+  }
+}
+
+const typeLabels: Record<string, string> = { single: '单选', multiple: '多选', case: '案例', essay: '论文' }
+</script>
+
 <template>
-  <div class="placeholder">
-    <h1>Ai</h1>
-    <p class="hint">Phase 2+ 实现</p>
+  <div class="ai-view">
+    <h2 class="view-title">AI 助手</h2>
+
+    <div class="tabs">
+      <button class="tab" :class="{ active: activeTab === 'generate' }" @click="activeTab = 'generate'">智能出题</button>
+      <button class="tab" :class="{ active: activeTab === 'grade' }" @click="activeTab = 'grade'">AI 评分</button>
+    </div>
+
+    <!-- Generate Tab -->
+    <div v-if="activeTab === 'generate'" class="tab-panel">
+      <div class="gen-layout">
+        <div class="gen-config">
+          <h3 class="section-title">出题配置</h3>
+
+          <div class="form-group">
+            <label>题型</label>
+            <div class="type-checks">
+              <label v-for="t in [{label:'单选',value:'single'},{label:'多选',value:'multiple'},{label:'案例',value:'case'},{label:'论文',value:'essay'}]" :key="t.value" class="check-label">
+                <input type="checkbox" :value="t.value" v-model="genParams.types" />
+                {{ t.label }}
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>数量</label>
+            <input type="number" v-model.number="genParams.count" class="num-input" min="1" max="20" />
+          </div>
+
+          <div class="form-group">
+            <label>难度（可选）</label>
+            <select v-model="genParams.difficulty" class="select-sm">
+              <option :value="undefined">不限</option>
+              <option v-for="d in [1,2,3,4,5]" :key="d" :value="d">{{ d }} 级</option>
+            </select>
+          </div>
+
+          <div class="form-group col">
+            <label>知识点（可选）</label>
+            <div class="tags-row">
+              <span v-for="(tag, i) in genParams.knowledge_tags" :key="i" class="tag editable">
+                {{ tag }}<button @click="removeGenTag(i)">✕</button>
+              </span>
+              <input v-model="tagInput" class="tag-input" placeholder="输入后回车" @keyup.enter="addGenTag" />
+            </div>
+          </div>
+
+          <p v-if="genError" class="error-text">{{ genError }}</p>
+          <button class="btn-primary gen-btn" @click="doGenerate" :disabled="ai.generating || !genParams.types.length">
+            {{ ai.generating ? 'AI 出题中…' : '开始出题' }}
+          </button>
+        </div>
+
+        <div class="gen-results">
+          <div v-if="!ai.generatedQuestions.length && !ai.generating" class="empty-tip">
+            <div style="font-size:36px;margin-bottom:8px">✦</div>
+            <div>配置出题参数后点击「开始出题」</div>
+          </div>
+          <div v-else-if="ai.generating" class="empty-tip">
+            <div class="spinner"></div>
+            <div style="margin-top:12px">AI 正在生成题目…</div>
+          </div>
+          <template v-else>
+            <div class="results-header">
+              <span>共生成 {{ ai.generatedQuestions.length }} 道题</span>
+              <div style="display:flex;gap:8px">
+                <span v-if="saveSuccess" class="success-text">{{ saveSuccess }}</span>
+                <button class="btn-sm btn-primary" @click="saveGenerated" :disabled="savingGenerated">
+                  {{ savingGenerated ? '保存中…' : '全部保存到题库' }}
+                </button>
+              </div>
+            </div>
+            <div class="result-list">
+              <div v-for="(q, i) in ai.generatedQuestions" :key="i" class="result-card">
+                <div class="result-meta">
+                  <span class="type-badge" :class="q.type">{{ typeLabels[q.type] }}</span>
+                  <span class="diff-text">难度 {{ q.difficulty }}</span>
+                  <span v-for="tag in (q.knowledge_tags ?? [])" :key="tag" class="tag">{{ tag }}</span>
+                </div>
+                <div class="result-content">{{ q.content }}</div>
+                <div v-if="q.options?.length" class="result-options">
+                  <div v-for="opt in q.options" :key="opt" class="result-opt">{{ opt }}</div>
+                </div>
+                <div v-if="q.answer" class="result-answer">答案：<strong>{{ q.answer }}</strong></div>
+                <div v-if="q.explanation" class="result-exp">解析：{{ q.explanation }}</div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grade Tab -->
+    <div v-if="activeTab === 'grade'" class="tab-panel">
+      <div class="grade-layout">
+        <div class="grade-inputs">
+          <h3 class="section-title">提交评分</h3>
+          <div class="form-group col">
+            <label>题目</label>
+            <textarea v-model="gradeQ" class="textarea" rows="4" placeholder="粘贴论文/案例题目要求…"></textarea>
+          </div>
+          <div class="form-group col">
+            <label>评分要点（可选）</label>
+            <textarea v-model="gradeRef" class="textarea" rows="3" placeholder="参考答案要点…"></textarea>
+          </div>
+          <div class="form-group col">
+            <label>考生答案</label>
+            <textarea v-model="gradeAnswer" class="textarea" rows="8" placeholder="在此粘贴考生的论文或案例答案…"></textarea>
+          </div>
+          <p v-if="gradeError" class="error-text">{{ gradeError }}</p>
+          <button class="btn-primary" @click="doGrade" :disabled="ai.grading || !gradeQ.trim() || !gradeAnswer.trim()">
+            {{ ai.grading ? 'AI 评分中…' : '提交 AI 评分' }}
+          </button>
+        </div>
+
+        <div class="grade-result">
+          <div v-if="!ai.gradeResult && !ai.grading" class="empty-tip">
+            <div style="font-size:36px;margin-bottom:8px">📝</div>
+            <div>填写题目和答案后提交评分</div>
+          </div>
+          <div v-else-if="ai.grading" class="empty-tip">
+            <div class="spinner"></div>
+            <div style="margin-top:12px">AI 正在评分，请稍候…</div>
+          </div>
+          <template v-else-if="ai.gradeResult">
+            <h3 class="section-title">评分结果</h3>
+            <div class="score-total">
+              <div class="score-num">{{ ai.gradeResult.total_score }}</div>
+              <div class="score-label">总分</div>
+            </div>
+            <div class="dimension-list">
+              <div v-for="dim in ai.gradeResult.dimension_scores" :key="dim.name" class="dimension-item">
+                <div class="dim-header">
+                  <span class="dim-name">{{ dim.name }}</span>
+                  <span class="dim-score">{{ dim.score }} / {{ dim.max_score }}</span>
+                </div>
+                <div class="dim-bar-bg">
+                  <div class="dim-bar" :style="{ width: (dim.score / dim.max_score * 100) + '%' }"></div>
+                </div>
+                <div class="dim-comment">{{ dim.comment }}</div>
+              </div>
+            </div>
+            <div class="grade-feedback">
+              <div class="section-title" style="margin-bottom:8px">整体评语</div>
+              <div class="feedback-text">{{ ai.gradeResult.feedback }}</div>
+            </div>
+            <div v-if="ai.gradeResult.suggestions?.length" class="grade-suggestions">
+              <div class="section-title" style="margin-bottom:8px">改进建议</div>
+              <ul class="suggestion-list">
+                <li v-for="s in ai.gradeResult.suggestions" :key="s">{{ s }}</li>
+              </ul>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
 <style scoped>
-.placeholder { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:12px; }
-h1 { font-size:28px; font-weight:700; color:#334155; }
-.hint { font-size:14px; color:#475569; }
+.ai-view { display: flex; flex-direction: column; height: 100%; gap: 16px; overflow: hidden; }
+.view-title { font-size: 20px; font-weight: 700; color: #e2e8f0; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid #334155; }
+.tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 16px; font-size: 14px; color: #94a3b8; cursor: pointer; margin-bottom: -1px; }
+.tab:hover { color: #e2e8f0; }
+.tab.active { color: #60a5fa; border-bottom-color: #60a5fa; }
+.tab-panel { flex: 1; overflow: hidden; }
+
+.gen-layout, .grade-layout { display: grid; grid-template-columns: 300px 1fr; gap: 16px; height: 100%; overflow: hidden; }
+
+.gen-config, .grade-inputs { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.gen-results, .grade-result { background: #1e293b; border: 1px solid #334155; border-radius: 10px; overflow-y: auto; }
+.section-title { font-size: 14px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+.form-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.form-group.col { flex-direction: column; align-items: flex-start; }
+.form-group label { font-size: 13px; color: #94a3b8; min-width: 60px; }
+.type-checks { display: flex; gap: 12px; flex-wrap: wrap; }
+.check-label { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #e2e8f0; cursor: pointer; }
+.num-input { background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #e2e8f0; padding: 5px 8px; width: 60px; font-size: 13px; }
+.select-sm { background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #e2e8f0; padding: 5px 8px; font-size: 13px; }
+.tags-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; width: 100%; }
+.tag { display: inline-block; background: #1e3a5f; color: #93c5fd; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
+.tag.editable button { background: none; border: none; color: #93c5fd; cursor: pointer; margin-left: 2px; }
+.tag-input { background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #e2e8f0; padding: 4px 8px; font-size: 12px; width: 120px; }
+.gen-btn { align-self: flex-start; }
+.textarea { width: 100%; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #e2e8f0; padding: 8px 10px; font-size: 13px; resize: vertical; font-family: inherit; }
+.btn-primary { background: #1d4ed8; border: none; border-radius: 8px; color: #fff; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.btn-primary:hover:not(:disabled) { background: #2563eb; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { background: #334155; border: none; border-radius: 6px; color: #e2e8f0; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.btn-sm:hover:not(:disabled) { background: #475569; }
+.error-text { color: #f87171; font-size: 13px; }
+.success-text { color: #4ade80; font-size: 13px; align-self: center; }
+
+.results-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #334155; font-size: 13px; color: #94a3b8; position: sticky; top: 0; background: #1e293b; }
+.result-list { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.result-card { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.result-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.type-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.type-badge.single { background: #1e3a5f; color: #60a5fa; }
+.type-badge.multiple { background: #14532d; color: #4ade80; }
+.type-badge.case { background: #451a03; color: #fb923c; }
+.type-badge.essay { background: #3b0764; color: #c084fc; }
+.diff-text { font-size: 11px; color: #94a3b8; }
+.result-content { font-size: 13px; color: #e2e8f0; line-height: 1.6; }
+.result-options { display: flex; flex-direction: column; gap: 4px; }
+.result-opt { font-size: 12px; color: #94a3b8; padding: 2px 6px; border-left: 2px solid #334155; }
+.result-answer { font-size: 12px; color: #94a3b8; }
+.result-answer strong { color: #4ade80; }
+.result-exp { font-size: 12px; color: #64748b; }
+
+/* Grade result */
+.grade-result { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.score-total { text-align: center; }
+.score-num { font-size: 64px; font-weight: 700; color: #60a5fa; line-height: 1; }
+.score-label { font-size: 14px; color: #94a3b8; margin-top: 4px; }
+.dimension-list { display: flex; flex-direction: column; gap: 12px; }
+.dimension-item { display: flex; flex-direction: column; gap: 4px; }
+.dim-header { display: flex; justify-content: space-between; font-size: 13px; }
+.dim-name { color: #e2e8f0; }
+.dim-score { color: #60a5fa; font-weight: 600; }
+.dim-bar-bg { height: 6px; background: #334155; border-radius: 3px; overflow: hidden; }
+.dim-bar { height: 100%; background: #1d4ed8; border-radius: 3px; transition: width 0.5s; }
+.dim-comment { font-size: 12px; color: #64748b; }
+.grade-feedback, .grade-suggestions { background: #0f172a; border-radius: 8px; padding: 12px; }
+.feedback-text { font-size: 13px; color: #cbd5e1; line-height: 1.7; }
+.suggestion-list { list-style: disc; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
+.suggestion-list li { font-size: 13px; color: #94a3b8; }
+
+.empty-tip { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 200px; color: #475569; font-size: 13px; }
+.spinner { width: 32px; height: 32px; border: 3px solid #334155; border-top-color: #60a5fa; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

@@ -1,10 +1,13 @@
 import { BrowserWindow } from 'electron'
 import { IPC } from './ipc-channels'
 
-interface ProgressMessage {
+interface WsMessage {
+  type?: 'progress' | 'complete' | 'error'
   taskId: string
-  progress: number
-  message: string
+  progress?: number
+  message?: string
+  result?: unknown
+  error?: string
 }
 
 interface Connection {
@@ -15,8 +18,13 @@ interface Connection {
   closed: boolean
 }
 
+type CompleteCallback = (taskId: string, result: unknown) => void
+type ErrorCallback = (taskId: string, error: string) => void
+
 export class WsProgressClient {
   private connections = new Map<string, Connection>()
+  private completeCallbacks = new Map<string, CompleteCallback>()
+  private errorCallbacks = new Map<string, ErrorCallback>()
   private port = 0
   private token = ''
   private mainWindow: BrowserWindow | null = null
@@ -32,6 +40,14 @@ export class WsProgressClient {
     this.openConnection(taskId, 1000)
   }
 
+  onComplete(taskId: string, cb: CompleteCallback): void {
+    this.completeCallbacks.set(taskId, cb)
+  }
+
+  onError(taskId: string, cb: ErrorCallback): void {
+    this.errorCallbacks.set(taskId, cb)
+  }
+
   private openConnection(taskId: string, retryDelay: number): void {
     const url = `ws://127.0.0.1:${this.port}/ws/progress/${taskId}?token=${this.token}`
     const ws = new WebSocket(url)
@@ -45,9 +61,49 @@ export class WsProgressClient {
 
     ws.addEventListener('message', (event) => {
       try {
-        const msg = JSON.parse(event.data as string) as ProgressMessage
-        if (!this.mainWindow?.isDestroyed()) {
-          this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, msg)
+        const msg = JSON.parse(event.data as string) as WsMessage
+        const type = msg.type ?? 'progress'
+
+        if (type === 'complete') {
+          // Forward to renderer first
+          if (!this.mainWindow?.isDestroyed()) {
+            this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
+              taskId: msg.taskId,
+              progress: 100,
+              message: '完成'
+            })
+          }
+          // Call registered completion callback
+          const cb = this.completeCallbacks.get(taskId)
+          if (cb) {
+            cb(msg.taskId, msg.result)
+            this.completeCallbacks.delete(taskId)
+          }
+          // Auto-disconnect after completion
+          this.disconnect(taskId)
+        } else if (type === 'error') {
+          if (!this.mainWindow?.isDestroyed()) {
+            this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
+              taskId: msg.taskId,
+              progress: -1,
+              message: msg.error ?? '未知错误'
+            })
+          }
+          const cb = this.errorCallbacks.get(taskId)
+          if (cb) {
+            cb(msg.taskId, msg.error ?? '未知错误')
+            this.errorCallbacks.delete(taskId)
+          }
+          this.disconnect(taskId)
+        } else {
+          // Progress message
+          if (!this.mainWindow?.isDestroyed()) {
+            this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
+              taskId: msg.taskId,
+              progress: msg.progress ?? 0,
+              message: msg.message ?? ''
+            })
+          }
         }
       } catch {
         // ignore malformed messages

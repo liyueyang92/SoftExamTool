@@ -4,15 +4,19 @@ from loguru import logger
 from config import settings
 from middleware.auth import TokenAuthMiddleware
 from modules.progress import router as progress_router
+from modules.pdf.router import router as pdf_router
+from modules.ai.router import router as ai_router
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.add_middleware(TokenAuthMiddleware)
 app.include_router(progress_router)
+app.include_router(pdf_router)
+app.include_router(ai_router)
 
 
 @app.get('/health')
 async def health():
-    return {'status': 'ok', 'version': '0.1.0'}
+    return {'status': 'ok', 'version': '0.2.0'}
 
 
 @app.get('/ping')

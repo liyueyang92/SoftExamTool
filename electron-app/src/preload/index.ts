@@ -30,9 +30,7 @@ const customAPI = {
   createTask: (args: { type: string; payload: unknown }) =>
     invokeWithTimeout<{ id: string }>('task:create', args),
   getTask: (id: string) =>
-    invokeWithTimeout<{ id: string; type: string; status: string; result: unknown } | null>(
-      'task:get', id
-    ),
+    invokeWithTimeout<{ id: string; type: string; status: string; result: unknown } | null>('task:get', id),
   cancelTask: (id: string) => invokeWithTimeout<void>('task:cancel', id),
   onTaskProgress: (cb: (msg: { taskId: string; progress: number; message: string }) => void) => {
     const handler = (_: unknown, msg: { taskId: string; progress: number; message: string }) => cb(msg)
@@ -44,6 +42,52 @@ const customAPI = {
   getSettings: () => invokeWithTimeout<Record<string, unknown>>('app:getSettings'),
   setSetting: (args: { key: string; value: unknown }) =>
     invokeWithTimeout<void>('app:setSetting', args),
+
+  // Phase 2 — Questions
+  queryQuestions: (filter?: Record<string, unknown>) =>
+    invokeWithTimeout<{ items: unknown[]; total: number }>('question:query', filter),
+  searchQuestions: (args: { q: string; limit?: number }) =>
+    invokeWithTimeout<unknown[]>('question:search', args),
+  insertQuestion: (q: unknown) =>
+    invokeWithTimeout<unknown>('question:insert', q),
+  batchInsertQuestions: (args: { questions: unknown[] }) =>
+    invokeWithTimeout<{ count: number }>('question:batchInsert', args),
+  updateQuestion: (args: { id: string; changes: unknown }) =>
+    invokeWithTimeout<void>('question:update', args),
+  deleteQuestion: (id: string) =>
+    invokeWithTimeout<void>('question:delete', id),
+  toggleFavorite: (id: string) =>
+    invokeWithTimeout<{ is_favorite: number }>('question:toggleFavorite', id),
+  getQuestionStats: () =>
+    invokeWithTimeout<Record<string, unknown>>('question:getStats'),
+
+  // Phase 2 — Practice
+  startPractice: (config: unknown) =>
+    invokeWithTimeout<{ sessionId: string; questions: unknown[] }>('practice:start', config),
+  submitAnswer: (args: { sessionId: string; questionId: string; chosen: string; timeMs: number }) =>
+    invokeWithTimeout<{ isCorrect: boolean; answer: string | null; explanation: string | null; nextIndex: number }>(
+      'practice:submitAnswer', args
+    ),
+  endPractice: (sessionId: string) =>
+    invokeWithTimeout<{ totalCount: number; correctCount: number; durationMs: number }>('practice:end', sessionId),
+  getWrongQuestions: (args?: { limit?: number }) =>
+    invokeWithTimeout<unknown[]>('practice:getWrong', args),
+
+  // Phase 3 — Documents
+  listDocuments: () => invokeWithTimeout<unknown[]>('doc:list'),
+  importDocument: () =>
+    invokeWithTimeout<{ document: unknown; taskId?: string; duplicate?: boolean } | null>('doc:import', undefined, 60_000),
+  deleteDocument: (id: string) => invokeWithTimeout<void>('doc:delete', id),
+  getDocChunks: (docId: string) => invokeWithTimeout<unknown[]>('doc:getChunks', docId),
+
+  // Phase 3 — AI
+  getAiConfig: () => invokeWithTimeout<Record<string, unknown>>('ai:getConfig'),
+  setAiConfig: (args: unknown) => invokeWithTimeout<void>('ai:setConfig', args),
+  testAiConnection: () => invokeWithTimeout<{ ok: boolean; reply: string }>('ai:testConnection', undefined, 30_000),
+  generateQuestions: (args: unknown) =>
+    invokeWithTimeout<{ questions: unknown[] }>('ai:generateQuestions', args, 120_000),
+  gradeEssay: (args: unknown) =>
+    invokeWithTimeout<unknown>('ai:gradeEssay', args, 120_000),
 }
 
 if (process.contextIsolated) {
@@ -54,7 +98,7 @@ if (process.contextIsolated) {
     console.error(error)
   }
 } else {
-  // @ts-ignore (fallback for non-isolated context)
+  // @ts-ignore
   window.electron = electronAPI
   // @ts-ignore
   window.electronAPI = customAPI
