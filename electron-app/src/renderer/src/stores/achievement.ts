@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Achievement } from '../../../../preload/index.d'
+import type { Achievement } from '../../../preload/shared-types'
 
 export const useAchievementStore = defineStore('achievement', () => {
   const achievements = ref<Achievement[]>([])

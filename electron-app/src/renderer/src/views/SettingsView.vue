@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useAiStore } from '../stores/ai'
 import { useAppStore } from '../stores/app'
-import type { BackupRecord } from '../../../../preload/index.d'
+import type { BackupRecord } from '../../../preload/shared-types'
 
 const ai = useAiStore()
 const appStore = useAppStore()

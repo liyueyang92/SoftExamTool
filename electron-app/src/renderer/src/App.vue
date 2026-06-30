@@ -5,7 +5,7 @@ import AppLayout from './layouts/AppLayout.vue'
 import { useAppStore } from './stores/app'
 import { useTaskStore } from './stores/task'
 import { useAchievementStore } from './stores/achievement'
-import type { Achievement } from '../../../preload/index.d'
+import type { Achievement } from '../../preload/shared-types'
 
 const appStore = useAppStore()
 const taskStore = useTaskStore()
