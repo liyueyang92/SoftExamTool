@@ -15,6 +15,8 @@ const navItems = [
   { to: '/crawler',         icon: '🕷', label: '爬虫'    },
   { to: '/knowledge-graph', icon: '◈',  label: '知识图谱' },
   { to: '/essay',           icon: '✍', label: '论文写作' },
+  { to: '/pomodoro',        icon: '🍅', label: '番茄钟'  },
+  { to: '/achievements',    icon: '🏆', label: '成就'    },
   { to: '/settings',        icon: '⚙', label: '设置'   },
 ]
 </script>

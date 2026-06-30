@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useAiStore } from '../stores/ai'
 import { useAppStore } from '../stores/app'
+import type { BackupRecord } from '../../../../preload/index.d'
 
 const ai = useAiStore()
 const appStore = useAppStore()
@@ -11,9 +12,29 @@ const saveMsg = ref('')
 const saveErr = ref('')
 const saving = ref(false)
 
+// Health reminder settings
+const healthReminderMin = ref(45)
+const healthEnabled = ref(true)
+
+// Backup
+const backups = ref<BackupRecord[]>([])
+const backupNote = ref('')
+const backupBusy = ref(false)
+const backupMsg = ref('')
+const backupErr = ref('')
+
 onMounted(async () => {
   await ai.loadConfig()
   apiKeyInput.value = ai.config.openai.apiKey || ''
+
+  const settings = await window.electronAPI.getSettings()
+  if (settings.success) {
+    const s = settings.data as Record<string, unknown>
+    if (s['healthReminderMin']) healthReminderMin.value = s['healthReminderMin'] as number
+    if (s['healthEnabled'] !== undefined) healthEnabled.value = s['healthEnabled'] as boolean
+  }
+
+  await loadBackups()
 })
 
 async function saveAi() {
@@ -35,6 +56,69 @@ async function saveAi() {
 
 async function testConn() {
   await ai.testConnection()
+}
+
+async function saveHealthSettings() {
+  await window.electronAPI.setSetting({ key: 'healthReminderMin', value: healthReminderMin.value })
+  await window.electronAPI.setSetting({ key: 'healthEnabled', value: healthEnabled.value })
+}
+
+async function loadBackups() {
+  const res = await window.electronAPI.listBackups()
+  if (res.success) backups.value = (res.data as BackupRecord[]).slice(0, 10)
+}
+
+async function doBackup() {
+  backupBusy.value = true; backupMsg.value = ''; backupErr.value = ''
+  try {
+    const res = await window.electronAPI.createBackup({ note: backupNote.value || '手动备份' })
+    if (res.success) {
+      backupMsg.value = `备份成功：${(res.data as BackupRecord).file_path}`
+      backupNote.value = ''
+      await loadBackups()
+    } else {
+      backupErr.value = (res as { error: { message: string } }).error.message
+    }
+  } catch (e) {
+    backupErr.value = String(e)
+  } finally {
+    backupBusy.value = false
+  }
+}
+
+async function doRestore() {
+  if (!confirm('恢复备份将替换当前所有数据，应用会自动重启。确认继续？')) return
+  backupBusy.value = true; backupMsg.value = ''; backupErr.value = ''
+  try {
+    const res = await window.electronAPI.restoreBackup()
+    if (res.success && (res.data as { restored: boolean }).restored) {
+      backupMsg.value = '恢复成功，请重启应用'
+    } else if (res.success) {
+      backupMsg.value = '已取消'
+    } else {
+      backupErr.value = (res as { error: { message: string } }).error.message
+    }
+  } catch (e) {
+    backupErr.value = String(e)
+  } finally {
+    backupBusy.value = false
+  }
+}
+
+async function delBackup(id: string) {
+  await window.electronAPI.deleteBackup(id)
+  await loadBackups()
+}
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatDt(iso: string) {
+  const d = new Date(iso)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 </script>
 
@@ -123,6 +207,69 @@ async function testConn() {
       </div>
     </div>
 
+    <!-- Health Reminder -->
+    <div class="section">
+      <h3 class="section-title">健康学习提醒</h3>
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">启用提醒</div>
+          <div class="setting-desc">连续学习超过指定时长后弹出提醒</div>
+        </div>
+        <button class="toggle-btn" :class="{ on: healthEnabled }" @click="healthEnabled = !healthEnabled; saveHealthSettings()">
+          <div class="toggle-thumb"></div>
+        </button>
+      </div>
+      <div v-if="healthEnabled" class="setting-row">
+        <div class="setting-info">
+          <div class="setting-name">提醒阈值</div>
+          <div class="setting-desc">连续学习多少分钟后提醒</div>
+        </div>
+        <div class="radio-group">
+          <label v-for="min in [30, 45, 60]" :key="min" class="radio-label">
+            <input type="radio" :value="min" v-model="healthReminderMin" @change="saveHealthSettings" />
+            {{ min }} 分钟
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Backup & Restore -->
+    <div class="section">
+      <h3 class="section-title">数据备份与恢复</h3>
+
+      <div class="backup-actions">
+        <input
+          v-model="backupNote"
+          class="text-input backup-note"
+          placeholder="备份备注（可选）"
+        />
+        <button class="btn-primary" @click="doBackup" :disabled="backupBusy">
+          {{ backupBusy ? '处理中…' : '立即备份' }}
+        </button>
+        <button class="btn-outline" @click="doRestore" :disabled="backupBusy">
+          从文件恢复
+        </button>
+      </div>
+
+      <span v-if="backupMsg" class="success-text">{{ backupMsg }}</span>
+      <span v-if="backupErr" class="error-text">{{ backupErr }}</span>
+
+      <div v-if="backups.length > 0" class="backup-list">
+        <div v-for="b in backups" :key="b.id" class="backup-item">
+          <div class="backup-meta">
+            <span class="backup-date">{{ formatDt(b.created_at) }}</span>
+            <span class="backup-size">{{ formatBytes(b.size_bytes) }}</span>
+            <span v-if="b.note" class="backup-note-badge">{{ b.note }}</span>
+          </div>
+          <div class="backup-path">{{ b.file_path }}</div>
+          <button class="del-btn" @click="delBackup(b.id)" title="删除此备份记录">✕</button>
+        </div>
+      </div>
+      <div v-else class="info-row">
+        <span class="info-val" style="color:#64748b">暂无备份记录，首次启动 30 秒后会自动备份</span>
+      </div>
+    </div>
+
     <!-- DB info -->
     <div class="section">
       <h3 class="section-title">数据库</h3>
@@ -179,4 +326,26 @@ async function testConn() {
 .info-val { font-size: 13px; color: #e2e8f0; }
 .badge-ok { background: #14532d; color: #4ade80; border-radius: 4px; padding: 2px 8px; font-size: 12px; }
 .badge-warn { background: #451a03; color: #f59e0b; border-radius: 4px; padding: 2px 8px; font-size: 12px; }
+
+/* Backup */
+.backup-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.backup-note { flex: 1; min-width: 160px; }
+.backup-list { display: flex; flex-direction: column; gap: 6px; }
+.backup-item {
+  background: #0f172a; border: 1px solid #1e293b; border-radius: 8px;
+  padding: 10px 12px; display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 4px 8px; align-items: center;
+}
+.backup-meta { display: flex; align-items: center; gap: 10px; }
+.backup-date { font-size: 13px; color: #e2e8f0; }
+.backup-size { font-size: 11px; color: #64748b; }
+.backup-note-badge { font-size: 10px; background: #1e3a5f; color: #60a5fa; border-radius: 4px; padding: 1px 6px; }
+.backup-path { font-size: 10px; color: #475569; grid-column: 1; word-break: break-all; }
+.del-btn {
+  grid-column: 2; grid-row: 1 / 3; align-self: center;
+  background: none; border: none; color: #475569; cursor: pointer; font-size: 14px; padding: 4px 8px;
+}
+.del-btn:hover { color: #f87171; }
 </style>

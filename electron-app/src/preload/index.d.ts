@@ -113,6 +113,17 @@ declare global {
       startSession: (args?: { type?: 'manual' | 'pomodoro'; planTaskId?: string }) => Promise<IpcResponse<StudySession>>
       endSession: (args: { id: string; durationMs: number }) => Promise<IpcResponse<void>>
       getTodaySessions: () => Promise<IpcResponse<StudySession[]>>
+
+      // Phase 6 — Achievements
+      listAchievements: () => Promise<IpcResponse<Achievement[]>>
+      checkAchievements: () => Promise<IpcResponse<Achievement[]>>
+      onAchievementUnlocked: (cb: (achievements: Achievement[]) => void) => () => void
+
+      // Phase 6 — Backup & Restore
+      listBackups: () => Promise<IpcResponse<BackupRecord[]>>
+      createBackup: (args?: { note?: string }) => Promise<IpcResponse<BackupRecord>>
+      restoreBackup: () => Promise<IpcResponse<{ restored: boolean }>>
+      deleteBackup: (id: string) => Promise<IpcResponse<void>>
     }
   }
 }
@@ -171,4 +182,21 @@ export interface StudySession {
   started_at: string
   ended_at: string | null
   duration_ms: number | null
+}
+
+export interface Achievement {
+  id: string
+  title: string
+  desc: string
+  icon: string
+  condition: { type: string; value: number }
+  unlocked_at: string | null
+}
+
+export interface BackupRecord {
+  id: string
+  file_path: string
+  size_bytes: number
+  note: string
+  created_at: string
 }

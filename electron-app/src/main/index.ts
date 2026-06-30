@@ -32,7 +32,12 @@ import {
   updatePlanTask, getCalendar, getPlanStats, adaptPlan,
   startSession, endSession, getTodaySessions
 } from './db/plan'
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { listAchievements, checkAndUnlockAchievements } from './db/achievements'
+import {
+  listBackups, createBackup, deleteBackupRecord, shouldAutoBackup, pruneOldBackups,
+  getDefaultBackupDir
+} from './db/backup'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, unlinkSync } from 'fs'
 import { join as pathJoin } from 'path'
 
 const pythonManager = new PythonManager()
@@ -152,10 +157,43 @@ function checkAndNotify(): void {
   } catch { /* non-critical */ }
 }
 
+// ─── Health reminder ────────────────────────────────────────────────────────
+let continuousStudyStartMs: number | null = null
+
+function updateContinuousStudy(active: boolean): void {
+  if (active) {
+    if (continuousStudyStartMs === null) continuousStudyStartMs = Date.now()
+  } else {
+    continuousStudyStartMs = null
+  }
+}
+
+function checkHealthReminder(): void {
+  try {
+    if (!Notification.isSupported()) return
+    if (appSettings['healthEnabled'] === false) return
+    if (continuousStudyStartMs === null) return
+
+    const thresholdMin = (appSettings['healthReminderMin'] as number) ?? 45
+    const elapsed = Date.now() - continuousStudyStartMs
+    if (elapsed < thresholdMin * 60 * 1000) return
+
+    // Reset so we don't spam
+    continuousStudyStartMs = Date.now()
+
+    new Notification({
+      title: '健康学习提醒',
+      body: `您已连续学习 ${thresholdMin} 分钟，请起身活动一下，保护眼睛和颈椎！`,
+    }).show()
+  } catch { /* non-critical */ }
+}
+
 function setupNotificationTimer(): void {
   // Check shortly after startup, then every hour
   setTimeout(() => checkAndNotify(), 15_000)
   setInterval(() => checkAndNotify(), 60 * 60 * 1000)
+  // Health reminder: check every 5 minutes
+  setInterval(() => checkHealthReminder(), 5 * 60 * 1000)
 }
 
 function registerIpcHandlers(): void {
@@ -569,13 +607,85 @@ function registerIpcHandlers(): void {
   // Phase 4 — Study Sessions
   registerHandler(IPC.SESSION_START, async (args) => {
     const { type, planTaskId } = (args ?? {}) as { type?: 'manual' | 'pomodoro'; planTaskId?: string }
+    updateContinuousStudy(true)
     return startSession(db, type ?? 'manual', planTaskId)
   })
   registerHandler(IPC.SESSION_END, async (args) => {
     const { id, durationMs } = args as { id: string; durationMs: number }
     endSession(db, id, durationMs)
+    updateContinuousStudy(false)
   })
   registerHandler(IPC.SESSION_GET_TODAY, async () => getTodaySessions(db))
+
+  // Phase 6 — Achievements
+  registerHandler(IPC.ACHIEVEMENT_LIST, async () => listAchievements(db))
+  registerHandler(IPC.ACHIEVEMENT_CHECK, async () => {
+    const newly = checkAndUnlockAchievements(db)
+    if (newly.length > 0 && Notification.isSupported()) {
+      for (const a of newly) {
+        new Notification({
+          title: `成就解锁：${a.title}`,
+          body: a.desc,
+        }).show()
+      }
+      mainWindow?.webContents.send('achievement:unlocked', newly)
+    }
+    return newly
+  })
+
+  // Phase 6 — Backup & Restore
+  registerHandler(IPC.BACKUP_LIST, async () => listBackups(db))
+
+  registerHandler(IPC.BACKUP_CREATE, async (args) => {
+    const { note } = (args ?? {}) as { note?: string }
+    let destDir: string
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择备份保存目录',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths.length) {
+      destDir = getDefaultBackupDir()
+      if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+    } else {
+      destDir = result.filePaths[0]
+    }
+    const rec = await createBackup(db, destDir, note ?? '')
+    pruneOldBackups(db)
+    return rec
+  })
+
+  registerHandler(IPC.BACKUP_RESTORE, async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择备份文件',
+      filters: [{ name: 'SQLite DB', extensions: ['db'] }],
+      properties: ['openFile'],
+    })
+    if (result.canceled || !result.filePaths.length) return { restored: false }
+
+    const backupPath = result.filePaths[0]
+    const dbPath = pathJoin(app.getPath('userData'), 'softexam.db')
+
+    // Close DB, copy backup over current DB, reopen
+    closeDatabase()
+    try {
+      copyFileSync(backupPath, dbPath)
+    } catch (e) {
+      // Reopen with whatever exists
+      await initDatabase()
+      throw Object.assign(new Error('恢复失败：' + String(e)), { code: 'RESTORE_FAILED' })
+    }
+    await initDatabase()
+    return { restored: true }
+  })
+
+  registerHandler(IPC.BACKUP_DELETE, async (id) => {
+    const recs = listBackups(db)
+    const rec = recs.find((r) => r.id === id)
+    if (rec && existsSync(rec.file_path)) {
+      try { unlinkSync(rec.file_path) } catch { /* non-critical */ }
+    }
+    deleteBackupRecord(db, id as string)
+  })
 }
 
 app.whenReady().then(async () => {
@@ -593,6 +703,21 @@ app.whenReady().then(async () => {
     taskManager = new TaskManager(db)
     taskManager.recoverOrphanedTasks()
     console.log('[App] Database ready')
+
+    // Auto-backup: if no backup in last 24h, create one silently
+    setTimeout(async () => {
+      try {
+        if (shouldAutoBackup(db)) {
+          const defaultDir = getDefaultBackupDir()
+          if (!existsSync(defaultDir)) mkdirSync(defaultDir, { recursive: true })
+          await createBackup(db, defaultDir, 'auto')
+          pruneOldBackups(db)
+          console.log('[Backup] Auto-backup completed')
+        }
+      } catch (e) {
+        console.warn('[Backup] Auto-backup failed:', e)
+      }
+    }, 30_000)
   } catch (e) {
     console.error('[App] Database init failed:', e)
   }

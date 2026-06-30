@@ -86,4 +86,14 @@ export const IPC = {
   SESSION_START: 'session:start',
   SESSION_END: 'session:end',
   SESSION_GET_TODAY: 'session:getToday',
+
+  // Phase 6 — Achievements
+  ACHIEVEMENT_LIST: 'achievement:list',
+  ACHIEVEMENT_CHECK: 'achievement:check',
+
+  // Phase 6 — Backup & Restore
+  BACKUP_CREATE: 'backup:create',
+  BACKUP_LIST: 'backup:list',
+  BACKUP_RESTORE: 'backup:restore',
+  BACKUP_DELETE: 'backup:delete',
 } as const

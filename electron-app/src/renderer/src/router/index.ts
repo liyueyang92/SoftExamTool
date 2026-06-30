@@ -12,6 +12,8 @@ const router = createRouter({
     { path: '/crawler',         name: 'crawler',    component: () => import('../views/CrawlerView.vue') },
     { path: '/knowledge-graph', name: 'graph',      component: () => import('../views/KnowledgeGraphView.vue') },
     { path: '/essay',           name: 'essay',      component: () => import('../views/EssayView.vue') },
+    { path: '/pomodoro',        name: 'pomodoro',   component: () => import('../views/PomodoroView.vue') },
+    { path: '/achievements',    name: 'achievements', component: () => import('../views/AchievementsView.vue') },
     { path: '/settings',        name: 'settings',   component: () => import('../views/SettingsView.vue') },
   ],
 })

@@ -142,6 +142,23 @@ const customAPI = {
   endSession: (args: { id: string; durationMs: number }) =>
     invokeWithTimeout<void>('session:end', args),
   getTodaySessions: () => invokeWithTimeout<unknown[]>('session:getToday'),
+
+  // Phase 6 — Achievements
+  listAchievements: () => invokeWithTimeout<unknown[]>('achievement:list'),
+  checkAchievements: () => invokeWithTimeout<unknown[]>('achievement:check'),
+  onAchievementUnlocked: (cb: (achievements: unknown[]) => void) => {
+    const handler = (_: unknown, data: unknown[]) => cb(data)
+    ipcRenderer.on('achievement:unlocked', handler)
+    return () => ipcRenderer.removeListener('achievement:unlocked', handler)
+  },
+
+  // Phase 6 — Backup & Restore
+  listBackups: () => invokeWithTimeout<unknown[]>('backup:list'),
+  createBackup: (args?: { note?: string }) =>
+    invokeWithTimeout<unknown>('backup:create', args, 60_000),
+  restoreBackup: () =>
+    invokeWithTimeout<{ restored: boolean }>('backup:restore', undefined, 30_000),
+  deleteBackup: (id: string) => invokeWithTimeout<void>('backup:delete', id),
 }
 
 if (process.contextIsolated) {

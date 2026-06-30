@@ -1,0 +1,86 @@
+[
+  {
+    "id": "first_question",
+    "title": "初次踏上征途",
+    "desc": "完成第一道题",
+    "icon": "🎯",
+    "condition": { "type": "total_answered", "value": 1 }
+  },
+  {
+    "id": "first_100",
+    "title": "破冰",
+    "desc": "累计完成 100 道题",
+    "icon": "🧊",
+    "condition": { "type": "total_answered", "value": 100 }
+  },
+  {
+    "id": "first_500",
+    "title": "刷题达人",
+    "desc": "累计完成 500 道题",
+    "icon": "📚",
+    "condition": { "type": "total_answered", "value": 500 }
+  },
+  {
+    "id": "first_1000",
+    "title": "题海战术",
+    "desc": "累计完成 1000 道题",
+    "icon": "🌊",
+    "condition": { "type": "total_answered", "value": 1000 }
+  },
+  {
+    "id": "streak_3",
+    "title": "三天打鱼",
+    "desc": "连续打卡 3 天",
+    "icon": "🎣",
+    "condition": { "type": "streak_days", "value": 3 }
+  },
+  {
+    "id": "streak_7",
+    "title": "坚持一周",
+    "desc": "连续打卡 7 天",
+    "icon": "📅",
+    "condition": { "type": "streak_days", "value": 7 }
+  },
+  {
+    "id": "streak_30",
+    "title": "月度坚持",
+    "desc": "连续打卡 30 天",
+    "icon": "🏆",
+    "condition": { "type": "streak_days", "value": 30 }
+  },
+  {
+    "id": "pomodoro_1",
+    "title": "第一个番茄",
+    "desc": "完成第一个番茄钟",
+    "icon": "🍅",
+    "condition": { "type": "total_pomodoros", "value": 1 }
+  },
+  {
+    "id": "pomodoro_10",
+    "title": "专注达人",
+    "desc": "累计完成 10 个番茄钟",
+    "icon": "⏱",
+    "condition": { "type": "total_pomodoros", "value": 10 }
+  },
+  {
+    "id": "accuracy_80",
+    "title": "精准射手",
+    "desc": "某次练习正确率达到 80% 以上（至少 10 题）",
+    "icon": "🎯",
+    "condition": { "type": "practice_accuracy", "value": 80 }
+  },
+  {
+    "id": "perfect_practice",
+    "title": "完美答题",
+    "desc": "某次练习全部答对（至少 10 题）",
+    "icon": "💯",
+    "condition": { "type": "perfect_practice", "value": 10 }
+  },
+  {
+    "id": "import_pdf",
+    "title": "知识猎手",
+    "desc": "成功导入第一份 PDF 文档",
+    "icon": "📄",
+    "condition": { "type": "total_docs", "value": 1 }
+  }
+]
