@@ -6,12 +6,14 @@
 #   -Target  nsis|portable|dir   (forwarded to build-electron.ps1, default: nsis)
 #   -SkipPython                  skip PyInstaller step (use existing resources/)
 #   -SkipTypecheck               skip tsc / vue-tsc
+#   -SkipE2E                     skip Playwright E2E test suite
 
 param(
     [ValidateSet('nsis','portable','dir')]
     [string]$Target = 'nsis',
     [switch]$SkipPython,
-    [switch]$SkipTypecheck
+    [switch]$SkipTypecheck,
+    [switch]$SkipE2E
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,6 +35,7 @@ function Step([string]$name, [scriptblock]$block) {
 Write-Host "[build-all] Starting full build pipeline" -ForegroundColor Cyan
 Write-Host "  Root:   $Root"
 Write-Host "  Target: $Target"
+Write-Host "  E2E:    $(if ($SkipE2E) { 'skip' } else { 'enabled' })"
 node --version 2>&1 | Write-Host
 python --version 2>&1 | Write-Host
 
@@ -50,6 +53,31 @@ Step 'Build Electron app' {
     $args = @("-Target $Target")
     if ($SkipTypecheck) { $args += '-SkipTypecheck' }
     & (Join-Path $ScriptsDir 'build-electron.ps1') -Target $Target -SkipTypecheck:$SkipTypecheck
+}
+
+# ── Step 3: E2E tests ────────────────────────────────────────────────────────
+if (-not $SkipE2E) {
+    Step 'E2E tests' {
+        $appDir = Join-Path $Root 'electron-app'
+
+        # Verify the compiled main entry exists before running tests
+        $mainEntry = Join-Path $appDir 'out\main\index.js'
+        if (-not (Test-Path $mainEntry)) {
+            throw "Compiled main entry not found at $mainEntry. Run build first."
+        }
+
+        Push-Location $appDir
+        try {
+            npm run test:e2e
+            if ($LASTEXITCODE -ne 0) {
+                throw "E2E tests failed (exit code $LASTEXITCODE). Release aborted."
+            }
+        } finally {
+            Pop-Location
+        }
+    }
+} else {
+    Write-Host "[build-all] Skipping E2E tests (-SkipE2E)" -ForegroundColor Yellow
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────────

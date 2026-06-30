@@ -34,3 +34,8 @@ Thumbs.db
 /python-service/build-pyinstaller/
 /electron-app/resources/
 /release/
+
+# Playwright test artifacts
+electron-app/playwright-report/
+electron-app/test-results/
+electron-app/tests/e2e/fixtures/sample.pdf

@@ -17,6 +17,7 @@ files:
   - '!{README.md,CHANGELOG.md}'
   - '!e2e-driver.mjs'
   - '!scripts/**'
+  - '!tests/**'
 
 # Native modules must not be asar-packed
 asarUnpack:
@@ -51,7 +52,7 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerLanguages: [en_US]
+  installerLanguages: [zh_CN]
   artifactName: ${productName}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
