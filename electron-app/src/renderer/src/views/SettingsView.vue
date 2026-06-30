@@ -8,6 +8,7 @@ const ai = useAiStore()
 const appStore = useAppStore()
 
 const apiKeyInput = ref('')
+const anthropicKeyInput = ref('')
 const saveMsg = ref('')
 const saveErr = ref('')
 const saving = ref(false)
@@ -26,6 +27,7 @@ const backupErr = ref('')
 onMounted(async () => {
   await ai.loadConfig()
   apiKeyInput.value = ai.config.openai.apiKey || ''
+  anthropicKeyInput.value = ai.config.anthropic.apiKey || ''
 
   const settings = await window.electronAPI.getSettings()
   if (settings.success) {
@@ -45,6 +47,7 @@ async function saveAi() {
       mode: ai.config.mode,
       openai: { ...ai.config.openai, apiKey: apiKeyInput.value },
       ollama: ai.config.ollama,
+      anthropic: { ...ai.config.anthropic, apiKey: anthropicKeyInput.value },
     })
     saveMsg.value = '配置已保存'
   } catch (e) {
@@ -146,13 +149,17 @@ function formatDt(iso: string) {
 
       <div class="setting-row">
         <div class="setting-info">
-          <div class="setting-name">AI 模式</div>
-          <div class="setting-desc">选择使用远程 API 还是本地 Ollama</div>
+          <div class="setting-name">AI 服务商</div>
+          <div class="setting-desc">选择 LLM 服务来源</div>
         </div>
         <div class="radio-group">
           <label class="radio-label">
             <input type="radio" v-model="ai.config.mode" value="openai" />
-            远程 API
+            OpenAI 兼容
+          </label>
+          <label class="radio-label">
+            <input type="radio" v-model="ai.config.mode" value="anthropic" />
+            Anthropic
           </label>
           <label class="radio-label">
             <input type="radio" v-model="ai.config.mode" value="ollama" />
@@ -175,6 +182,19 @@ function formatDt(iso: string) {
           <label>模型</label>
           <input v-model="ai.config.openai.model" class="text-input" placeholder="gpt-4o-mini" />
         </div>
+      </div>
+
+      <!-- Anthropic config -->
+      <div v-if="ai.config.mode === 'anthropic'" class="sub-section">
+        <div class="form-row">
+          <label>API Key</label>
+          <input v-model="anthropicKeyInput" class="text-input" type="password" placeholder="sk-ant-…" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label>模型</label>
+          <input v-model="ai.config.anthropic.model" class="text-input" placeholder="claude-sonnet-4-6" />
+        </div>
+        <div class="form-hint">使用 Anthropic 官方 API（api.anthropic.com）</div>
       </div>
 
       <!-- Ollama config -->
@@ -310,6 +330,7 @@ function formatDt(iso: string) {
 .text-input { flex: 1; background: #1e293b; border: 1px solid #475569; border-radius: 6px; color: #e2e8f0; padding: 7px 10px; font-size: 13px; }
 .text-input:focus { outline: none; border-color: #60a5fa; }
 
+.form-hint { font-size: 11px; color: #64748b; padding-top: 2px; }
 .action-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .btn-primary { background: #1d4ed8; border: none; border-radius: 8px; color: #fff; padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
 .btn-primary:hover:not(:disabled) { background: #2563eb; }

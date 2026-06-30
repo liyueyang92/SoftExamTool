@@ -50,6 +50,7 @@ let aiConfig: Record<string, unknown> = {
   mode: 'openai',
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
   ollama: { baseUrl: 'http://localhost:11434', model: 'qwen2.5' },
+  anthropic: { model: 'claude-sonnet-4-6' },
 }
 
 function getAiConfigPath(): string {
@@ -73,16 +74,19 @@ function saveAiConfig(): void {
 }
 
 function buildProviderConfig(): Record<string, unknown> {
-  const cfg = { ...aiConfig }
-  // Decrypt API key if stored
-  const encKey = (cfg as Record<string, Record<string, unknown>>).openai?.encryptedApiKey as Buffer | undefined
-  if (encKey && safeStorage.isEncryptionAvailable()) {
+  const cfg = { ...aiConfig } as Record<string, Record<string, unknown>>
+  // Decrypt OpenAI key
+  const encOpenAI = cfg.openai?.encryptedApiKey as Buffer | undefined
+  if (encOpenAI && safeStorage.isEncryptionAvailable()) {
     try {
-      const key = safeStorage.decryptString(Buffer.from(encKey))
-      ;(cfg as Record<string, Record<string, unknown>>).openai = {
-        ...(cfg as Record<string, Record<string, unknown>>).openai,
-        apiKey: key,
-      }
+      cfg.openai = { ...cfg.openai, apiKey: safeStorage.decryptString(Buffer.from(encOpenAI)) }
+    } catch { /* use empty key */ }
+  }
+  // Decrypt Anthropic key
+  const encAnthropic = cfg.anthropic?.encryptedApiKey as Buffer | undefined
+  if (encAnthropic && safeStorage.isEncryptionAvailable()) {
+    try {
+      cfg.anthropic = { ...cfg.anthropic, apiKey: safeStorage.decryptString(Buffer.from(encAnthropic)) }
     } catch { /* use empty key */ }
   }
   return cfg
@@ -327,21 +331,27 @@ function registerIpcHandlers(): void {
 
   // Phase 3 — AI config
   registerHandler(IPC.AI_GET_CONFIG, async () => {
-    // Return config without exposing encrypted key; indicate if key is set
-    const cfg = { ...aiConfig }
-    const hasKey = !!(cfg as Record<string, Record<string, unknown>>).openai?.encryptedApiKey
-    return { ...cfg, openai: { ...(cfg as Record<string, Record<string, unknown>>).openai, apiKey: hasKey ? '••••••••' : '', encryptedApiKey: undefined } }
+    const cfg = { ...aiConfig } as Record<string, Record<string, unknown>>
+    const hasOpenAIKey = !!cfg.openai?.encryptedApiKey
+    const hasAnthropicKey = !!cfg.anthropic?.encryptedApiKey
+    return {
+      ...cfg,
+      openai: { ...cfg.openai, apiKey: hasOpenAIKey ? '••••••••' : '', encryptedApiKey: undefined },
+      anthropic: { ...cfg.anthropic, apiKey: hasAnthropicKey ? '••••••••' : '', encryptedApiKey: undefined },
+    }
   })
 
   registerHandler(IPC.AI_SET_CONFIG, async (args) => {
-    const { mode, openai, ollama } = args as {
+    const { mode, openai, ollama, anthropic } = args as {
       mode?: string
       openai?: { baseUrl?: string; apiKey?: string; model?: string }
       ollama?: { baseUrl?: string; model?: string }
+      anthropic?: { apiKey?: string; model?: string }
     }
+    const cfgTyped = aiConfig as Record<string, Record<string, unknown>>
     if (mode) aiConfig.mode = mode
     if (openai) {
-      const existing = (aiConfig as Record<string, Record<string, unknown>>).openai ?? {}
+      const existing = cfgTyped.openai ?? {}
       const updated: Record<string, unknown> = {
         ...existing,
         baseUrl: openai.baseUrl ?? existing.baseUrl,
@@ -350,15 +360,31 @@ function registerIpcHandlers(): void {
       if (openai.apiKey && openai.apiKey !== '••••••••') {
         if (safeStorage.isEncryptionAvailable()) {
           updated.encryptedApiKey = safeStorage.encryptString(openai.apiKey)
+          delete updated.apiKey
         } else {
           updated.apiKey = openai.apiKey
         }
       }
-      ;(aiConfig as Record<string, Record<string, unknown>>).openai = updated
+      cfgTyped.openai = updated
     }
     if (ollama) {
-      const existing = (aiConfig as Record<string, Record<string, unknown>>).ollama ?? {}
-      ;(aiConfig as Record<string, Record<string, unknown>>).ollama = { ...existing, ...ollama }
+      cfgTyped.ollama = { ...(cfgTyped.ollama ?? {}), ...ollama }
+    }
+    if (anthropic) {
+      const existing = cfgTyped.anthropic ?? {}
+      const updated: Record<string, unknown> = {
+        ...existing,
+        model: anthropic.model ?? existing.model,
+      }
+      if (anthropic.apiKey && anthropic.apiKey !== '••••••••') {
+        if (safeStorage.isEncryptionAvailable()) {
+          updated.encryptedApiKey = safeStorage.encryptString(anthropic.apiKey)
+          delete updated.apiKey
+        } else {
+          updated.apiKey = anthropic.apiKey
+        }
+      }
+      cfgTyped.anthropic = updated
     }
     saveAiConfig()
   })

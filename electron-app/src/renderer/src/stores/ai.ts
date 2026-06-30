@@ -3,9 +3,10 @@ import { ref } from 'vue'
 import type { Question } from './question'
 
 export interface AiConfig {
-  mode: 'openai' | 'ollama'
+  mode: 'openai' | 'ollama' | 'anthropic'
   openai: { baseUrl: string; apiKey: string; model: string }
   ollama: { baseUrl: string; model: string }
+  anthropic: { apiKey: string; model: string }
 }
 
 export interface GenerateParams {
@@ -28,6 +29,7 @@ export const useAiStore = defineStore('ai', () => {
     mode: 'openai',
     openai: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-4o-mini' },
     ollama: { baseUrl: 'http://localhost:11434', model: 'qwen2.5' },
+    anthropic: { apiKey: '', model: 'claude-sonnet-4-6' },
   })
   const configLoaded = ref(false)
   const testingConnection = ref(false)
