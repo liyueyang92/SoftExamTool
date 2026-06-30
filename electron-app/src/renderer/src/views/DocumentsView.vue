@@ -1,10 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useDocumentStore, type Doc, type DocChunk } from '../stores/document'
-import { useTaskStore } from '../stores/task'
-
 const store = useDocumentStore()
-const taskStore = useTaskStore()
 
 const selectedDoc = ref<Doc | null>(null)
 const chunks = ref<DocChunk[]>([])
@@ -51,10 +48,6 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
-// Watch for task completion to refresh page count
-function isImporting(doc: Doc): boolean {
-  return store.importingTaskId !== null && store.documents[0]?.id === doc.id
-}
 </script>
 
 <template>

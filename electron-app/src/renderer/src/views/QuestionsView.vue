@@ -237,7 +237,7 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
 
           <div v-if="editTarget.type === 'single' || editTarget.type === 'multiple'" class="form-row col">
             <label>选项</label>
-            <div v-for="(opt, i) in editTarget.options" :key="i" class="option-row">
+            <div v-for="(_opt, i) in editTarget.options" :key="i" class="option-row">
               <input v-model="editTarget.options![i]" class="input-sm" placeholder="选项内容" />
               <button class="icon-btn danger" @click="removeOption(i)">✕</button>
             </div>

@@ -40,7 +40,7 @@ export const useAiStore = defineStore('ai', () => {
   async function loadConfig() {
     const res = await window.electronAPI.getAiConfig()
     if (res.success) {
-      config.value = res.data as AiConfig
+      config.value = res.data as unknown as AiConfig
       configLoaded.value = true
     }
   }

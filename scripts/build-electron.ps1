@@ -69,6 +69,14 @@ console.log(crypto.createHash('sha256').update(url).digest('hex'));
 
 Push-Location $AppDir
 try {
+    # ── Mirror overrides (avoids GitHub timeouts on restricted networks) ──────
+    if (-not $env:ELECTRON_MIRROR) {
+        $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
+    }
+    if (-not $env:ELECTRON_BUILDER_BINARIES_MIRROR) {
+        $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
+    }
+
     # ── TypeScript typecheck ─────────────────────────────────────────────────
     if (-not $SkipTypecheck) {
         Write-Host "[build-electron] Type-checking..." -ForegroundColor Cyan

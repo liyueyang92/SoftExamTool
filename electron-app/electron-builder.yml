@@ -63,12 +63,5 @@ nsis:
 portable:
   artifactName: ${productName}-${version}-portable.${ext}
 
-# Auto-update (Phase 7 — fill in real URL before first release)
-publish:
-  provider: github
-  releaseType: release
-  # owner: your-github-org
-  # repo: soft-exam-tool
-
 # Rebuild native modules for the packaged Electron version
 npmRebuild: true
