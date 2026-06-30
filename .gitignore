@@ -1,0 +1,33 @@
+# Node
+electron-app/node_modules/
+electron-app/out/
+electron-app/dist/
+
+# Python
+python-service/.venv/
+python-service/__pycache__/
+python-service/**/__pycache__/
+python-service/dist/
+*.pyc
+*.pyo
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+.env
+
+# Build output
+resources/python-service/
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
