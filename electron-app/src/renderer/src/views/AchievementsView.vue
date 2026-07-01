@@ -78,24 +78,24 @@ function formatDate(iso: string) {
 
 <style scoped>
 .ach-view { display: flex; flex-direction: column; gap: 24px; }
-.page-title { font-size: 22px; font-weight: 700; color: #e2e8f0; }
+.page-title { font-size: 22px; font-weight: 700; color: var(--c-text); }
 
 .summary-bar {
-  background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+  background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px;
   padding: 16px 20px; display: flex; align-items: center; gap: 16px;
 }
 .summary-item { display: flex; align-items: baseline; gap: 6px; flex-shrink: 0; }
 .summary-num { font-size: 28px; font-weight: 700; color: #fbbf24; }
-.summary-lbl { font-size: 12px; color: #64748b; }
-.progress-bar-wrap { flex: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden; }
+.summary-lbl { font-size: 12px; color: var(--c-text-3); }
+.progress-bar-wrap { flex: 1; height: 8px; background: var(--c-border); border-radius: 4px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #fbbf24, #f59e0b); border-radius: 4px; transition: width 0.4s; }
 
 .section { display: flex; flex-direction: column; gap: 12px; }
-.section-title { font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; }
+.section-title { font-size: 12px; font-weight: 700; color: var(--c-text-2); text-transform: uppercase; letter-spacing: 0.08em; }
 
 .badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
 .badge-card {
-  background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+  background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px;
   padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
   transition: transform 0.15s;
 }
@@ -103,21 +103,21 @@ function formatDate(iso: string) {
 .badge-card.unlocked:hover { transform: translateY(-2px); }
 .badge-icon { font-size: 36px; }
 .locked-icon { filter: grayscale(1) opacity(0.4); }
-.badge-title { font-size: 13px; font-weight: 700; color: #e2e8f0; }
-.badge-desc { font-size: 11px; color: #94a3b8; }
+.badge-title { font-size: 13px; font-weight: 700; color: var(--c-text); }
+.badge-desc { font-size: 11px; color: var(--c-text-2); }
 .badge-date { font-size: 10px; color: #4ade80; }
-.locked-text { color: #334155 !important; }
+.locked-text { color: var(--c-border) !important; }
 
-.loading, .empty { color: #64748b; font-size: 14px; text-align: center; padding: 40px; }
+.loading, .empty { color: var(--c-text-3); font-size: 14px; text-align: center; padding: 40px; }
 
 .hint-card {
-  background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+  background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px;
   padding: 16px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
 }
-.hint-card p { font-size: 13px; color: #64748b; flex: 1; }
+.hint-card p { font-size: 13px; color: var(--c-text-3); flex: 1; }
 .btn-outline {
-  background: none; border: 1px solid #475569; border-radius: 8px; color: #94a3b8;
+  background: none; border: 1px solid var(--c-border-2); border-radius: 8px; color: var(--c-text-2);
   padding: 8px 16px; font-size: 13px; cursor: pointer; flex-shrink: 0;
 }
-.btn-outline:hover { border-color: #94a3b8; color: #e2e8f0; }
+.btn-outline:hover { border-color: var(--c-text-2); color: var(--c-text); }
 </style>

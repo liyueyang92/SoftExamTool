@@ -22,7 +22,7 @@ onMounted(() => {
 onUnmounted(() => document.removeEventListener('keydown', handleKeydown))
 
 const PHASE_COLORS: Record<string, string> = {
-  idle: '#475569',
+  idle: 'var(--c-border-2)',
   work: '#dc2626',
   'short-break': '#16a34a',
   'long-break': '#2563eb',
@@ -123,31 +123,31 @@ const PHASE_COLORS: Record<string, string> = {
 
 <style scoped>
 .pomo-view { max-width: 600px; display: flex; flex-direction: column; gap: 24px; }
-.page-title { font-size: 22px; font-weight: 700; color: #e2e8f0; }
+.page-title { font-size: 22px; font-weight: 700; color: var(--c-text); }
 
 .pomo-card {
-  background: #1e293b; border: 1px solid #334155; border-radius: 16px;
+  background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 16px;
   padding: 32px; display: flex; flex-direction: column; align-items: center; gap: 24px;
 }
 
 .phase-tabs { display: flex; gap: 8px; }
 .phase-tab {
-  padding: 6px 14px; border-radius: 20px; border: 1px solid #475569;
-  font-size: 12px; color: #94a3b8; transition: all 0.2s;
+  padding: 6px 14px; border-radius: 20px; border: 1px solid var(--c-border-2);
+  font-size: 12px; color: var(--c-text-2); transition: all 0.2s;
 }
-.phase-tab.active { color: #e2e8f0; border-width: 2px; }
+.phase-tab.active { color: var(--c-text); border-width: 2px; }
 
 .timer-wrap { position: relative; }
 .timer-ring {
   width: 220px; height: 220px; border-radius: 50%;
-  border: 6px solid var(--ring-color, #475569);
+  border: 6px solid var(--ring-color, var(--c-border-2));
   display: flex; align-items: center; justify-content: center;
   transition: border-color 0.4s;
-  box-shadow: 0 0 32px color-mix(in srgb, var(--ring-color, #475569) 30%, transparent);
+  box-shadow: 0 0 32px color-mix(in srgb, var(--ring-color, var(--c-border-2)) 30%, transparent);
 }
 .timer-inner { text-align: center; }
-.timer-display { font-size: 56px; font-weight: 700; color: #e2e8f0; letter-spacing: -2px; font-variant-numeric: tabular-nums; }
-.timer-label { font-size: 13px; color: #94a3b8; margin-top: 4px; }
+.timer-display { font-size: 56px; font-weight: 700; color: var(--c-text); letter-spacing: -2px; font-variant-numeric: tabular-nums; }
+.timer-label { font-size: 13px; color: var(--c-text-2); margin-top: 4px; }
 
 .controls { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
 .btn-start {
@@ -161,41 +161,41 @@ const PHASE_COLORS: Record<string, string> = {
 }
 .btn-pause:hover { background: #b45309; }
 .btn-skip {
-  background: none; border: 1px solid #475569; border-radius: 10px; color: #94a3b8;
+  background: none; border: 1px solid var(--c-border-2); border-radius: 10px; color: var(--c-text-2);
   padding: 12px 20px; font-size: 14px; cursor: pointer;
 }
-.btn-skip:hover { border-color: #94a3b8; color: #e2e8f0; }
+.btn-skip:hover { border-color: var(--c-text-2); color: var(--c-text); }
 .btn-stop {
-  background: none; border: 1px solid #475569; border-radius: 10px; color: #64748b;
+  background: none; border: 1px solid var(--c-border-2); border-radius: 10px; color: var(--c-text-3);
   padding: 12px 20px; font-size: 14px; cursor: pointer;
 }
-.btn-stop:hover { border-color: #94a3b8; color: #94a3b8; }
+.btn-stop:hover { border-color: var(--c-text-2); color: var(--c-text-2); }
 
-.shortcut-hint { font-size: 11px; color: #475569; }
+.shortcut-hint { font-size: 11px; color: var(--c-border-2); }
 
 .stats-row { display: flex; gap: 32px; }
 .stat-item { text-align: center; }
-.stat-num { font-size: 28px; font-weight: 700; color: #e2e8f0; }
-.stat-lbl { font-size: 11px; color: #64748b; margin-top: 2px; }
+.stat-num { font-size: 28px; font-weight: 700; color: var(--c-text); }
+.stat-lbl { font-size: 11px; color: var(--c-text-3); margin-top: 2px; }
 
 /* Toast */
 .toast-stack { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 10px; z-index: 999; }
 .toast-item {
   display: flex; align-items: center; gap: 12px;
-  background: #1e293b; border: 1px solid #22c55e; border-radius: 12px;
+  background: var(--c-panel); border: 1px solid #22c55e; border-radius: 12px;
   padding: 12px 16px; cursor: pointer; min-width: 260px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.4);
 }
 .toast-icon { font-size: 28px; }
-.toast-title { font-size: 13px; font-weight: 700; color: #e2e8f0; }
-.toast-desc { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+.toast-title { font-size: 13px; font-weight: 700; color: var(--c-text); }
+.toast-desc { font-size: 12px; color: var(--c-text-2); margin-top: 2px; }
 .toast-enter-active { animation: slideIn 0.3s ease; }
 .toast-leave-active { animation: slideIn 0.3s ease reverse; }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
 /* Tips */
-.tips-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; }
-.tips-title { font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+.tips-card { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px; padding: 20px; }
+.tips-title { font-size: 12px; font-weight: 700; color: var(--c-text-2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
 .tips-list { padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
-.tips-list li { font-size: 13px; color: #64748b; }
+.tips-list li { font-size: 13px; color: var(--c-text-3); }
 </style>

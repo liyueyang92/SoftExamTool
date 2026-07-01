@@ -88,7 +88,7 @@ function renderChart() {
         edgeLength: [80, 180],
         layoutAnimation: true,
       },
-      lineStyle: { color: '#334155', width: 1, opacity: 0.6 },
+      lineStyle: { color: 'var(--c-border)', width: 1, opacity: 0.6 },
       edgeSymbol: ['none', 'none'],
       emphasis: {
         focus: 'adjacency',
@@ -104,8 +104,8 @@ function renderChart() {
         itemStyle: {
           color: n.questionCount > 0
             ? `rgba(29, 78, 216, ${0.4 + (n.questionCount / maxVal) * 0.6})`
-            : '#334155',
-          borderColor: '#60a5fa',
+            : 'var(--c-border)',
+          borderColor: 'var(--c-brand)',
           borderWidth: 1,
         },
       })),
@@ -171,7 +171,7 @@ onUnmounted(() => window.removeEventListener('resize', handleResize))
       <div v-else-if="nodes.length === 0 && !error" class="empty-tip">
         <div style="font-size:40px;margin-bottom:8px">◈</div>
         <div>暂无知识图谱数据</div>
-        <div style="font-size:12px;margin-top:4px;color:#64748b">先导入文档或添加题目（附知识点标签）</div>
+        <div style="font-size:12px;margin-top:4px;color:var(--c-text-3)">先导入文档或添加题目（附知识点标签）</div>
       </div>
       <div v-else ref="chartRef" class="chart-container"></div>
 
@@ -197,37 +197,37 @@ onUnmounted(() => window.removeEventListener('resize', handleResize))
 <style scoped>
 .graph-view { display: flex; flex-direction: column; gap: 12px; height: 100%; }
 .view-header { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.view-title { font-size: 20px; font-weight: 700; color: #e2e8f0; flex: 1; }
+.view-title { font-size: 20px; font-weight: 700; color: var(--c-text); flex: 1; }
 .controls { display: flex; align-items: center; gap: 10px; }
-.label-sm { font-size: 12px; color: #94a3b8; }
-.num-input { background: #1e293b; border: 1px solid #475569; border-radius: 6px; color: #e2e8f0; padding: 5px 8px; width: 56px; font-size: 13px; }
+.label-sm { font-size: 12px; color: var(--c-text-2); }
+.num-input { background: var(--c-panel); border: 1px solid var(--c-border-2); border-radius: 6px; color: var(--c-text); padding: 5px 8px; width: 56px; font-size: 13px; }
 .btn-primary { background: #1d4ed8; border: none; border-radius: 8px; color: #fff; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
 .btn-primary:hover:not(:disabled) { background: #2563eb; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .error-card { background: #450a0a; border: 1px solid #f87171; border-radius: 8px; padding: 12px 16px; color: #f87171; font-size: 13px; }
 
-.graph-wrap { flex: 1; position: relative; background: #1e293b; border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
+.graph-wrap { flex: 1; position: relative; background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 10px; overflow: hidden; }
 .chart-container { width: 100%; height: 100%; }
 
-.loading-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #94a3b8; font-size: 14px; background: #1e293b; }
-.spinner { width: 32px; height: 32px; border: 3px solid #334155; border-top-color: #60a5fa; border-radius: 50%; animation: spin 0.8s linear infinite; }
+.loading-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--c-text-2); font-size: 14px; background: var(--c-panel); }
+.spinner { width: 32px; height: 32px; border: 3px solid var(--c-border); border-top-color: var(--c-brand); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.empty-tip { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #475569; font-size: 13px; }
+.empty-tip { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--c-border-2); font-size: 13px; }
 
 .node-info {
   position: absolute; bottom: 16px; left: 16px;
-  background: rgba(15, 23, 42, 0.95); border: 1px solid #475569;
+  background: rgba(15, 23, 42, 0.95); border: 1px solid var(--c-border-2);
   border-radius: 10px; padding: 12px 16px; min-width: 160px;
   backdrop-filter: blur(4px);
 }
-.node-name { font-size: 14px; font-weight: 600; color: #e2e8f0; margin-bottom: 8px; }
+.node-name { font-size: 14px; font-weight: 600; color: var(--c-text); margin-bottom: 8px; }
 .node-stats { display: flex; gap: 16px; }
 .stat-item { display: flex; flex-direction: column; align-items: center; }
-.stat-val { font-size: 20px; font-weight: 700; color: #60a5fa; }
-.stat-label { font-size: 11px; color: #64748b; }
-.close-node-btn { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #64748b; cursor: pointer; font-size: 14px; }
+.stat-val { font-size: 20px; font-weight: 700; color: var(--c-brand); }
+.stat-label { font-size: 11px; color: var(--c-text-3); }
+.close-node-btn { position: absolute; top: 8px; right: 8px; background: none; border: none; color: var(--c-text-3); cursor: pointer; font-size: 14px; }
 
-.stats-bar { display: flex; gap: 16px; font-size: 12px; color: #475569; flex-shrink: 0; }
+.stats-bar { display: flex; gap: 16px; font-size: 12px; color: var(--c-border-2); flex-shrink: 0; }
 </style>
