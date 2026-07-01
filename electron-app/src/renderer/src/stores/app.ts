@@ -31,11 +31,23 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function init() {
-    // Listen for Python status changes
+    // Listen for future Python status pushes
     window.electronAPI.onPythonStatus((status) => {
       setPythonReady(status.ready)
       if (status.ready) loadDbStatus()
     })
+
+    // Query current state immediately — the push event may have fired before this
+    // listener was registered (race: Python already ready when renderer mounted).
+    try {
+      const res = await window.electronAPI.getPythonStatus()
+      if (res.success && res.data.ready && !pythonReady.value) {
+        setPythonReady(true)
+        await loadDbStatus()
+      }
+    } catch {
+      // non-critical, push event will cover it
+    }
 
     // Load persisted settings
     try {

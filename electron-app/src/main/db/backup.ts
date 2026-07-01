@@ -20,17 +20,18 @@ export function deleteBackupRecord(db: Database.Database, id: string): void {
   db.prepare('DELETE FROM backup_records WHERE id = ?').run(id)
 }
 
-export async function createBackup(
+export function createBackup(
   db: Database.Database,
   destDir: string,
   note = ''
-): Promise<BackupRecord> {
+): BackupRecord {
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const fileName = `softexam-backup-${ts}.db`
   const destPath = join(destDir, fileName)
 
-  // better-sqlite3 async backup (hot backup, WAL-safe)
-  await (db as unknown as { backup: (dest: string) => Promise<void> }).backup(destPath)
+  // VACUUM INTO creates a consistent copy that works with SQLCipher-encrypted sources.
+  // The backup file is unencrypted plain SQLite (portable, no key needed to restore).
+  db.exec(`VACUUM INTO '${destPath.replace(/'/g, "''")}'`)
 
   const size = existsSync(destPath) ? statSync(destPath).size : 0
   const id = randomUUID()

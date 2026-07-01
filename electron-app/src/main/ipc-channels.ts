@@ -1,6 +1,7 @@
 export const IPC = {
   // Phase 0
   PYTHON_STATUS: 'python:status',
+  GET_PYTHON_STATUS: 'python:getStatus',
   PING: 'ping',
   // Phase 1 — DB
   DB_STATUS: 'db:status',

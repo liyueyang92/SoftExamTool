@@ -22,6 +22,7 @@ const customAPI = {
     ipcRenderer.on('python:status', handler)
     return () => ipcRenderer.removeListener('python:status', handler)
   },
+  getPythonStatus: () => invokeWithTimeout<{ ready: boolean }>('python:getStatus'),
 
   // Phase 1 — DB
   getDbStatus: () => invokeWithTimeout<{ ready: boolean; version: number }>('db:status'),

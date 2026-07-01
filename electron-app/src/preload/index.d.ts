@@ -34,6 +34,7 @@ declare global {
       // Phase 0
       ping: () => Promise<IpcResponse<string>>
       onPythonStatus: (cb: (status: { ready: boolean }) => void) => () => void
+      getPythonStatus: () => Promise<IpcResponse<{ ready: boolean }>>
 
       // Phase 1 — DB
       getDbStatus: () => Promise<IpcResponse<{ ready: boolean; version: number }>>

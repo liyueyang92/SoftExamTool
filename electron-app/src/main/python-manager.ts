@@ -22,6 +22,7 @@ export class PythonManager {
   port = 0
   token = ''
   private ready = false
+  get isReady(): boolean { return this.ready }
   private pollTimer: ReturnType<typeof setTimeout> | null = null
 
   async start(mainWindow: BrowserWindow): Promise<void> {
