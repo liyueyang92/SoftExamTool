@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { PdfImportSelection } from '../../../preload/shared-types'
 import { useDocumentStore, type Doc, type DocChunk } from '../stores/document'
 
@@ -22,8 +22,33 @@ const previewPageCount = ref<number | null>(null)
 const previewText = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
+let disposeTaskProgress: (() => void) | null = null
 
-onMounted(() => store.fetchAll())
+async function refreshDocuments() {
+  await store.fetchAll()
+  if (selectedDoc.value) {
+    const updated = store.documents.find((doc) => doc.id === selectedDoc.value?.id) ?? null
+    selectedDoc.value = updated
+  }
+}
+
+onMounted(async () => {
+  await refreshDocuments()
+  disposeTaskProgress = window.electronAPI.onTaskProgress(async (msg) => {
+    if (!store.importingTaskId || msg.taskId !== store.importingTaskId) return
+    if (msg.progress >= 100) {
+      store.onImportComplete()
+      await refreshDocuments()
+    }
+    if (msg.progress < 0) {
+      store.importingTaskId = null
+    }
+  })
+})
+
+onBeforeUnmount(() => {
+  if (disposeTaskProgress) disposeTaskProgress()
+})
 
 function resetImportState(file: PdfImportSelection | null) {
   selectedFile.value = file
@@ -342,8 +367,7 @@ function formatDate(iso: string) {
 .chunks-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
 .chunk-item { background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; }
 .chunk-page { font-size: 11px; color: var(--c-text-3); margin-bottom: 6px; }
-.chunk-content { font-size: 13px; color: #cbd5e1; line-height: 1.6; max-height: 120px; overflow: hidden; position: relative; }
-.chunk-content::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 30px; background: linear-gradient(transparent, var(--c-bg)); }
+.chunk-content { font-size: 13px; color: #cbd5e1; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 .chunk-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .tag { display: inline-block; background: #1e3a5f; color: #93c5fd; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 .empty-tip { text-align: center; padding: 48px; color: var(--c-border-2); font-size: 13px; }
