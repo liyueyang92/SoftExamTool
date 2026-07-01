@@ -58,7 +58,12 @@ async function saveAi() {
 }
 
 async function testConn() {
-  await ai.testConnection()
+  await ai.testConnection({
+    mode: ai.config.mode,
+    openai: { ...ai.config.openai, apiKey: apiKeyInput.value },
+    ollama: { ...ai.config.ollama },
+    anthropic: { ...ai.config.anthropic, apiKey: anthropicKeyInput.value },
+  })
 }
 
 async function saveHealthSettings() {

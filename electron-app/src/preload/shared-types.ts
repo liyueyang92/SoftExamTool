@@ -93,3 +93,33 @@ export interface BackupRecord {
   note: string
   created_at: string
 }
+
+export interface PdfImportSelection {
+  filePath: string
+  fileName: string
+  title: string
+}
+
+export interface PdfImportOptions {
+  filePath?: string
+  topMarginRatio?: number
+  bottomMarginRatio?: number
+  startPage?: number
+  endPage?: number | null
+}
+
+export interface PdfPreviewResult {
+  page_count: number
+  preview_page: number
+  crop_ratios: {
+    top_margin_ratio: number
+    bottom_margin_ratio: number
+  }
+  crop_bbox: {
+    x0: number
+    top: number
+    x1: number
+    bottom: number
+  }
+  text: string
+}

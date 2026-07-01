@@ -11,6 +11,9 @@ import type {
   StudySession,
   Achievement,
   BackupRecord,
+  PdfImportSelection,
+  PdfImportOptions,
+  PdfPreviewResult,
 } from './shared-types'
 
 export type {
@@ -25,6 +28,9 @@ export type {
   StudySession,
   Achievement,
   BackupRecord,
+  PdfImportSelection,
+  PdfImportOptions,
+  PdfPreviewResult,
 } from './shared-types'
 
 declare global {
@@ -67,14 +73,21 @@ declare global {
 
       // Phase 3 — Documents
       listDocuments: () => Promise<IpcResponse<unknown[]>>
-      importDocument: () => Promise<IpcResponse<{ document: unknown; taskId?: string; duplicate?: boolean } | null>>
+      pickDocumentFile: () => Promise<IpcResponse<PdfImportSelection | null>>
+      previewDocumentImport: (args: {
+        filePath: string
+        previewPage: number
+        topMarginRatio?: number
+        bottomMarginRatio?: number
+      }) => Promise<IpcResponse<PdfPreviewResult>>
+      importDocument: (args?: PdfImportOptions) => Promise<IpcResponse<{ document: unknown; taskId?: string; duplicate?: boolean } | null>>
       deleteDocument: (id: string) => Promise<IpcResponse<void>>
       getDocChunks: (docId: string) => Promise<IpcResponse<unknown[]>>
 
       // Phase 3 — AI
       getAiConfig: () => Promise<IpcResponse<Record<string, unknown>>>
       setAiConfig: (args: unknown) => Promise<IpcResponse<void>>
-      testAiConnection: () => Promise<IpcResponse<{ ok: boolean; reply: string }>>
+      testAiConnection: (args?: unknown) => Promise<IpcResponse<{ ok: boolean; reply: string }>>
       generateQuestions: (args: unknown) => Promise<IpcResponse<{ questions: unknown[] }>>
       gradeEssay: (args: unknown) => Promise<IpcResponse<unknown>>
 

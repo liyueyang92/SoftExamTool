@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { PdfImportOptions, PdfImportSelection, PdfPreviewResult } from '../../../preload/shared-types'
 
 export interface Doc {
   id: string
@@ -33,8 +34,25 @@ export const useDocumentStore = defineStore('document', () => {
     }
   }
 
-  async function importPdf(): Promise<{ taskId?: string; duplicate?: boolean } | null> {
-    const res = await window.electronAPI.importDocument()
+  async function pickImportFile(): Promise<PdfImportSelection | null> {
+    const res = await window.electronAPI.pickDocumentFile()
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    return (res.data as PdfImportSelection | null) ?? null
+  }
+
+  async function previewImport(args: {
+    filePath: string
+    previewPage: number
+    topMarginRatio?: number
+    bottomMarginRatio?: number
+  }): Promise<PdfPreviewResult> {
+    const res = await window.electronAPI.previewDocumentImport(args)
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    return res.data as PdfPreviewResult
+  }
+
+  async function importPdf(args?: PdfImportOptions): Promise<{ taskId?: string; duplicate?: boolean } | null> {
+    const res = await window.electronAPI.importDocument(args)
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const data = res.data as { document: Doc; taskId?: string; duplicate?: boolean } | null
     if (!data) return null
@@ -63,5 +81,16 @@ export const useDocumentStore = defineStore('document', () => {
     fetchAll()
   }
 
-  return { documents, loading, importingTaskId, fetchAll, importPdf, remove, getChunks, onImportComplete }
+  return {
+    documents,
+    loading,
+    importingTaskId,
+    fetchAll,
+    pickImportFile,
+    previewImport,
+    importPdf,
+    remove,
+    getChunks,
+    onImportComplete,
+  }
 })

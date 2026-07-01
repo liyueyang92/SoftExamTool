@@ -76,15 +76,37 @@ const customAPI = {
 
   // Phase 3 — Documents
   listDocuments: () => invokeWithTimeout<unknown[]>('doc:list'),
-  importDocument: () =>
-    invokeWithTimeout<{ document: unknown; taskId?: string; duplicate?: boolean } | null>('doc:import', undefined, 60_000),
+  pickDocumentFile: () =>
+    invokeWithTimeout<{ filePath: string; fileName: string; title: string } | null>('doc:pickFile'),
+  previewDocumentImport: (args: {
+    filePath: string
+    previewPage: number
+    topMarginRatio?: number
+    bottomMarginRatio?: number
+  }) =>
+    invokeWithTimeout<{
+      page_count: number
+      preview_page: number
+      crop_ratios: { top_margin_ratio: number; bottom_margin_ratio: number }
+      crop_bbox: { x0: number; top: number; x1: number; bottom: number }
+      text: string
+    }>('doc:preview', args, 60_000),
+  importDocument: (args?: {
+    filePath?: string
+    topMarginRatio?: number
+    bottomMarginRatio?: number
+    startPage?: number
+    endPage?: number | null
+  }) =>
+    invokeWithTimeout<{ document: unknown; taskId?: string; duplicate?: boolean } | null>('doc:import', args, 60_000),
   deleteDocument: (id: string) => invokeWithTimeout<void>('doc:delete', id),
   getDocChunks: (docId: string) => invokeWithTimeout<unknown[]>('doc:getChunks', docId),
 
   // Phase 3 — AI
   getAiConfig: () => invokeWithTimeout<Record<string, unknown>>('ai:getConfig'),
   setAiConfig: (args: unknown) => invokeWithTimeout<void>('ai:setConfig', args),
-  testAiConnection: () => invokeWithTimeout<{ ok: boolean; reply: string }>('ai:testConnection', undefined, 30_000),
+  testAiConnection: (args?: unknown) =>
+    invokeWithTimeout<{ ok: boolean; reply: string }>('ai:testConnection', args, 30_000),
   generateQuestions: (args: unknown) =>
     invokeWithTimeout<{ questions: unknown[] }>('ai:generateQuestions', args, 120_000),
   gradeEssay: (args: unknown) =>

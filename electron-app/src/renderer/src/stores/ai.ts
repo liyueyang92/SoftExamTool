@@ -24,6 +24,17 @@ export interface GradeResult {
   suggestions: string[]
 }
 
+function toPlainAiConfigPatch(patch?: Partial<AiConfig>): Partial<AiConfig> | undefined {
+  if (!patch) return undefined
+
+  const plain: Partial<AiConfig> = {}
+  if (patch.mode !== undefined) plain.mode = patch.mode
+  if (patch.openai) plain.openai = { ...patch.openai }
+  if (patch.ollama) plain.ollama = { ...patch.ollama }
+  if (patch.anthropic) plain.anthropic = { ...patch.anthropic }
+  return plain
+}
+
 export const useAiStore = defineStore('ai', () => {
   const config = ref<AiConfig>({
     mode: 'openai',
@@ -48,15 +59,16 @@ export const useAiStore = defineStore('ai', () => {
   }
 
   async function saveConfig(patch: Partial<AiConfig>) {
-    await window.electronAPI.setAiConfig(patch)
-    Object.assign(config.value, patch)
+    const plainPatch = toPlainAiConfigPatch(patch) ?? {}
+    await window.electronAPI.setAiConfig(plainPatch)
+    Object.assign(config.value, plainPatch)
   }
 
-  async function testConnection() {
+  async function testConnection(configOverride?: Partial<AiConfig>) {
     testingConnection.value = true
     connectionResult.value = null
     try {
-      const res = await window.electronAPI.testAiConnection()
+      const res = await window.electronAPI.testAiConnection(toPlainAiConfigPatch(configOverride))
       if (res.success) connectionResult.value = res.data as { ok: boolean; reply: string }
       else connectionResult.value = { ok: false, reply: (res.error as { message: string }).message }
     } catch (e) {

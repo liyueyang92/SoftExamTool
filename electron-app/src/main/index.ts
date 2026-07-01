@@ -52,6 +52,14 @@ let aiConfig: Record<string, unknown> = {
   ollama: { baseUrl: 'http://localhost:11434', model: 'qwen2.5' },
   anthropic: { model: 'claude-sonnet-4-6' },
 }
+const MASKED_SECRET = '__MASKED__'
+
+type ProviderConfigOverride = {
+  mode?: string
+  openai?: { baseUrl?: string; apiKey?: string; model?: string }
+  ollama?: { baseUrl?: string; model?: string }
+  anthropic?: { apiKey?: string; model?: string }
+}
 
 function getAiConfigPath(): string {
   return pathJoin(app.getPath('userData'), 'ai-config.json')
@@ -73,8 +81,19 @@ function saveAiConfig(): void {
   } catch { /* non-critical */ }
 }
 
-function buildProviderConfig(): Record<string, unknown> {
-  const cfg = { ...aiConfig } as Record<string, Record<string, unknown>>
+function buildProviderConfig(override?: ProviderConfigOverride): Record<string, unknown> {
+  const source = aiConfig as Record<string, Record<string, unknown>>
+  const cfg = {
+    ...source,
+    openai: { ...(source.openai ?? {}) },
+    ollama: { ...(source.ollama ?? {}) },
+    anthropic: { ...(source.anthropic ?? {}) },
+  } as Record<string, unknown> & {
+    mode?: string
+    openai: Record<string, unknown>
+    ollama: Record<string, unknown>
+    anthropic: Record<string, unknown>
+  }
   // Decrypt OpenAI key
   const encOpenAI = cfg.openai?.encryptedApiKey as Buffer | undefined
   if (encOpenAI && safeStorage.isEncryptionAvailable()) {
@@ -88,6 +107,36 @@ function buildProviderConfig(): Record<string, unknown> {
     try {
       cfg.anthropic = { ...cfg.anthropic, apiKey: safeStorage.decryptString(Buffer.from(encAnthropic)) }
     } catch { /* use empty key */ }
+  }
+
+  if (!override) return cfg
+
+  if (override.mode) cfg.mode = override.mode
+  if (override.openai) {
+    cfg.openai = {
+      ...(cfg.openai ?? {}),
+      baseUrl: override.openai.baseUrl ?? cfg.openai?.baseUrl,
+      model: override.openai.model ?? cfg.openai?.model,
+    }
+    if (override.openai.apiKey !== undefined && override.openai.apiKey !== MASKED_SECRET) {
+      cfg.openai.apiKey = override.openai.apiKey
+    }
+  }
+  if (override.ollama) {
+    cfg.ollama = {
+      ...(cfg.ollama ?? {}),
+      baseUrl: override.ollama.baseUrl ?? cfg.ollama?.baseUrl,
+      model: override.ollama.model ?? cfg.ollama?.model,
+    }
+  }
+  if (override.anthropic) {
+    cfg.anthropic = {
+      ...(cfg.anthropic ?? {}),
+      model: override.anthropic.model ?? cfg.anthropic?.model,
+    }
+    if (override.anthropic.apiKey !== undefined && override.anthropic.apiKey !== MASKED_SECRET) {
+      cfg.anthropic.apiKey = override.anthropic.apiKey
+    }
   }
   return cfg
 }
@@ -149,19 +198,19 @@ function checkAndNotify(): void {
 
     if (pendingCount > 0) {
       new Notification({
-        title: '软考备考提醒',
-        body: `距考试还有 ${daysLeft} 天，今日还有 ${pendingCount} 个任务待完成，加油！`,
+        title: '??????',
+        body: `?????? ${daysLeft} ?????? ${pendingCount} ???????????????`,
       }).show()
     } else if (daysLeft <= 7) {
       new Notification({
-        title: '冲刺提醒',
-        body: `距考试仅剩 ${daysLeft} 天！今日任务已完成，请继续复习薄弱知识点。`,
+        title: '????',
+        body: `?????? ${daysLeft} ?????????????????????`,
       }).show()
     }
   } catch { /* non-critical */ }
 }
 
-// ─── Health reminder ────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Health reminder 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 let continuousStudyStartMs: number | null = null
 
 function updateContinuousStudy(active: boolean): void {
@@ -186,8 +235,8 @@ function checkHealthReminder(): void {
     continuousStudyStartMs = Date.now()
 
     new Notification({
-      title: '健康学习提醒',
-      body: `您已连续学习 ${thresholdMin} 分钟，请起身活动一下，保护眼睛和颈椎！`,
+      title: '??????',
+      body: `?????? ${thresholdMin} ?????????????????????`,
     }).show()
   } catch { /* non-critical */ }
 }
@@ -207,13 +256,13 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.PING, async () => pythonManager.ping())
   registerHandler(IPC.GET_PYTHON_STATUS, async () => ({ ready: pythonManager.isReady }))
 
-  // Phase 1 — DB status
+  // Phase 1 鈥?DB status
   registerHandler(IPC.DB_STATUS, async () => {
     const version = db.pragma('user_version', { simple: true }) as number
     return { ready: true, version }
   })
 
-  // Phase 1 — Task CRUD
+  // Phase 1 鈥?Task CRUD
   registerHandler(IPC.TASK_CREATE, async (args) => {
     const { type, payload } = args as { type: string; payload: unknown }
     const id = taskManager!.createTask(type, payload)
@@ -226,14 +275,14 @@ function registerIpcHandlers(): void {
     wsClient.disconnect(id as string)
   })
 
-  // Phase 1 — App settings
+  // Phase 1 鈥?App settings
   registerHandler(IPC.APP_GET_SETTINGS, async () => ({ ...appSettings }))
   registerHandler(IPC.APP_SET_SETTING, async (args) => {
     const { key, value } = args as { key: string; value: unknown }
     appSettings[key] = value
   })
 
-  // Phase 2 — Questions
+  // Phase 2 鈥?Questions
   registerHandler(IPC.QUESTION_QUERY, async (args) => {
     return queryQuestions(db, args as Parameters<typeof queryQuestions>[1])
   })
@@ -254,7 +303,7 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.QUESTION_TOGGLE_FAVORITE, async (id) => ({ is_favorite: toggleFavorite(db, id as string) }))
   registerHandler(IPC.QUESTION_GET_STATS, async () => getQuestionStats(db))
 
-  // Phase 2 — Practice
+  // Phase 2 鈥?Practice
   registerHandler(IPC.PRACTICE_START, async (args) => startPractice(db, args as Parameters<typeof startPractice>[1]))
   registerHandler(IPC.PRACTICE_SUBMIT_ANSWER, async (args) => {
     const { sessionId, questionId, chosen, timeMs } = args as {
@@ -268,12 +317,12 @@ function registerIpcHandlers(): void {
     return getWrongQuestions(db, limit)
   })
 
-  // Phase 3 — Documents
+  // Phase 3 - Documents
   registerHandler(IPC.DOC_LIST, async () => listDocuments(db))
 
-  registerHandler(IPC.DOC_IMPORT, async () => {
+  registerHandler(IPC.DOC_PICK_FILE, async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: '选择 PDF 文件',
+      title: 'Select PDF File',
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
       properties: ['openFile'],
     })
@@ -282,8 +331,67 @@ function registerIpcHandlers(): void {
     const filePath = result.filePaths[0]
     const fileName = filePath.split(/[\\/]/).pop() ?? filePath
     const title = fileName.replace(/\.pdf$/i, '')
+    return { filePath, fileName, title }
+  })
 
-    // Compute MD5 via Python (avoids importing crypto-heavy libs in renderer)
+  registerHandler(IPC.DOC_PREVIEW, async (args) => {
+    const {
+      filePath,
+      previewPage,
+      topMarginRatio,
+      bottomMarginRatio,
+    } = args as {
+      filePath: string
+      previewPage: number
+      topMarginRatio?: number
+      bottomMarginRatio?: number
+    }
+
+    const previewRes = await fetch(`http://127.0.0.1:${pythonManager.port}/pdf/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({
+        file_path: filePath,
+        preview_page: previewPage,
+        top_margin_ratio: topMarginRatio ?? 0.07,
+        bottom_margin_ratio: bottomMarginRatio ?? 0.07,
+      }),
+    })
+    if (!previewRes.ok) {
+      const err = await previewRes.json() as { detail?: string }
+      throw new Error(err.detail ?? 'PDF preview failed')
+    }
+    return previewRes.json()
+  })
+
+  registerHandler(IPC.DOC_IMPORT, async (args) => {
+    const importArgs = (args ?? {}) as {
+      filePath?: string
+      topMarginRatio?: number
+      bottomMarginRatio?: number
+      startPage?: number
+      endPage?: number | null
+    }
+
+    let filePath = importArgs.filePath
+    if (!filePath) {
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        title: 'Select PDF File',
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+        properties: ['openFile'],
+      })
+      if (result.canceled || !result.filePaths.length) return null
+      filePath = result.filePaths[0]
+    }
+
+    const topMarginRatio = importArgs.topMarginRatio ?? 0.07
+    const bottomMarginRatio = importArgs.bottomMarginRatio ?? 0.07
+    const startPage = importArgs.startPage ?? 1
+    const endPage = importArgs.endPage ?? null
+
+    const fileName = filePath.split(/[\\/]/).pop() ?? filePath
+    const title = fileName.replace(/\.pdf$/i, '')
+
     const md5Res = await fetch(`http://127.0.0.1:${pythonManager.port}/pdf/md5`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
@@ -291,20 +399,26 @@ function registerIpcHandlers(): void {
     })
     const { md5 } = await md5Res.json() as { md5: string }
 
-    // Check for duplicate
     const existing = getDocumentByMd5(db, md5)
     if (existing) return { duplicate: true, document: existing }
 
-    // Create document record
     const doc = insertDocument(db, { title, file_path: filePath, page_count: 0, md5 })
 
-    // Create a progress task for this import
-    const taskId = taskManager!.createTask('pdf_import', { docId: doc.id, filePath })
+    const taskId = taskManager!.createTask('pdf_import', {
+      docId: doc.id,
+      filePath,
+      topMarginRatio,
+      bottomMarginRatio,
+      startPage,
+      endPage,
+    })
     wsClient.connect(taskId)
 
-    // Register completion callback — store chunks when Python finishes
     wsClient.onComplete(taskId, (_, result) => {
-      const { page_count, chunks } = result as { page_count: number; chunks: Array<{ doc_id: string; page_num: number; content: string; knowledge_tags: string[] }> }
+      const { page_count, chunks } = result as {
+        page_count: number
+        chunks: Array<{ doc_id: string; page_num: number; content: string; knowledge_tags: string[] }>
+      }
       try {
         updateDocumentPageCount(db, doc.id, page_count)
         insertChunks(db, chunks)
@@ -317,11 +431,18 @@ function registerIpcHandlers(): void {
       taskManager!.updateTask(taskId, 'failed', { error })
     })
 
-    // Kick off Python parsing (non-blocking)
     fetch(`http://127.0.0.1:${pythonManager.port}/pdf/parse`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({ file_path: filePath, doc_id: doc.id, task_id: taskId }),
+      body: JSON.stringify({
+        file_path: filePath,
+        doc_id: doc.id,
+        task_id: taskId,
+        top_margin_ratio: topMarginRatio,
+        bottom_margin_ratio: bottomMarginRatio,
+        start_page: startPage,
+        end_page: endPage,
+      }),
     }).catch((e) => console.error('[DocImport] Python parse request failed:', e))
 
     return { document: doc, taskId }
@@ -330,15 +451,15 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.DOC_DELETE, async (id) => deleteDocument(db, id as string))
   registerHandler(IPC.DOC_GET_CHUNKS, async (docId) => getChunks(db, docId as string))
 
-  // Phase 3 — AI config
+  // Phase 3 鈥?AI config
   registerHandler(IPC.AI_GET_CONFIG, async () => {
     const cfg = { ...aiConfig } as Record<string, Record<string, unknown>>
-    const hasOpenAIKey = !!cfg.openai?.encryptedApiKey
-    const hasAnthropicKey = !!cfg.anthropic?.encryptedApiKey
+    const hasOpenAIKey = !!(cfg.openai?.encryptedApiKey || cfg.openai?.apiKey)
+    const hasAnthropicKey = !!(cfg.anthropic?.encryptedApiKey || cfg.anthropic?.apiKey)
     return {
       ...cfg,
-      openai: { ...cfg.openai, apiKey: hasOpenAIKey ? '••••••••' : '', encryptedApiKey: undefined },
-      anthropic: { ...cfg.anthropic, apiKey: hasAnthropicKey ? '••••••••' : '', encryptedApiKey: undefined },
+      openai: { ...cfg.openai, apiKey: hasOpenAIKey ? MASKED_SECRET : '', encryptedApiKey: undefined },
+      anthropic: { ...cfg.anthropic, apiKey: hasAnthropicKey ? MASKED_SECRET : '', encryptedApiKey: undefined },
     }
   })
 
@@ -358,7 +479,7 @@ function registerIpcHandlers(): void {
         baseUrl: openai.baseUrl ?? existing.baseUrl,
         model: openai.model ?? existing.model,
       }
-      if (openai.apiKey && openai.apiKey !== '••••••••') {
+      if (openai.apiKey && openai.apiKey !== MASKED_SECRET) {
         if (safeStorage.isEncryptionAvailable()) {
           updated.encryptedApiKey = safeStorage.encryptString(openai.apiKey)
           delete updated.apiKey
@@ -377,7 +498,7 @@ function registerIpcHandlers(): void {
         ...existing,
         model: anthropic.model ?? existing.model,
       }
-      if (anthropic.apiKey && anthropic.apiKey !== '••••••••') {
+      if (anthropic.apiKey && anthropic.apiKey !== MASKED_SECRET) {
         if (safeStorage.isEncryptionAvailable()) {
           updated.encryptedApiKey = safeStorage.encryptString(anthropic.apiKey)
           delete updated.apiKey
@@ -390,8 +511,8 @@ function registerIpcHandlers(): void {
     saveAiConfig()
   })
 
-  registerHandler(IPC.AI_TEST_CONNECTION, async () => {
-    const cfg = buildProviderConfig()
+  registerHandler(IPC.AI_TEST_CONNECTION, async (args) => {
+    const cfg = buildProviderConfig((args ?? {}) as ProviderConfigOverride)
     const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
@@ -418,7 +539,7 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
-  // Phase 5 — Crawler
+  // Phase 5 鈥?Crawler
   registerHandler(IPC.CRAWLER_LIST_RULES, async () => listCrawlerRules(db))
 
   registerHandler(IPC.CRAWLER_UPSERT_RULE, async (args) =>
@@ -482,7 +603,7 @@ function registerIpcHandlers(): void {
     return { taskId, runId: run.id }
   })
 
-  // Phase 5 — Knowledge Graph (computed in main process from SQLite)
+  // Phase 5 鈥?Knowledge Graph (computed in main process from SQLite)
   registerHandler(IPC.GRAPH_BUILD, async () => {
     const chunks = db.prepare("SELECT knowledge_tags FROM doc_chunks WHERE knowledge_tags != '[]'").all() as { knowledge_tags: string }[]
     const questions = db.prepare("SELECT knowledge_tags FROM questions WHERE knowledge_tags != '[]'").all() as { knowledge_tags: string }[]
@@ -521,7 +642,7 @@ function registerIpcHandlers(): void {
     return { nodes, edges }
   })
 
-  // Phase 5 — Essay
+  // Phase 5 鈥?Essay
   registerHandler(IPC.ESSAY_LIST, async () => listEssays(db))
   registerHandler(IPC.ESSAY_CREATE, async (args) => {
     const { title } = (args ?? {}) as { title?: string }
@@ -562,7 +683,7 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
-  // Phase 5 — AI Chat with RAG (FTS5 doc context)
+  // Phase 5 鈥?AI Chat with RAG (FTS5 doc context)
   registerHandler(IPC.AI_CHAT, async (args) => {
     const { question, useDocContext = true } = args as { question: string; useDocContext?: boolean }
     let docChunks: unknown[] = []
@@ -609,7 +730,7 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
-  // Phase 4 — Study Plans
+  // Phase 4 鈥?Study Plans
   registerHandler(IPC.PLAN_GET_ACTIVE, async () => getActivePlan(db))
   registerHandler(IPC.PLAN_CREATE, async (args) => {
     const { examDate, mode, config } = args as { examDate: string; mode: 'normal' | 'sprint'; config?: Record<string, unknown> }
@@ -631,7 +752,7 @@ function registerIpcHandlers(): void {
   })
   registerHandler(IPC.PLAN_ADAPT, async (planId) => adaptPlan(db, planId as string))
 
-  // Phase 4 — Study Sessions
+  // Phase 4 鈥?Study Sessions
   registerHandler(IPC.SESSION_START, async (args) => {
     const { type, planTaskId } = (args ?? {}) as { type?: 'manual' | 'pomodoro'; planTaskId?: string }
     updateContinuousStudy(true)
@@ -644,14 +765,14 @@ function registerIpcHandlers(): void {
   })
   registerHandler(IPC.SESSION_GET_TODAY, async () => getTodaySessions(db))
 
-  // Phase 6 — Achievements
+  // Phase 6 鈥?Achievements
   registerHandler(IPC.ACHIEVEMENT_LIST, async () => listAchievements(db))
   registerHandler(IPC.ACHIEVEMENT_CHECK, async () => {
     const newly = checkAndUnlockAchievements(db)
     if (newly.length > 0 && Notification.isSupported()) {
       for (const a of newly) {
         new Notification({
-          title: `成就解锁：${a.title}`,
+          title: `鎴愬氨瑙ｉ攣锛?{a.title}`,
           body: a.desc,
         }).show()
       }
@@ -660,14 +781,14 @@ function registerIpcHandlers(): void {
     return newly
   })
 
-  // Phase 6 — Backup & Restore
+  // Phase 6 鈥?Backup & Restore
   registerHandler(IPC.BACKUP_LIST, async () => listBackups(db))
 
   registerHandler(IPC.BACKUP_CREATE, async (args) => {
     const { note } = (args ?? {}) as { note?: string }
     let destDir: string
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: '选择备份保存目录',
+      title: '閫夋嫨澶囦唤淇濆瓨鐩綍',
       properties: ['openDirectory', 'createDirectory'],
     })
     if (result.canceled || !result.filePaths.length) {
@@ -683,7 +804,7 @@ function registerIpcHandlers(): void {
 
   registerHandler(IPC.BACKUP_RESTORE, async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: '选择备份文件',
+      title: '閫夋嫨澶囦唤鏂囦欢',
       filters: [{ name: 'SQLite DB', extensions: ['db'] }],
       properties: ['openFile'],
     })
@@ -699,7 +820,7 @@ function registerIpcHandlers(): void {
     } catch (e) {
       // Reopen with whatever exists
       await initDatabase()
-      throw Object.assign(new Error('恢复失败：' + String(e)), { code: 'RESTORE_FAILED' })
+      throw Object.assign(new Error('??????: ' + String(e)), { code: 'RESTORE_FAILED' })
     }
     await initDatabase()
     return { restored: true }
@@ -774,3 +895,4 @@ app.on('window-all-closed', () => {
   closeDatabase()
   if (process.platform !== 'darwin') app.quit()
 })
+

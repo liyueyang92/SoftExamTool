@@ -161,9 +161,7 @@ async def grade_essay(req: GradeRequest):
 async def test_connection(req: TestConnectionRequest):
     provider = build_provider(req.ai_config)
     try:
-        reply = await provider.chat([
-            {'role': 'user', 'content': '请回复"连接正常"，不要说其他内容。'},
-        ], temperature=0.0)
+        reply = await provider.test_connection()
         return {'ok': True, 'reply': reply.strip()[:100]}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

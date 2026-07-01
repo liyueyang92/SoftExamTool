@@ -33,7 +33,9 @@ export const IPC = {
 
   // Phase 3 — Documents
   DOC_LIST: 'doc:list',
+  DOC_PICK_FILE: 'doc:pickFile',
   DOC_IMPORT: 'doc:import',
+  DOC_PREVIEW: 'doc:preview',
   DOC_DELETE: 'doc:delete',
   DOC_GET_CHUNKS: 'doc:getChunks',
 
