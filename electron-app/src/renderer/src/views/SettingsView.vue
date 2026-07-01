@@ -286,7 +286,7 @@ function formatDt(iso: string) {
         </div>
       </div>
       <div v-else class="info-row">
-        <span class="info-val" style="color:#64748b">暂无备份记录，首次启动 30 秒后会自动备份</span>
+        <span class="info-val" style="color:var(--c-text-3)">暂无备份记录，首次启动 30 秒后会自动备份</span>
       </div>
     </div>
 
@@ -307,66 +307,67 @@ function formatDt(iso: string) {
 
 <style scoped>
 .settings-view { max-width: 680px; display: flex; flex-direction: column; gap: 24px; }
-.page-title { font-size: 22px; font-weight: 700; color: #e2e8f0; }
-.section { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-.section-title { font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; }
+.page-title { font-size: 22px; font-weight: 700; color: var(--c-text); }
+.section { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px; transition: background-color 0.2s, border-color 0.2s; }
+.section-title { font-size: 12px; font-weight: 700; color: var(--c-text-2); text-transform: uppercase; letter-spacing: 0.08em; }
 
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .setting-info { display: flex; flex-direction: column; gap: 3px; }
-.setting-name { font-size: 14px; color: #e2e8f0; font-weight: 500; }
-.setting-desc { font-size: 12px; color: #64748b; }
+.setting-name { font-size: 14px; color: var(--c-text); font-weight: 500; }
+.setting-desc { font-size: 12px; color: var(--c-text-3); }
 
-.toggle-btn { width: 48px; height: 26px; border-radius: 13px; background: #334155; border: none; cursor: pointer; position: relative; transition: background 0.2s; flex-shrink: 0; }
+.toggle-btn { width: 48px; height: 26px; border-radius: 13px; background: var(--c-border-2); border: none; cursor: pointer; position: relative; transition: background 0.2s; flex-shrink: 0; }
 .toggle-btn.on { background: #1d4ed8; }
 .toggle-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; position: absolute; top: 3px; left: 3px; transition: left 0.2s; }
 .toggle-btn.on .toggle-thumb { left: 25px; }
 
 .radio-group { display: flex; gap: 16px; }
-.radio-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #e2e8f0; cursor: pointer; }
+.radio-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--c-text); cursor: pointer; }
 
-.sub-section { background: #0f172a; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.sub-section { background: var(--c-bg); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; transition: background-color 0.2s; }
 .form-row { display: flex; align-items: center; gap: 10px; }
-.form-row label { min-width: 70px; font-size: 13px; color: #94a3b8; flex-shrink: 0; }
-.text-input { flex: 1; background: #1e293b; border: 1px solid #475569; border-radius: 6px; color: #e2e8f0; padding: 7px 10px; font-size: 13px; }
-.text-input:focus { outline: none; border-color: #60a5fa; }
+.form-row label { min-width: 70px; font-size: 13px; color: var(--c-text-2); flex-shrink: 0; }
+.text-input { flex: 1; background: var(--c-input); border: 1px solid var(--c-input-border); border-radius: 6px; color: var(--c-text); padding: 7px 10px; font-size: 13px; transition: background-color 0.2s, border-color 0.2s, color 0.2s; }
+.text-input:focus { outline: none; border-color: var(--c-brand); }
 
-.form-hint { font-size: 11px; color: #64748b; padding-top: 2px; }
+.form-hint { font-size: 11px; color: var(--c-text-3); padding-top: 2px; }
 .action-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .btn-primary { background: #1d4ed8; border: none; border-radius: 8px; color: #fff; padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
 .btn-primary:hover:not(:disabled) { background: #2563eb; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-outline { background: none; border: 1px solid #475569; border-radius: 8px; color: #94a3b8; padding: 8px 18px; font-size: 14px; cursor: pointer; }
-.btn-outline:hover:not(:disabled) { border-color: #94a3b8; color: #e2e8f0; }
+.btn-outline { background: none; border: 1px solid var(--c-border-2); border-radius: 8px; color: var(--c-text-2); padding: 8px 18px; font-size: 14px; cursor: pointer; transition: border-color 0.15s, color 0.15s; }
+.btn-outline:hover:not(:disabled) { border-color: var(--c-text-2); color: var(--c-text); }
 .btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .success-text { color: #4ade80; font-size: 13px; }
 .error-text { color: #f87171; font-size: 13px; }
 
 .info-row { display: flex; align-items: center; gap: 12px; }
-.info-label { font-size: 13px; color: #64748b; min-width: 80px; }
-.info-val { font-size: 13px; color: #e2e8f0; }
-.badge-ok { background: #14532d; color: #4ade80; border-radius: 4px; padding: 2px 8px; font-size: 12px; }
-.badge-warn { background: #451a03; color: #f59e0b; border-radius: 4px; padding: 2px 8px; font-size: 12px; }
+.info-label { font-size: 13px; color: var(--c-text-3); min-width: 80px; }
+.info-val { font-size: 13px; color: var(--c-text); }
+.badge-ok { background: var(--c-ok-bg); color: var(--c-ok-text); border-radius: 4px; padding: 2px 8px; font-size: 12px; }
+.badge-warn { background: var(--c-warn-bg); color: var(--c-warn-text); border-radius: 4px; padding: 2px 8px; font-size: 12px; }
 
 /* Backup */
 .backup-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .backup-note { flex: 1; min-width: 160px; }
 .backup-list { display: flex; flex-direction: column; gap: 6px; }
 .backup-item {
-  background: #0f172a; border: 1px solid #1e293b; border-radius: 8px;
+  background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px;
   padding: 10px 12px; display: grid;
   grid-template-columns: 1fr auto;
   grid-template-rows: auto auto;
   gap: 4px 8px; align-items: center;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 .backup-meta { display: flex; align-items: center; gap: 10px; }
-.backup-date { font-size: 13px; color: #e2e8f0; }
-.backup-size { font-size: 11px; color: #64748b; }
-.backup-note-badge { font-size: 10px; background: #1e3a5f; color: #60a5fa; border-radius: 4px; padding: 1px 6px; }
-.backup-path { font-size: 10px; color: #475569; grid-column: 1; word-break: break-all; }
+.backup-date { font-size: 13px; color: var(--c-text); }
+.backup-size { font-size: 11px; color: var(--c-text-3); }
+.backup-note-badge { font-size: 10px; background: var(--c-tag-bg); color: var(--c-tag-text); border-radius: 4px; padding: 1px 6px; }
+.backup-path { font-size: 10px; color: var(--c-border-2); grid-column: 1; word-break: break-all; }
 .del-btn {
   grid-column: 2; grid-row: 1 / 3; align-self: center;
-  background: none; border: none; color: #475569; cursor: pointer; font-size: 14px; padding: 4px 8px;
+  background: none; border: none; color: var(--c-border-2); cursor: pointer; font-size: 14px; padding: 4px 8px;
 }
 .del-btn:hover { color: #f87171; }
 </style>

@@ -16,14 +16,14 @@ export function verifySQLCipher(): void {
     db.close()
 
     if (row.v === 'ok') {
-      console.log('[SQLCipher] ✓ better-sqlite3-multiple-ciphers 加密读写验证通过')
+      console.log('[SQLCipher] OK - better-sqlite3-multiple-ciphers encrypted r/w verified')
       writeFileSync(SQLCIPHER_RESULT_FILE, JSON.stringify({ ok: true, value: row.v }))
     } else {
-      console.error('[SQLCipher] ✗ 读取值不符预期:', row.v)
+      console.error('[SQLCipher] FAIL - unexpected value:', row.v)
       writeFileSync(SQLCIPHER_RESULT_FILE, JSON.stringify({ ok: false, value: row.v }))
     }
   } catch (e) {
-    console.error('[SQLCipher] ✗ 验证失败:', e)
+    console.error('[SQLCipher] FAIL - verify error:', e)
     writeFileSync(SQLCIPHER_RESULT_FILE, JSON.stringify({ ok: false, error: String(e) }))
   } finally {
     if (existsSync(dbPath)) unlinkSync(dbPath)

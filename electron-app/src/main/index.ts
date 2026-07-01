@@ -39,12 +39,6 @@ import {
 } from './db/backup'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, unlinkSync } from 'fs'
 import { join as pathJoin } from 'path'
-import { execSync } from 'child_process'
-
-// Ensure UTF-8 console output on Windows (prevents garbled Chinese/Unicode in logs)
-if (process.platform === 'win32') {
-  try { execSync('chcp 65001', { stdio: 'pipe' }) } catch { /* non-critical */ }
-}
 
 const pythonManager = new PythonManager()
 const wsClient = new WsProgressClient()

@@ -69,16 +69,17 @@ const navItems = [
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  transition: background-color 0.2s, color 0.2s;
 }
 .sidebar {
   width: 56px;
   display: flex;
   flex-direction: column;
-  background: #1e293b;
-  border-right: 1px solid #334155;
-  transition: width 0.2s;
+  background: var(--c-panel);
+  border-right: 1px solid var(--c-border);
+  transition: width 0.2s, background-color 0.2s, border-color 0.2s;
   overflow: hidden;
 }
 .sidebar:hover {
@@ -89,7 +90,7 @@ const navItems = [
   text-align: center;
   font-weight: 700;
   font-size: 14px;
-  color: #60a5fa;
+  color: var(--c-brand);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -99,12 +100,12 @@ const navItems = [
   gap: 10px;
   padding: 12px 16px;
   text-decoration: none;
-  color: #94a3b8;
+  color: var(--c-text-2);
   font-size: 13px;
   white-space: nowrap;
   transition: background 0.15s, color 0.15s;
 }
-.nav-item:hover { background: #334155; color: #e2e8f0; }
+.nav-item:hover { background: var(--c-hover); color: var(--c-text); }
 .nav-item.active { background: #1d4ed8; color: #fff; }
 .nav-icon { font-size: 18px; flex-shrink: 0; width: 24px; text-align: center; }
 .nav-label { opacity: 0; transition: opacity 0.15s; }
@@ -117,9 +118,10 @@ const navItems = [
   justify-content: space-between;
   padding: 0 16px;
   height: 44px;
-  background: #1e293b;
-  border-bottom: 1px solid #334155;
+  background: var(--c-panel);
+  border-bottom: 1px solid var(--c-border);
   flex-shrink: 0;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 .status-dot-wrap { display: flex; align-items: center; gap: 8px; }
 .status-dot {
@@ -128,19 +130,20 @@ const navItems = [
 .status-dot.ok   { background: #4ade80; }
 .status-dot.warn { background: #f59e0b; animation: blink 1s ease-in-out infinite; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
-.status-text { font-size: 12px; color: #94a3b8; }
+.status-text { font-size: 12px; color: var(--c-text-2); }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
 .db-badge {
   font-size: 11px; padding: 2px 8px; border-radius: 4px;
   font-family: monospace;
 }
-.db-badge.ok   { background: #14532d; color: #4ade80; }
-.db-badge.warn { background: #451a03; color: #f59e0b; }
+.db-badge.ok   { background: var(--c-ok-bg); color: var(--c-ok-text); }
+.db-badge.warn { background: var(--c-warn-bg); color: var(--c-warn-text); }
 .dark-toggle {
-  background: none; border: 1px solid #475569; color: #94a3b8;
+  background: none; border: 1px solid var(--c-border-2); color: var(--c-text-2);
   width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 14px;
   display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.15s, color 0.15s;
 }
-.dark-toggle:hover { border-color: #94a3b8; color: #e2e8f0; }
+.dark-toggle:hover { border-color: var(--c-text-2); color: var(--c-text); }
 .content { flex: 1; overflow: auto; padding: 24px; }
 </style>

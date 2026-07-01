@@ -6,6 +6,12 @@
 # Press Ctrl-C to stop both processes.
 
 $ErrorActionPreference = 'Stop'
+
+# Set UTF-8 code page so Node.js/Electron Chinese log output isn't garbled.
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+chcp 65001 | Out-Null
+
 $Root   = Split-Path -Parent $PSScriptRoot
 $SvcDir = Join-Path $Root 'python-service'
 $PyExe  = Join-Path $SvcDir '.venv\Scripts\python.exe'
