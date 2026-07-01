@@ -39,7 +39,13 @@ export const usePracticeStore = defineStore('practice', () => {
   const isFinished = computed(() => currentIndex.value >= questions.value.length)
 
   async function start(config: PracticeConfig) {
-    const res = await window.electronAPI.startPractice(config)
+    const payload: PracticeConfig = {
+      mode: config.mode,
+      count: config.count,
+      filterTags: config.filterTags ? [...config.filterTags] : undefined,
+      filterTypes: config.filterTypes ? [...config.filterTypes] : undefined,
+    }
+    const res = await window.electronAPI.startPractice(payload)
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const data = res.data as { sessionId: string; questions: Question[] }
     sessionId.value = data.sessionId

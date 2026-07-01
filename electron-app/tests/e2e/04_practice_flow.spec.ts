@@ -1,13 +1,53 @@
 /**
  * Scenario 4: 完整练习流程
- * 批量导入题目 → 选择随机练习 → 完成 5 题 → 验证成绩和错题记录。
+ * 批量导入题目（粘贴 JSON）→ 随机练习 → 完成 → 验证成绩与错题记录。
  */
 import { test, expect } from '@playwright/test'
 import { launchApp, waitForPythonReady, closeApp } from './helpers/app'
+import { fillTextarea } from './helpers/fill-textarea'
 import path from 'path'
 import fs from 'fs'
 
 const QUESTIONS_FIXTURE = path.resolve(__dirname, 'fixtures/questions.json')
+
+/** 通过 textarea 粘贴 JSON 批量导入题目 */
+async function importQuestionsViaTextarea(
+  page: import('playwright-core').Page,
+  jsonPath: string,
+): Promise<boolean> {
+  const json = fs.readFileSync(jsonPath, 'utf-8')
+
+  const importBtn = page.getByText('批量导入').first()
+  if (!(await importBtn.isVisible({ timeout: 8_000 }).catch(() => false))) return false
+  await importBtn.click()
+
+  // 等待含 textarea 的 modal
+  await page.waitForSelector('.modal', { timeout: 8_000 })
+  const textarea = page.locator('.modal textarea').first()
+  await textarea.waitFor({ state: 'visible', timeout: 5_000 })
+
+  // 使用 evaluate 触发 Vue v-model（Electron 中 fill() 有时不会触发 input 事件）
+  await fillTextarea(textarea, json)
+
+  // 等待按钮变为可用（v-model 更新后 importText.trim() 非空）
+  const confirmBtn = page.getByText('确认导入').first()
+  await expect(confirmBtn).toBeEnabled({ timeout: 5_000 })
+  await confirmBtn.click()
+
+  // 等待完成提示（成功或错误）
+  await page
+    .waitForSelector('.success-text, .error-text', { timeout: 20_000 })
+    .catch(() => {})
+  await page.waitForTimeout(500)
+
+  // 关闭 modal
+  const closeBtn = page.locator('.modal .close-btn, .modal button:has-text("关闭")').first()
+  if (await closeBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await closeBtn.click()
+    await page.waitForTimeout(500)
+  }
+  return true
+}
 
 test.describe('完整练习流程', () => {
   test('批量导入 10 道题，全部正确入库', async () => {
@@ -19,50 +59,22 @@ test.describe('完整练习流程', () => {
       await page.locator('.nav-item[href="#/questions"]').click()
       await page.waitForSelector('.qview, .q-table, .toolbar', { timeout: 10_000 })
 
-      // 拦截文件选择，返回 fixture JSON
-      await handle.app.evaluate(
-        ({ dialog }, fixturePath) => {
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fixturePath] })
-        },
-        QUESTIONS_FIXTURE,
-      )
+      const ok = await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE)
+      expect(ok).toBe(true)
 
-      // 点击批量导入
-      const importBtn = page.getByText('批量导入').or(page.getByText('导入题目')).first()
-      await importBtn.click({ timeout: 10_000 })
+      // 等待列表刷新
+      await page.waitForTimeout(1_000)
 
-      // 等待导入确认 / 导入完成提示
-      await page
-        .waitForSelector('.modal, dialog, [role="dialog"]', { timeout: 8_000 })
-        .catch(() => {})
-
-      // 若出现确认对话框，点击确认
-      const confirmBtn = page
-        .getByText('确认导入')
-        .or(page.getByText('确认'))
-        .or(page.getByText('导入'))
-        .last()
-      if (await confirmBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await confirmBtn.click()
-      }
-
-      // 等待导入结果
-      await page.waitForTimeout(3_000)
-
-      // 题目总数应 ≥ 10
-      const totalText = (await page.locator('.stat-row, .stats').textContent().catch(() => '')) ?? ''
-      const numMatch = totalText.match(/(\d+)/)
-      if (numMatch) {
-        const num = parseInt(numMatch[1], 10)
-        expect(num).toBeGreaterThanOrEqual(10)
-      }
+      // 题目数量 ≥ 10
+      const rows = page.locator('.q-table tbody tr, .question-item')
+      const count = await rows.count()
+      expect(count).toBeGreaterThanOrEqual(10)
     } finally {
       await closeApp(handle)
     }
   })
 
   test('开始 5 题随机练习并完成', async () => {
-    // 先写入题目（用 fixture JSON 内容通过 IPC 批量插入）
     const handle = await launchApp()
     try {
       await waitForPythonReady(handle.page)
@@ -71,78 +83,56 @@ test.describe('完整练习流程', () => {
       // 先导入题目
       await page.locator('.nav-item[href="#/questions"]').click()
       await page.waitForSelector('.qview, .toolbar', { timeout: 10_000 })
+      await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE)
 
-      await handle.app.evaluate(
-        ({ dialog }, fixturePath) => {
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fixturePath] })
-        },
-        QUESTIONS_FIXTURE,
-      )
-      const importBtn = page.getByText('批量导入').or(page.getByText('导入题目')).first()
-      if (await importBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
-        await importBtn.click()
-        await page.waitForTimeout(2_000)
-        const confirmBtn = page
-          .getByText('确认导入')
-          .or(page.getByText('确认'))
-          .last()
-        if (await confirmBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-          await confirmBtn.click()
-        }
-        await page.waitForTimeout(2_000)
-      }
-
-      // 导航到练习页
+      // 导航到练习
       await page.locator('.nav-item[href="#/practice"]').click()
-      await page.waitForSelector('.config-panel, .practice-view, .mode-cards', { timeout: 10_000 })
+      await page.waitForSelector('.config-panel, .mode-cards, .practice-view', { timeout: 10_000 })
 
-      // 选择随机练习模式
+      // 选择随机练习
       const randomMode = page.getByText('随机练习').or(page.getByText('顺序练习')).first()
       await randomMode.click({ timeout: 5_000 })
 
-      // 设置题数为 5
+      // 设置题数
       const countInput = page.locator('.count-input, input[type="number"]').first()
-      if (await countInput.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      if (await countInput.isVisible({ timeout: 2_000 }).catch(() => false)) {
         await countInput.fill('5')
       }
 
       // 开始练习
       await page.getByText('开始练习').click({ timeout: 5_000 })
-      await page.waitForSelector('.answering-panel, .question-card, .q-content', {
-        timeout: 15_000,
-      })
+      await page.waitForSelector('.answering-panel, .question-card, .q-content', { timeout: 15_000 })
 
-      // 完成 5 道题（每题选第一个选项后提交）
+      // 完成 5 题
       for (let i = 0; i < 5; i++) {
         await page.waitForSelector('.option, .answering-panel', { timeout: 10_000 })
-
-        // 选择第一个选项
         const firstOption = page.locator('.option').first()
         if (await firstOption.isVisible({ timeout: 5_000 }).catch(() => false)) {
           await firstOption.click()
         }
 
-        // 提交答案
-        const submitBtn = page.getByText('提交答案').or(page.getByText('下一题 →')).first()
+        const submitBtn = page.getByText('提交答案').first()
         if (await submitBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
           await submitBtn.click()
-          await page.waitForTimeout(500)
+          await page.waitForTimeout(300)
         }
 
-        // 如果进入了 review 状态，点击下一题
         const nextBtn = page.getByText('下一题 →').or(page.getByText('查看结果 →')).first()
         if (await nextBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+          const txt = (await nextBtn.textContent()) ?? ''
           await nextBtn.click()
-          await page.waitForTimeout(500)
+          await page.waitForTimeout(300)
+          if (txt.includes('结果')) break
         }
+
+        const done = page.getByText('练习完成！').or(page.getByText('正确率')).first()
+        if (await done.isVisible({ timeout: 500 }).catch(() => false)) break
       }
 
-      // 验证到达结果页
-      const doneIndicators = page
-        .getByText('练习完成！')
-        .or(page.getByText('总题数'))
-        .or(page.getByText('正确率'))
-      await expect(doneIndicators.first()).toBeVisible({ timeout: 15_000 })
+      // 到达结果页
+      await expect(
+        page.getByText('练习完成！').or(page.getByText('正确率')).or(page.getByText('总题数')).first(),
+      ).toBeVisible({ timeout: 15_000 })
     } finally {
       await closeApp(handle)
     }
@@ -155,46 +145,28 @@ test.describe('完整练习流程', () => {
       await waitForPythonReady(handle.page)
       const { page } = handle
 
-      // 导入题目并完成一次练习（简化版）
+      // 导入题目
       await page.locator('.nav-item[href="#/questions"]').click()
       await page.waitForSelector('.qview, .toolbar', { timeout: 10_000 })
+      await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE)
 
-      await handle.app.evaluate(
-        ({ dialog }, fixturePath) => {
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fixturePath] })
-        },
-        QUESTIONS_FIXTURE,
-      )
-      const importBtn = page.getByText('批量导入').or(page.getByText('导入题目')).first()
-      if (await importBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
-        await importBtn.click()
-        await page.waitForTimeout(1_500)
-        const confirmBtn = page.getByText('确认导入').or(page.getByText('确认')).last()
-        if (await confirmBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
-          await confirmBtn.click()
-          await page.waitForTimeout(1_500)
-        }
-      }
-
-      // 关闭应用，不清理 userDataDir
+      // 关闭（保留 userDataDir）
       await closeApp(handle, false)
 
-      // 重新打开同一 userDataDir
+      // 重新打开同一数据目录
       const handle2 = await launchApp({ userDataDir })
       try {
         await waitForPythonReady(handle2.page)
         await handle2.page.locator('.nav-item[href="#/questions"]').click()
-        await handle2.page.waitForSelector('.qview, .q-table, .stat-row', { timeout: 10_000 })
+        await handle2.page.waitForSelector('.qview, .q-table, .toolbar', { timeout: 10_000 })
 
-        // 题目总数应仍然存在
-        const stats = handle2.page.locator('.stat-row, .stats, .q-table tbody tr')
-        const count = await stats.count()
+        const rows = handle2.page.locator('.q-table tbody tr, .question-item')
+        const count = await rows.count()
         expect(count).toBeGreaterThanOrEqual(1)
       } finally {
         await closeApp(handle2)
       }
     } finally {
-      // 若第一个 handle 因异常未关闭，强制关闭
       await handle.app.close().catch(() => {})
     }
   })

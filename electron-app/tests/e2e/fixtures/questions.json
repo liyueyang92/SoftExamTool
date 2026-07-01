@@ -4,16 +4,16 @@
     "content": "关系数据库中，第三范式（3NF）要求消除什么依赖？",
     "options": ["A. 部分函数依赖", "B. 传递函数依赖", "C. 多值依赖", "D. 连接依赖"],
     "answer": "B",
-    "explanation": "3NF 在 2NF 基础上消除非主属性对主键的传递函数依赖。",
+    "explanation": "3NF 在 2NF 基础上要求消除非主属性对码的传递函数依赖。",
     "knowledge_tags": ["数据库设计"],
     "difficulty": 2
   },
   {
     "type": "single",
-    "content": "软件测试中，黑盒测试的依据是？",
+    "content": "软件测试中，黑盒测试的主要依据是？",
     "options": ["A. 程序内部结构", "B. 软件需求规格说明书", "C. 数据库设计文档", "D. 代码注释"],
     "answer": "B",
-    "explanation": "黑盒测试只关注软件的外部行为，依据需求规格说明书设计测试用例。",
+    "explanation": "黑盒测试关注外部行为，测试用例通常依据需求规格说明书设计。",
     "knowledge_tags": ["软件测试"],
     "difficulty": 1
   },
@@ -22,7 +22,7 @@
     "content": "以下哪种设计模式属于结构型模式？",
     "options": ["A. 工厂方法", "B. 观察者", "C. 适配器", "D. 策略"],
     "answer": "C",
-    "explanation": "适配器模式是结构型模式；工厂方法是创建型；观察者、策略是行为型。",
+    "explanation": "适配器模式属于结构型模式；工厂方法属于创建型，观察者和策略属于行为型。",
     "knowledge_tags": ["设计模式"],
     "difficulty": 2
   },
@@ -31,76 +31,61 @@
     "content": "OSI 参考模型中，负责端到端可靠传输的是哪一层？",
     "options": ["A. 网络层", "B. 数据链路层", "C. 传输层", "D. 会话层"],
     "answer": "C",
-    "explanation": "传输层（如 TCP）提供端到端的可靠数据传输服务。",
+    "explanation": "传输层负责端到端的可靠传输，例如 TCP。",
     "knowledge_tags": ["计算机网络"],
     "difficulty": 1
   },
   {
     "type": "single",
-    "content": "在敏捷开发中，每日站会的目的是？",
-    "options": [
-      "A. 详细汇报工作进度",
-      "B. 同步团队状态，暴露阻塞",
-      "C. 进行代码审查",
-      "D. 制定迭代计划"
-    ],
+    "content": "在敏捷开发中，每日站会的主要目的是什么？",
+    "options": ["A. 详细汇报工作进度", "B. 同步团队状态并暴露阻塞", "C. 进行代码审查", "D. 制定迭代计划"],
     "answer": "B",
-    "explanation": "每日站会（Daily Scrum）用于快速同步团队状态并识别阻碍，通常不超过 15 分钟。",
+    "explanation": "每日站会用于快速同步进展、计划和阻塞点，通常控制在 15 分钟内。",
     "knowledge_tags": ["软件工程方法"],
     "difficulty": 1
   },
   {
     "type": "single",
-    "content": "以下哪个算法的时间复杂度为 O(n log n)？",
+    "content": "以下哪个算法的时间复杂度通常为 O(n log n)？",
     "options": ["A. 冒泡排序", "B. 归并排序", "C. 插入排序", "D. 选择排序"],
     "answer": "B",
-    "explanation": "归并排序的时间复杂度为 O(n log n)，其余选项均为 O(n²)。",
+    "explanation": "归并排序的平均和最坏时间复杂度均为 O(n log n)。",
     "knowledge_tags": ["算法与数据结构"],
     "difficulty": 2
   },
   {
     "type": "single",
-    "content": "SOA 架构中，服务之间通信的标准协议是？",
+    "content": "SOA 架构中，传统上常见的服务描述与调用组合是？",
     "options": ["A. CORBA", "B. REST", "C. SOAP/WSDL", "D. gRPC"],
     "answer": "C",
-    "explanation": "SOA 中通常使用 SOAP 协议和 WSDL 描述语言进行服务间通信。",
+    "explanation": "在传统 SOA 实践中，SOAP 用于消息通信，WSDL 用于服务描述。",
     "knowledge_tags": ["软件架构风格"],
     "difficulty": 3
   },
   {
     "type": "single",
-    "content": "以下关于虚拟机（VM）和容器的说法，正确的是？",
-    "options": [
-      "A. 容器包含完整操作系统内核",
-      "B. VM 共享宿主机内核",
-      "C. 容器启动速度通常快于 VM",
-      "D. VM 隔离性弱于容器"
-    ],
+    "content": "关于虚拟机（VM）和容器，以下说法正确的是？",
+    "options": ["A. 容器包含完整操作系统内核", "B. VM 共享宿主机内核", "C. 容器启动速度通常快于 VM", "D. VM 的隔离性弱于容器"],
     "answer": "C",
-    "explanation": "容器共享宿主内核，无需启动独立操作系统，因此启动速度远快于虚拟机。",
+    "explanation": "容器通常共享宿主机内核，不需要启动完整操作系统，因此启动更快。",
     "knowledge_tags": ["云计算与虚拟化"],
     "difficulty": 2
   },
   {
     "type": "single",
-    "content": "项目管理中，关键路径法（CPM）的主要作用是？",
-    "options": [
-      "A. 估算项目成本",
-      "B. 识别影响项目最终工期的活动序列",
-      "C. 分配资源",
-      "D. 评估项目风险"
-    ],
+    "content": "项目管理中，关键路径法（CPM）的主要作用是什么？",
+    "options": ["A. 估算项目成本", "B. 识别影响项目工期的关键活动序列", "C. 分配资源", "D. 评估项目风险"],
     "answer": "B",
-    "explanation": "CPM 通过识别关键路径（最长活动序列），帮助管理者重点关注影响工期的任务。",
+    "explanation": "关键路径法通过识别关键活动序列，帮助管理者重点关注影响工期的任务。",
     "knowledge_tags": ["项目管理"],
     "difficulty": 2
   },
   {
     "type": "single",
-    "content": "数据流图（DFD）中，双横线（"="）表示？",
+    "content": "数据流图（DFD）中，双横线通常表示什么？",
     "options": ["A. 外部实体", "B. 数据流", "C. 数据存储", "D. 处理过程"],
     "answer": "C",
-    "explanation": "DFD 中双横线代表数据存储（文件或数据库）。",
+    "explanation": "DFD 中的双横线表示数据存储。",
     "knowledge_tags": ["需求分析与建模"],
     "difficulty": 2
   }

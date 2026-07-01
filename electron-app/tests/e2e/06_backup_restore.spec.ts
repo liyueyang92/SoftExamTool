@@ -1,19 +1,73 @@
 /**
  * Scenario 6: 数据备份与恢复
- * 验证手动备份生成文件 → 清空验证文件存在 → 恢复流程完整。
+ *
+ * 备份 IPC 流程：
+ *   doBackup() → window.electronAPI.createBackup()
+ *     → main: dialog.showOpenDialog(directory)  ← 需要拦截
+ *     → 取消/选择目录后 createBackup(db, dir, note)
+ *     → 返回 BackupRecord
+ *   成功后 backupMsg = "备份成功：{file_path}" 显示在 .success-text
+ *
+ * 恢复 IPC 流程：
+ *   doRestore() → browser confirm() ← page.on('dialog')
+ *     → window.electronAPI.restoreBackup()
+ *     → main: dialog.showOpenDialog(file) ← 需要拦截
+ *     → 恢复 DB
  */
 import { test, expect } from '@playwright/test'
 import { launchApp, waitForPythonReady, closeApp } from './helpers/app'
-import path from 'path'
-import os from 'os'
 import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import crypto from 'crypto'
 
-const QUESTIONS_FIXTURE = path.resolve(__dirname, 'fixtures/questions.json')
-
 test.describe('数据备份与恢复', () => {
-  test('手动备份生成文件并可通过恢复流程还原', async () => {
-    const backupDir = path.join(os.tmpdir(), `softexam-backup-${crypto.randomBytes(4).toString('hex')}`)
+  test('手动备份：拦截 dialog → 写入默认目录，成功消息包含有效路径', async () => {
+    const handle = await launchApp()
+    try {
+      await waitForPythonReady(handle.page)
+      const { page } = handle
+
+      // 导航到设置页
+      await page.locator('.nav-item[href="#/settings"]').click()
+      await page.waitForSelector('.settings-view', { timeout: 8_000 })
+
+      // 拦截主进程目录选择对话框 → 取消 → IPC 使用默认备份目录
+      await handle.app.evaluate(({ dialog }) => {
+        dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] })
+      })
+
+      // 点击"立即备份"
+      const backupBtn = page.getByText('立即备份').first()
+      await expect(backupBtn).toBeVisible({ timeout: 5_000 })
+      await backupBtn.click()
+
+      // 等待成功消息（.success-text 显示 "备份成功：<path>"）
+      const successEl = page.locator('.success-text')
+      await expect(successEl).toBeVisible({ timeout: 30_000 })
+      const successMsg = (await successEl.textContent()) ?? ''
+      expect(successMsg).toContain('备份成功')
+
+      // 从消息提取文件路径并验证文件存在
+      const match = successMsg.match(/备份成功：(.+)/)
+      if (match) {
+        const backupFilePath = match[1].trim()
+        expect(fs.existsSync(backupFilePath)).toBe(true)
+      }
+
+      // 备份列表应出现一条新记录
+      const backupItems = page.locator('.backup-item')
+      await expect(backupItems.first()).toBeVisible({ timeout: 5_000 })
+    } finally {
+      await closeApp(handle)
+    }
+  })
+
+  test('恢复备份：先创建备份，拦截 dialog 返回备份文件，接受 confirm()', async () => {
+    const backupDir = path.join(
+      os.tmpdir(),
+      `softexam-backup-${crypto.randomBytes(4).toString('hex')}`,
+    )
     fs.mkdirSync(backupDir, { recursive: true })
 
     const handle = await launchApp()
@@ -21,92 +75,51 @@ test.describe('数据备份与恢复', () => {
       await waitForPythonReady(handle.page)
       const { page } = handle
 
-      // 导入一些数据先
-      await page.locator('.nav-item[href="#/questions"]').click()
-      await page.waitForSelector('.qview, .toolbar', { timeout: 10_000 })
-      await handle.app.evaluate(
-        ({ dialog }, fp) => {
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fp] })
-        },
-        QUESTIONS_FIXTURE,
-      )
-      const importBtn = page.getByText('批量导入').or(page.getByText('导入题目')).first()
-      if (await importBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
-        await importBtn.click()
-        await page.waitForTimeout(1_500)
-        const confirmBtn = page.getByText('确认导入').or(page.getByText('确认')).last()
-        if (await confirmBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
-          await confirmBtn.click()
-          await page.waitForTimeout(2_000)
-        }
-      }
-
-      // 导航到设置页
       await page.locator('.nav-item[href="#/settings"]').click()
-      await page.waitForSelector('.settings-view, .settings-container, h2', { timeout: 8_000 })
+      await page.waitForSelector('.settings-view', { timeout: 8_000 })
 
-      // 拦截文件夹选择对话框
-      await handle.app.evaluate(
-        ({ dialog }, dir) => {
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
-          dialog.showSaveDialog = async () => ({ canceled: false, filePath: `${dir}/backup.zip` })
-        },
-        backupDir,
-      )
+      // 步骤1：创建备份 — 拦截 dialog 返回自定义目录
+      await handle.app.evaluate(({ dialog }, dir) => {
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+      }, backupDir)
 
-      // 点击"立即备份"或"手动备份"
-      const backupBtn = page
-        .getByText('立即备份')
-        .or(page.getByText('手动备份'))
-        .or(page.getByText('备份'))
-        .first()
-
-      if (await backupBtn.isVisible({ timeout: 8_000 }).catch(() => false)) {
-        await backupBtn.click()
-        // 等待备份完成（最多 30 秒）
-        await page
-          .waitForSelector('[class*="success"], .toast', { timeout: 30_000 })
-          .catch(() => {})
-        await page.waitForTimeout(2_000)
-      } else {
+      await page.getByText('立即备份').first().click()
+      const successEl = page.locator('.success-text')
+      await expect(successEl).toBeVisible({ timeout: 30_000 })
+      const successMsg = (await successEl.textContent()) ?? ''
+      const match = successMsg.match(/备份成功：(.+)/)
+      if (!match) {
         test.skip()
         return
       }
+      const backupFilePath = match[1].trim()
+      expect(fs.existsSync(backupFilePath)).toBe(true)
 
-      // 验证备份文件存在
-      const files = fs.readdirSync(backupDir)
-      const hasBackup = files.some((f) => f.endsWith('.zip') || f.endsWith('.bak') || f.endsWith('.db'))
-      expect(hasBackup).toBe(true)
+      // 步骤2：恢复 — 拦截 dialog 返回刚备份的文件，接受 browser confirm()
+      await handle.app.evaluate(({ dialog }, fp) => {
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fp] })
+      }, backupFilePath)
 
-      // --- 恢复流程 ---
-      // 拦截文件选择，返回备份文件
-      const backupFile = path.join(backupDir, files[0])
-      await handle.app.evaluate(
-        ({ dialog }, fp) => {
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fp] })
-        },
-        backupFile,
-      )
+      // 接受浏览器 confirm() 对话框
+      page.once('dialog', async (dlg) => {
+        await dlg.accept()
+      })
 
-      const restoreBtn = page
-        .getByText('从备份恢复')
-        .or(page.getByText('恢复备份'))
-        .or(page.getByText('恢复'))
-        .first()
+      const restoreBtn = page.getByText('从文件恢复').first()
+      await expect(restoreBtn).toBeVisible({ timeout: 5_000 })
+      await restoreBtn.click()
 
-      if (await restoreBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
-        await restoreBtn.click()
-        // 确认恢复对话框
-        const confirmRestore = page.getByText('确认').or(page.getByText('恢复')).last()
-        if (await confirmRestore.isVisible({ timeout: 3_000 }).catch(() => false)) {
-          await confirmRestore.click()
-        }
-        await page.waitForTimeout(3_000)
+      // 等待结果（恢复成功/取消/错误）
+      await page
+        .waitForSelector('.success-text, .error-text', { timeout: 30_000 })
+        .catch(() => {})
+
+      // 无错误文本
+      const errEl = page.locator('.error-text')
+      if (await errEl.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        const errText = await errEl.textContent()
+        expect(errText ?? '').toBeFalsy()
       }
-
-      // 验证无错误弹窗
-      const errMsg = page.locator('.error-msg, [class*="error"]:visible')
-      expect(await errMsg.count()).toBe(0)
     } finally {
       await closeApp(handle)
       fs.rmSync(backupDir, { recursive: true, force: true })
