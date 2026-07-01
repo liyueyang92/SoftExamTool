@@ -1,27 +1,19 @@
 import Database from 'better-sqlite3-multiple-ciphers'
-import { readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
-
-const MIGRATIONS_DIR = join(__dirname, 'migrations')
+import { MIGRATIONS } from './schema'
 
 export function runMigrations(db: InstanceType<typeof Database>): void {
   const currentVersion = (db.pragma('user_version', { simple: true }) as number) ?? 0
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
 
   let version = currentVersion
-  for (const file of files) {
-    const fileVersion = parseInt(file.split('_')[0], 10)
-    if (fileVersion <= version) continue
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= version) continue
 
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf-8')
-    console.log(`[DB] Running migration ${file}`)
+    console.log(`[DB] Applying migration v${migration.version}`)
     db.transaction(() => {
-      db.exec(sql)
-      db.pragma(`user_version = ${fileVersion}`)
+      db.exec(migration.sql)
+      db.pragma(`user_version = ${migration.version}`)
     })()
-    version = fileVersion
+    version = migration.version
   }
 
   if (version > currentVersion) {

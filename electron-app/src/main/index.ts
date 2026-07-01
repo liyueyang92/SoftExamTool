@@ -729,6 +729,7 @@ app.whenReady().then(async () => {
     taskManager = new TaskManager(db)
     taskManager.recoverOrphanedTasks()
     console.log('[App] Database ready')
+    registerIpcHandlers()
 
     // Auto-backup: if no backup in last 24h, create one silently
     setTimeout(async () => {
@@ -757,7 +758,6 @@ app.whenReady().then(async () => {
     console.error('[Python] failed to start:', e)
   })
 
-  registerIpcHandlers()
   setupNotificationTimer()
 
   app.on('activate', () => {

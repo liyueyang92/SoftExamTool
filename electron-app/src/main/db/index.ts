@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import crypto from 'crypto'
 import { join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, unlinkSync } from 'fs'
 import { app, safeStorage } from 'electron'
 import { readFileSync, writeFileSync } from 'fs'
 import { runMigrations } from './migrator'
@@ -9,33 +9,63 @@ import { runMigrations } from './migrator'
 const SERVICE = 'soft-exam-tool'
 const ACCOUNT = 'db-encryption-key'
 
-async function getOrCreateKey(dbExists: boolean): Promise<string> {
-  // Try keytar first (Windows Credential Manager)
+// Returns the stored key, or null if not found in this store.
+async function getKeytarKey(): Promise<string | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const keytar = require('keytar') as typeof import('keytar')
-    if (dbExists) {
-      const stored = await keytar.getPassword(SERVICE, ACCOUNT)
-      if (stored) return stored
-    }
-    const key = crypto.randomBytes(32).toString('hex')
+    return await keytar.getPassword(SERVICE, ACCOUNT)
+  } catch {
+    return null
+  }
+}
+
+async function storeKeytarKey(key: string): Promise<boolean> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const keytar = require('keytar') as typeof import('keytar')
     await keytar.setPassword(SERVICE, ACCOUNT, key)
-    console.log('[DB] Key stored in Windows Credential Manager via keytar')
-    return key
-  } catch (e) {
-    console.warn('[DB] keytar unavailable, falling back to safeStorage:', (e as Error).message)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function getOrCreateKey(dbPath: string): Promise<string> {
+  const dbExists = existsSync(dbPath)
+  const keyFile = join(app.getPath('userData'), 'db.key.enc')
+
+  // --- Look up existing key ---
+  if (dbExists) {
+    const fromKeytar = await getKeytarKey()
+    if (fromKeytar) {
+      console.log('[DB] Key loaded from Windows Credential Manager')
+      return fromKeytar
+    }
+    if (existsSync(keyFile)) {
+      try {
+        console.log('[DB] Key loaded from safeStorage fallback')
+        return safeStorage.decryptString(readFileSync(keyFile))
+      } catch (e) {
+        console.warn('[DB] safeStorage key unreadable:', (e as Error).message)
+      }
+    }
+    // Key is gone but DB file exists — it cannot be opened. Remove it so a
+    // fresh encrypted database is created on the next open.
+    console.warn('[DB] Encryption key not found for existing database — resetting database file')
+    unlinkSync(dbPath)
   }
 
-  // Fallback: safeStorage (Chromium-managed OS keychain)
-  const keyFile = join(app.getPath('userData'), 'db.key.enc')
-  if (dbExists && existsSync(keyFile)) {
-    const encrypted = readFileSync(keyFile)
-    return safeStorage.decryptString(encrypted)
-  }
+  // --- Create a new key ---
   const key = crypto.randomBytes(32).toString('hex')
-  const encrypted = safeStorage.encryptString(key)
-  writeFileSync(keyFile, encrypted)
-  console.log('[DB] Key stored via safeStorage fallback')
+  const storedInKeytar = await storeKeytarKey(key)
+  if (storedInKeytar) {
+    console.log('[DB] New key stored in Windows Credential Manager')
+  } else {
+    const encrypted = safeStorage.encryptString(key)
+    writeFileSync(keyFile, encrypted)
+    console.log('[DB] New key stored via safeStorage fallback')
+  }
   return key
 }
 
@@ -46,14 +76,34 @@ export async function initDatabase(): Promise<InstanceType<typeof Database>> {
 
   const userDataPath = app.getPath('userData')
   const dbPath = join(userDataPath, 'app.db')
-  const dbExists = existsSync(dbPath)
 
-  const key = await getOrCreateKey(dbExists)
+  const key = await getOrCreateKey(dbPath)
 
-  const db = new Database(dbPath)
-  db.pragma(`key='${key}'`)
-  db.pragma('journal_mode = WAL')
-  db.pragma('foreign_keys = ON')
+  function configureDb(db: InstanceType<typeof Database>, k: string): void {
+    db.pragma(`key='${k}'`)
+    db.pragma('journal_mode = WAL')
+    db.pragma('foreign_keys = ON')
+  }
+
+  let rawDb = new Database(dbPath)
+  try {
+    configureDb(rawDb, key)
+  } catch (e) {
+    rawDb.close()  // release file handle before any unlink
+    if ((e as NodeJS.ErrnoException & { code?: string }).code === 'SQLITE_NOTADB') {
+      // Stored key does not match the database — wipe both and start fresh.
+      console.warn('[DB] Stored key mismatch — resetting database and key store')
+      unlinkSync(dbPath)
+      const keyFile = join(app.getPath('userData'), 'db.key.enc')
+      if (existsSync(keyFile)) unlinkSync(keyFile)
+      const freshKey = await getOrCreateKey(dbPath)
+      rawDb = new Database(dbPath)
+      configureDb(rawDb, freshKey)
+    } else {
+      throw e
+    }
+  }
+  const db = rawDb
 
   runMigrations(db)
   _db = db

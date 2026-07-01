@@ -21,6 +21,17 @@ if (-not (Test-Path $PyExe)) {
 $env:INTERNAL_PORT  = '8765'
 $env:INTERNAL_TOKEN = 'dev-token-local'
 
+# ── Kill any process already holding the port ────────────────────────────────
+$oldPid = (netstat -ano 2>$null |
+    Select-String "127\.0\.0\.1:$env:INTERNAL_PORT\s.*LISTENING" |
+    ForEach-Object { ($_ -split '\s+')[-1] } |
+    Select-Object -First 1)
+if ($oldPid) {
+    Write-Host "[dev] Port $env:INTERNAL_PORT in use by PID $oldPid - terminating..." -ForegroundColor Yellow
+    Stop-Process -Id ([int]$oldPid) -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
 Write-Host "[dev] Starting Python service on port $env:INTERNAL_PORT ..." -ForegroundColor Cyan
 
 # -Environment is PS 7.3+ only; set vars in parent so the child inherits them.
