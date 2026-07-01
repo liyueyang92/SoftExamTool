@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Question } from './question'
+import { toIpcPayload } from '../utils/ipc'
 
 export interface PracticeConfig {
   mode: 'random' | 'sequential' | 'wrong' | 'favorites'
@@ -39,12 +40,12 @@ export const usePracticeStore = defineStore('practice', () => {
   const isFinished = computed(() => currentIndex.value >= questions.value.length)
 
   async function start(config: PracticeConfig) {
-    const payload: PracticeConfig = {
+    const payload = toIpcPayload<PracticeConfig>({
       mode: config.mode,
       count: config.count,
       filterTags: config.filterTags ? [...config.filterTags] : undefined,
       filterTypes: config.filterTypes ? [...config.filterTypes] : undefined,
-    }
+    })
     const res = await window.electronAPI.startPractice(payload)
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const data = res.data as { sessionId: string; questions: Question[] }
@@ -61,12 +62,12 @@ export const usePracticeStore = defineStore('practice', () => {
   async function submitAnswer(chosen: string) {
     if (!sessionId.value || !currentQuestion.value) return
     const timeMs = Date.now() - startTime.value
-    const res = await window.electronAPI.submitAnswer({
+    const res = await window.electronAPI.submitAnswer(toIpcPayload({
       sessionId: sessionId.value,
       questionId: currentQuestion.value.id,
       chosen,
       timeMs,
-    })
+    }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const result = res.data as AnswerResult
     answers.value[currentQuestion.value.id] = result

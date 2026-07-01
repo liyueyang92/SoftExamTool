@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { Question } from './question'
+import { toIpcPayload } from '../utils/ipc'
 
 export interface AiConfig {
   mode: 'openai' | 'ollama' | 'anthropic'
@@ -25,24 +26,11 @@ export interface GradeResult {
 }
 
 function toPlainAiConfigPatch(patch?: Partial<AiConfig>): Partial<AiConfig> | undefined {
-  if (!patch) return undefined
-
-  const plain: Partial<AiConfig> = {}
-  if (patch.mode !== undefined) plain.mode = patch.mode
-  if (patch.openai) plain.openai = { ...patch.openai }
-  if (patch.ollama) plain.ollama = { ...patch.ollama }
-  if (patch.anthropic) plain.anthropic = { ...patch.anthropic }
-  return plain
+  return patch ? toIpcPayload(patch) : undefined
 }
 
 function toPlainGenerateParams(params: GenerateParams): GenerateParams {
-  return {
-    count: params.count,
-    types: [...params.types],
-    knowledge_tags: [...params.knowledge_tags],
-    difficulty: params.difficulty,
-    context: params.context,
-  }
+  return toIpcPayload(params)
 }
 
 function toPlainGradeArgs(args: {
@@ -54,11 +42,7 @@ function toPlainGradeArgs(args: {
   reference_points?: string
   user_answer: string
 } {
-  return {
-    question: args.question,
-    reference_points: args.reference_points,
-    user_answer: args.user_answer,
-  }
+  return toIpcPayload(args)
 }
 
 export const useAiStore = defineStore('ai', () => {

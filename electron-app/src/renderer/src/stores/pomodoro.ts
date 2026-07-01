@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { toIpcPayload } from '../utils/ipc'
 
 type PomodoroPhase = 'work' | 'short-break' | 'long-break' | 'idle'
 
@@ -50,7 +51,7 @@ export const usePomodoroStore = defineStore('pomodoro', () => {
 
     if (phase.value === 'work') {
       // Start a pomodoro session in the DB
-      window.electronAPI.startSession({ type: 'pomodoro', planTaskId }).then((res) => {
+      window.electronAPI.startSession(toIpcPayload({ type: 'pomodoro', planTaskId })).then((res) => {
         if (res.success && res.data) {
           currentSessionId.value = (res.data as { id: string }).id
         }
@@ -83,7 +84,7 @@ export const usePomodoroStore = defineStore('pomodoro', () => {
     if (timer) { clearInterval(timer); timer = null }
     if (currentSessionId.value && phase.value === 'work') {
       const elapsed = Date.now() - sessionStartMs
-      window.electronAPI.endSession({ id: currentSessionId.value, durationMs: elapsed })
+      window.electronAPI.endSession(toIpcPayload({ id: currentSessionId.value, durationMs: elapsed }))
       currentSessionId.value = null
     }
     running.value = false
@@ -97,7 +98,7 @@ export const usePomodoroStore = defineStore('pomodoro', () => {
     if (phase.value === 'work') {
       // End the session in DB
       if (currentSessionId.value) {
-        window.electronAPI.endSession({ id: currentSessionId.value, durationMs: elapsed })
+        window.electronAPI.endSession(toIpcPayload({ id: currentSessionId.value, durationMs: elapsed }))
         currentSessionId.value = null
       }
       completedCount.value++
@@ -133,7 +134,7 @@ export const usePomodoroStore = defineStore('pomodoro', () => {
     running.value = false
     if (phase.value === 'work' && currentSessionId.value) {
       const elapsed = Date.now() - sessionStartMs
-      window.electronAPI.endSession({ id: currentSessionId.value, durationMs: elapsed })
+      window.electronAPI.endSession(toIpcPayload({ id: currentSessionId.value, durationMs: elapsed }))
       currentSessionId.value = null
       completedCount.value++
       totalCompleted.value++

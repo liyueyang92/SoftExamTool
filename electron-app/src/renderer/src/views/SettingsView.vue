@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useAiStore } from '../stores/ai'
 import { useAppStore } from '../stores/app'
 import type { BackupRecord } from '../../../preload/shared-types'
+import { toIpcPayload } from '../utils/ipc'
 
 const ai = useAiStore()
 const appStore = useAppStore()
@@ -13,11 +14,9 @@ const saveMsg = ref('')
 const saveErr = ref('')
 const saving = ref(false)
 
-// Health reminder settings
 const healthReminderMin = ref(45)
 const healthEnabled = ref(true)
 
-// Backup
 const backups = ref<BackupRecord[]>([])
 const backupNote = ref('')
 const backupBusy = ref(false)
@@ -40,13 +39,14 @@ onMounted(async () => {
 })
 
 async function saveAi() {
-  saveMsg.value = ''; saveErr.value = ''
+  saveMsg.value = ''
+  saveErr.value = ''
   saving.value = true
   try {
     await ai.saveConfig({
       mode: ai.config.mode,
       openai: { ...ai.config.openai, apiKey: apiKeyInput.value },
-      ollama: ai.config.ollama,
+      ollama: { ...ai.config.ollama },
       anthropic: { ...ai.config.anthropic, apiKey: anthropicKeyInput.value },
     })
     saveMsg.value = '配置已保存'
@@ -67,8 +67,8 @@ async function testConn() {
 }
 
 async function saveHealthSettings() {
-  await window.electronAPI.setSetting({ key: 'healthReminderMin', value: healthReminderMin.value })
-  await window.electronAPI.setSetting({ key: 'healthEnabled', value: healthEnabled.value })
+  await window.electronAPI.setSetting(toIpcPayload({ key: 'healthReminderMin', value: healthReminderMin.value }))
+  await window.electronAPI.setSetting(toIpcPayload({ key: 'healthEnabled', value: healthEnabled.value }))
 }
 
 async function loadBackups() {
@@ -77,9 +77,11 @@ async function loadBackups() {
 }
 
 async function doBackup() {
-  backupBusy.value = true; backupMsg.value = ''; backupErr.value = ''
+  backupBusy.value = true
+  backupMsg.value = ''
+  backupErr.value = ''
   try {
-    const res = await window.electronAPI.createBackup({ note: backupNote.value || '手动备份' })
+    const res = await window.electronAPI.createBackup(toIpcPayload({ note: backupNote.value || '手动备份' }))
     if (res.success) {
       backupMsg.value = `备份成功：${(res.data as BackupRecord).file_path}`
       backupNote.value = ''
@@ -96,7 +98,10 @@ async function doBackup() {
 
 async function doRestore() {
   if (!confirm('恢复备份将替换当前所有数据，应用会自动重启。确认继续？')) return
-  backupBusy.value = true; backupMsg.value = ''; backupErr.value = ''
+
+  backupBusy.value = true
+  backupMsg.value = ''
+  backupErr.value = ''
   try {
     const res = await window.electronAPI.restoreBackup()
     if (res.success && (res.data as { restored: boolean }).restored) {
@@ -134,7 +139,6 @@ function formatDt(iso: string) {
   <div class="settings-view">
     <h2 class="page-title">设置</h2>
 
-    <!-- Appearance -->
     <div class="section">
       <h3 class="section-title">外观</h3>
       <div class="setting-row">
@@ -148,7 +152,6 @@ function formatDt(iso: string) {
       </div>
     </div>
 
-    <!-- AI Config -->
     <div class="section">
       <h3 class="section-title">AI 配置</h3>
 
@@ -159,21 +162,20 @@ function formatDt(iso: string) {
         </div>
         <div class="radio-group">
           <label class="radio-label">
-            <input type="radio" v-model="ai.config.mode" value="openai" />
+            <input v-model="ai.config.mode" type="radio" value="openai" />
             OpenAI 兼容
           </label>
           <label class="radio-label">
-            <input type="radio" v-model="ai.config.mode" value="anthropic" />
+            <input v-model="ai.config.mode" type="radio" value="anthropic" />
             Anthropic
           </label>
           <label class="radio-label">
-            <input type="radio" v-model="ai.config.mode" value="ollama" />
+            <input v-model="ai.config.mode" type="radio" value="ollama" />
             本地 Ollama
           </label>
         </div>
       </div>
 
-      <!-- OpenAI-compatible config -->
       <div v-if="ai.config.mode === 'openai'" class="sub-section">
         <div class="form-row">
           <label>Base URL</label>
@@ -189,7 +191,6 @@ function formatDt(iso: string) {
         </div>
       </div>
 
-      <!-- Anthropic config -->
       <div v-if="ai.config.mode === 'anthropic'" class="sub-section">
         <div class="form-row">
           <label>API Key</label>
@@ -202,7 +203,6 @@ function formatDt(iso: string) {
         <div class="form-hint">使用 Anthropic 官方 API（api.anthropic.com）</div>
       </div>
 
-      <!-- Ollama config -->
       <div v-if="ai.config.mode === 'ollama'" class="sub-section">
         <div class="form-row">
           <label>Base URL</label>
@@ -215,7 +215,7 @@ function formatDt(iso: string) {
       </div>
 
       <div class="action-row">
-        <button class="btn-outline" @click="testConn" :disabled="ai.testingConnection">
+        <button class="btn-outline" :disabled="ai.testingConnection" @click="testConn">
           {{ ai.testingConnection ? '测试中…' : '测试连接' }}
         </button>
         <span v-if="ai.connectionResult" :class="ai.connectionResult.ok ? 'success-text' : 'error-text'">
@@ -224,7 +224,7 @@ function formatDt(iso: string) {
       </div>
 
       <div class="action-row">
-        <button class="btn-primary" @click="saveAi" :disabled="saving">
+        <button class="btn-primary" :disabled="saving" @click="saveAi">
           {{ saving ? '保存中…' : '保存 AI 配置' }}
         </button>
         <span v-if="saveMsg" class="success-text">{{ saveMsg }}</span>
@@ -232,7 +232,6 @@ function formatDt(iso: string) {
       </div>
     </div>
 
-    <!-- Health Reminder -->
     <div class="section">
       <h3 class="section-title">健康学习提醒</h3>
       <div class="setting-row">
@@ -251,14 +250,13 @@ function formatDt(iso: string) {
         </div>
         <div class="radio-group">
           <label v-for="min in [30, 45, 60]" :key="min" class="radio-label">
-            <input type="radio" :value="min" v-model="healthReminderMin" @change="saveHealthSettings" />
+            <input v-model="healthReminderMin" :value="min" type="radio" @change="saveHealthSettings" />
             {{ min }} 分钟
           </label>
         </div>
       </div>
     </div>
 
-    <!-- Backup & Restore -->
     <div class="section">
       <h3 class="section-title">数据备份与恢复</h3>
 
@@ -268,10 +266,10 @@ function formatDt(iso: string) {
           class="text-input backup-note"
           placeholder="备份备注（可选）"
         />
-        <button class="btn-primary" @click="doBackup" :disabled="backupBusy">
+        <button class="btn-primary" :disabled="backupBusy" @click="doBackup">
           {{ backupBusy ? '处理中…' : '立即备份' }}
         </button>
-        <button class="btn-outline" @click="doRestore" :disabled="backupBusy">
+        <button class="btn-outline" :disabled="backupBusy" @click="doRestore">
           从文件恢复
         </button>
       </div>
@@ -287,7 +285,7 @@ function formatDt(iso: string) {
             <span v-if="b.note" class="backup-note-badge">{{ b.note }}</span>
           </div>
           <div class="backup-path">{{ b.file_path }}</div>
-          <button class="del-btn" @click="delBackup(b.id)" title="删除此备份记录">✕</button>
+          <button class="del-btn" title="删除此备份记录" @click="delBackup(b.id)">×</button>
         </div>
       </div>
       <div v-else class="info-row">
@@ -295,7 +293,6 @@ function formatDt(iso: string) {
       </div>
     </div>
 
-    <!-- DB info -->
     <div class="section">
       <h3 class="section-title">数据库</h3>
       <div class="info-row">
@@ -353,16 +350,19 @@ function formatDt(iso: string) {
 .badge-ok { background: var(--c-ok-bg); color: var(--c-ok-text); border-radius: 4px; padding: 2px 8px; font-size: 12px; }
 .badge-warn { background: var(--c-warn-bg); color: var(--c-warn-text); border-radius: 4px; padding: 2px 8px; font-size: 12px; }
 
-/* Backup */
 .backup-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .backup-note { flex: 1; min-width: 160px; }
 .backup-list { display: flex; flex-direction: column; gap: 6px; }
 .backup-item {
-  background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px;
-  padding: 10px 12px; display: grid;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
   grid-template-columns: 1fr auto;
   grid-template-rows: auto auto;
-  gap: 4px 8px; align-items: center;
+  gap: 4px 8px;
+  align-items: center;
   transition: background-color 0.2s, border-color 0.2s;
 }
 .backup-meta { display: flex; align-items: center; gap: 10px; }
@@ -371,8 +371,15 @@ function formatDt(iso: string) {
 .backup-note-badge { font-size: 10px; background: var(--c-tag-bg); color: var(--c-tag-text); border-radius: 4px; padding: 1px 6px; }
 .backup-path { font-size: 10px; color: var(--c-border-2); grid-column: 1; word-break: break-all; }
 .del-btn {
-  grid-column: 2; grid-row: 1 / 3; align-self: center;
-  background: none; border: none; color: var(--c-border-2); cursor: pointer; font-size: 14px; padding: 4px 8px;
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  background: none;
+  border: none;
+  color: var(--c-border-2);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
 }
 .del-btn:hover { color: #f87171; }
 </style>

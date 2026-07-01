@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useAiStore, type GenerateParams } from '../stores/ai'
 import { useQuestionStore } from '../stores/question'
+import { toIpcPayload } from '../utils/ipc'
 
 const ai = useAiStore()
 const questionStore = useQuestionStore()
@@ -24,7 +25,7 @@ async function sendChat() {
   chatMessages.value.push({ role: 'user', content: q })
   chatLoading.value = true
   try {
-    const res = await window.electronAPI.aiChat({ question: q, useDocContext: useDocContext.value })
+    const res = await window.electronAPI.aiChat(toIpcPayload({ question: q, useDocContext: useDocContext.value }))
     if (res.success) {
       chatMessages.value.push({ role: 'assistant', content: res.data.answer, sources: res.data.sources as { page_num: number; doc_title: string }[] })
     } else {

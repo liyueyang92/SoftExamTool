@@ -198,19 +198,19 @@ function checkAndNotify(): void {
 
     if (pendingCount > 0) {
       new Notification({
-        title: '??????',
-        body: `?????? ${daysLeft} ?????? ${pendingCount} ???????????????`,
+        title: '软考备考提醒',
+        body: `距考试还有 ${daysLeft} 天，今日还有 ${pendingCount} 个任务待完成，加油！`,
       }).show()
     } else if (daysLeft <= 7) {
       new Notification({
-        title: '????',
-        body: `?????? ${daysLeft} ?????????????????????`,
+        title: '冲刺提醒',
+        body: `距考试仅剩 ${daysLeft} 天！今日任务已完成，请继续复习薄弱知识点。`,
       }).show()
     }
   } catch { /* non-critical */ }
 }
 
-// 鈹€鈹€鈹€ Health reminder 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// Health reminder
 let continuousStudyStartMs: number | null = null
 
 function updateContinuousStudy(active: boolean): void {
@@ -235,8 +235,8 @@ function checkHealthReminder(): void {
     continuousStudyStartMs = Date.now()
 
     new Notification({
-      title: '??????',
-      body: `?????? ${thresholdMin} ?????????????????????`,
+      title: '健康学习提醒',
+      body: `您已连续学习 ${thresholdMin} 分钟，请起身活动一下，保护眼睛和颈椎！`,
     }).show()
   } catch { /* non-critical */ }
 }
@@ -256,13 +256,13 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.PING, async () => pythonManager.ping())
   registerHandler(IPC.GET_PYTHON_STATUS, async () => ({ ready: pythonManager.isReady }))
 
-  // Phase 1 鈥?DB status
+  // Phase 1 - DB status
   registerHandler(IPC.DB_STATUS, async () => {
     const version = db.pragma('user_version', { simple: true }) as number
     return { ready: true, version }
   })
 
-  // Phase 1 鈥?Task CRUD
+  // Phase 1 - Task CRUD
   registerHandler(IPC.TASK_CREATE, async (args) => {
     const { type, payload } = args as { type: string; payload: unknown }
     const id = taskManager!.createTask(type, payload)
@@ -275,14 +275,14 @@ function registerIpcHandlers(): void {
     wsClient.disconnect(id as string)
   })
 
-  // Phase 1 鈥?App settings
+  // Phase 1 - App settings
   registerHandler(IPC.APP_GET_SETTINGS, async () => ({ ...appSettings }))
   registerHandler(IPC.APP_SET_SETTING, async (args) => {
     const { key, value } = args as { key: string; value: unknown }
     appSettings[key] = value
   })
 
-  // Phase 2 鈥?Questions
+  // Phase 2 - Questions
   registerHandler(IPC.QUESTION_QUERY, async (args) => {
     return queryQuestions(db, args as Parameters<typeof queryQuestions>[1])
   })
@@ -303,7 +303,7 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.QUESTION_TOGGLE_FAVORITE, async (id) => ({ is_favorite: toggleFavorite(db, id as string) }))
   registerHandler(IPC.QUESTION_GET_STATS, async () => getQuestionStats(db))
 
-  // Phase 2 鈥?Practice
+  // Phase 2 - Practice
   registerHandler(IPC.PRACTICE_START, async (args) => startPractice(db, args as Parameters<typeof startPractice>[1]))
   registerHandler(IPC.PRACTICE_SUBMIT_ANSWER, async (args) => {
     const { sessionId, questionId, chosen, timeMs } = args as {
@@ -451,7 +451,7 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.DOC_DELETE, async (id) => deleteDocument(db, id as string))
   registerHandler(IPC.DOC_GET_CHUNKS, async (docId) => getChunks(db, docId as string))
 
-  // Phase 3 鈥?AI config
+  // Phase 3 - AI config
   registerHandler(IPC.AI_GET_CONFIG, async () => {
     const cfg = { ...aiConfig } as Record<string, Record<string, unknown>>
     const hasOpenAIKey = !!(cfg.openai?.encryptedApiKey || cfg.openai?.apiKey)
@@ -539,7 +539,7 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
-  // Phase 5 鈥?Crawler
+  // Phase 5 - Crawler
   registerHandler(IPC.CRAWLER_LIST_RULES, async () => listCrawlerRules(db))
 
   registerHandler(IPC.CRAWLER_UPSERT_RULE, async (args) =>
@@ -603,7 +603,7 @@ function registerIpcHandlers(): void {
     return { taskId, runId: run.id }
   })
 
-  // Phase 5 鈥?Knowledge Graph (computed in main process from SQLite)
+  // Phase 5 - Knowledge Graph (computed in main process from SQLite)
   registerHandler(IPC.GRAPH_BUILD, async () => {
     const chunks = db.prepare("SELECT knowledge_tags FROM doc_chunks WHERE knowledge_tags != '[]'").all() as { knowledge_tags: string }[]
     const questions = db.prepare("SELECT knowledge_tags FROM questions WHERE knowledge_tags != '[]'").all() as { knowledge_tags: string }[]
@@ -642,7 +642,7 @@ function registerIpcHandlers(): void {
     return { nodes, edges }
   })
 
-  // Phase 5 鈥?Essay
+  // Phase 5 - Essay
   registerHandler(IPC.ESSAY_LIST, async () => listEssays(db))
   registerHandler(IPC.ESSAY_CREATE, async (args) => {
     const { title } = (args ?? {}) as { title?: string }
@@ -683,7 +683,7 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
-  // Phase 5 鈥?AI Chat with RAG (FTS5 doc context)
+  // Phase 5 - AI Chat with RAG (FTS5 doc context)
   registerHandler(IPC.AI_CHAT, async (args) => {
     const { question, useDocContext = true } = args as { question: string; useDocContext?: boolean }
     let docChunks: unknown[] = []
@@ -730,7 +730,7 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
-  // Phase 4 鈥?Study Plans
+  // Phase 4 - Study Plans
   registerHandler(IPC.PLAN_GET_ACTIVE, async () => getActivePlan(db))
   registerHandler(IPC.PLAN_CREATE, async (args) => {
     const { examDate, mode, config } = args as { examDate: string; mode: 'normal' | 'sprint'; config?: Record<string, unknown> }
@@ -752,7 +752,7 @@ function registerIpcHandlers(): void {
   })
   registerHandler(IPC.PLAN_ADAPT, async (planId) => adaptPlan(db, planId as string))
 
-  // Phase 4 鈥?Study Sessions
+  // Phase 4 - Study Sessions
   registerHandler(IPC.SESSION_START, async (args) => {
     const { type, planTaskId } = (args ?? {}) as { type?: 'manual' | 'pomodoro'; planTaskId?: string }
     updateContinuousStudy(true)
@@ -765,14 +765,14 @@ function registerIpcHandlers(): void {
   })
   registerHandler(IPC.SESSION_GET_TODAY, async () => getTodaySessions(db))
 
-  // Phase 6 鈥?Achievements
+  // Phase 6 - Achievements
   registerHandler(IPC.ACHIEVEMENT_LIST, async () => listAchievements(db))
   registerHandler(IPC.ACHIEVEMENT_CHECK, async () => {
-    const newly = checkAndUnlockAchievements(db)
+        const newly = checkAndUnlockAchievements(db)
     if (newly.length > 0 && Notification.isSupported()) {
       for (const a of newly) {
         new Notification({
-          title: `鎴愬氨瑙ｉ攣锛?{a.title}`,
+          title: `成就解锁：${a.title}`,
           body: a.desc,
         }).show()
       }
@@ -781,14 +781,14 @@ function registerIpcHandlers(): void {
     return newly
   })
 
-  // Phase 6 鈥?Backup & Restore
+  // Phase 6 - Backup & Restore
   registerHandler(IPC.BACKUP_LIST, async () => listBackups(db))
 
   registerHandler(IPC.BACKUP_CREATE, async (args) => {
     const { note } = (args ?? {}) as { note?: string }
     let destDir: string
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: '閫夋嫨澶囦唤淇濆瓨鐩綍',
+      title: '选择备份保存目录',
       properties: ['openDirectory', 'createDirectory'],
     })
     if (result.canceled || !result.filePaths.length) {
@@ -804,7 +804,7 @@ function registerIpcHandlers(): void {
 
   registerHandler(IPC.BACKUP_RESTORE, async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: '閫夋嫨澶囦唤鏂囦欢',
+      title: '选择备份文件',
       filters: [{ name: 'SQLite DB', extensions: ['db'] }],
       properties: ['openFile'],
     })
@@ -820,7 +820,7 @@ function registerIpcHandlers(): void {
     } catch (e) {
       // Reopen with whatever exists
       await initDatabase()
-      throw Object.assign(new Error('??????: ' + String(e)), { code: 'RESTORE_FAILED' })
+      throw Object.assign(new Error('恢复失败：' + String(e)), { code: 'RESTORE_FAILED' })
     }
     await initDatabase()
     return { restored: true }

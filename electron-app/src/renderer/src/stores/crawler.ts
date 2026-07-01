@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { toIpcPayload } from '../utils/ipc'
 
 export interface CrawlerRule {
   id: string
@@ -46,7 +47,7 @@ export const useCrawlerStore = defineStore('crawler', () => {
   }
 
   async function upsert(rule: Partial<CrawlerRule>): Promise<CrawlerRule> {
-    const res = await window.electronAPI.upsertCrawlerRule(rule)
+    const res = await window.electronAPI.upsertCrawlerRule(toIpcPayload(rule))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const updated = res.data as CrawlerRule
     const idx = rules.value.findIndex((r) => r.id === updated.id)
@@ -62,13 +63,13 @@ export const useCrawlerStore = defineStore('crawler', () => {
   }
 
   async function testCrawl(rule: Partial<CrawlerRule>, testUrl: string) {
-    const res = await window.electronAPI.testCrawl({ rule, test_url: testUrl })
+    const res = await window.electronAPI.testCrawl(toIpcPayload({ rule, test_url: testUrl }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     return res.data
   }
 
   async function run(ruleId: string) {
-    const res = await window.electronAPI.runCrawl({ ruleId })
+    const res = await window.electronAPI.runCrawl(toIpcPayload({ ruleId }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     return res.data
   }

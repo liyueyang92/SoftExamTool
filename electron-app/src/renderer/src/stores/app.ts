@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { toIpcPayload } from '../utils/ipc'
 
 export const useAppStore = defineStore('app', () => {
   const pythonReady = ref(false)
@@ -19,7 +20,7 @@ export const useAppStore = defineStore('app', () => {
   async function toggleDarkMode() {
     darkMode.value = !darkMode.value
     try {
-      await window.electronAPI.setSetting({ key: 'darkMode', value: darkMode.value })
+      await window.electronAPI.setSetting(toIpcPayload({ key: 'darkMode', value: darkMode.value }))
     } catch {
       // non-critical
     }

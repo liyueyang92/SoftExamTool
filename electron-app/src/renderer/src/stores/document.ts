@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { PdfImportOptions, PdfImportSelection, PdfPreviewResult } from '../../../preload/shared-types'
+import { toIpcPayload } from '../utils/ipc'
 
 export interface Doc {
   id: string
@@ -46,13 +47,13 @@ export const useDocumentStore = defineStore('document', () => {
     topMarginRatio?: number
     bottomMarginRatio?: number
   }): Promise<PdfPreviewResult> {
-    const res = await window.electronAPI.previewDocumentImport(args)
+    const res = await window.electronAPI.previewDocumentImport(toIpcPayload(args))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     return res.data as PdfPreviewResult
   }
 
   async function importPdf(args?: PdfImportOptions): Promise<{ taskId?: string; duplicate?: boolean } | null> {
-    const res = await window.electronAPI.importDocument(args)
+    const res = await window.electronAPI.importDocument(args ? toIpcPayload(args) : undefined)
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const data = res.data as { document: Doc; taskId?: string; duplicate?: boolean } | null
     if (!data) return null

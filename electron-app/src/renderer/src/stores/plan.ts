@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { toIpcPayload } from '../utils/ipc'
 
 export interface StudyPlan {
   id: string
@@ -106,11 +107,11 @@ export const usePlanStore = defineStore('plan', () => {
   async function loadTodayTasks(): Promise<void> {
     if (!activePlan.value) return
     const today = new Date().toISOString().slice(0, 10)
-    const res = await window.electronAPI.getPlanTasks({
+    const res = await window.electronAPI.getPlanTasks(toIpcPayload({
       planId: activePlan.value.id,
       dateFrom: today,
       dateTo: today,
-    })
+    }))
     if (res.success) todayTasks.value = res.data
   }
 
@@ -122,7 +123,7 @@ export const usePlanStore = defineStore('plan', () => {
 
   async function loadCalendar(year: number, month: number): Promise<void> {
     if (!activePlan.value) return
-    const res = await window.electronAPI.getPlanCalendar({ planId: activePlan.value.id, year, month })
+    const res = await window.electronAPI.getPlanCalendar(toIpcPayload({ planId: activePlan.value.id, year, month }))
     if (res.success) calendarData.value = res.data
   }
 
@@ -130,7 +131,7 @@ export const usePlanStore = defineStore('plan', () => {
     loading.value = true
     error.value = null
     try {
-      const res = await window.electronAPI.createPlan({ examDate, mode })
+      const res = await window.electronAPI.createPlan(toIpcPayload({ examDate, mode }))
       if (res.success) {
         activePlan.value = res.data
         await Promise.all([loadTodayTasks(), loadStats()])
@@ -152,19 +153,19 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   async function completeTask(taskId: string): Promise<void> {
-    await window.electronAPI.updatePlanTask({
+    await window.electronAPI.updatePlanTask(toIpcPayload({
       taskId,
       changes: { status: 'completed' },
-    })
+    }))
     // Refresh
     await Promise.all([loadTodayTasks(), loadStats()])
   }
 
   async function startTaskProgress(taskId: string): Promise<void> {
-    await window.electronAPI.updatePlanTask({
+    await window.electronAPI.updatePlanTask(toIpcPayload({
       taskId,
       changes: { status: 'in_progress' },
-    })
+    }))
     await loadTodayTasks()
   }
 
@@ -183,12 +184,12 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   async function beginSession(planTaskId?: string): Promise<void> {
-    const res = await window.electronAPI.startSession({ type: 'manual', planTaskId })
+    const res = await window.electronAPI.startSession(toIpcPayload({ type: 'manual', planTaskId }))
     if (res.success) await loadSessions()
   }
 
   async function finishSession(id: string, durationMs: number): Promise<void> {
-    await window.electronAPI.endSession({ id, durationMs })
+    await window.electronAPI.endSession(toIpcPayload({ id, durationMs }))
     await Promise.all([loadSessions(), loadStats()])
   }
 

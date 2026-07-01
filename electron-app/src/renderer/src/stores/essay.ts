@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { toIpcPayload } from '../utils/ipc'
 
 export interface Essay {
   id: string
@@ -48,10 +49,7 @@ export const SECTION_CONFIG = [
 ] as const
 
 function toPlainEssayMaterialPatch(mat: Partial<EssayMaterial>): Partial<EssayMaterial> {
-  return {
-    ...mat,
-    knowledge_tags: Array.isArray(mat.knowledge_tags) ? [...mat.knowledge_tags] : mat.knowledge_tags,
-  }
+  return toIpcPayload(mat)
 }
 
 export const useEssayStore = defineStore('essay', () => {
@@ -86,7 +84,7 @@ export const useEssayStore = defineStore('essay', () => {
   }
 
   async function create(title?: string) {
-    const res = await window.electronAPI.createEssay({ title })
+    const res = await window.electronAPI.createEssay(toIpcPayload({ title }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const essay = res.data as Essay
     essays.value.unshift(essay)
@@ -95,11 +93,11 @@ export const useEssayStore = defineStore('essay', () => {
 
   async function updateSection(sectionKey: string, content: string) {
     if (!activeEssay.value) return
-    const res = await window.electronAPI.updateEssaySection({
+    const res = await window.electronAPI.updateEssaySection(toIpcPayload({
       essayId: activeEssay.value.id,
       sectionKey,
       content,
-    })
+    }))
     if (!res.success) return
     const updated = res.data as EssaySection
     const idx = sections.value.findIndex((s) => s.section_key === sectionKey)
@@ -111,7 +109,7 @@ export const useEssayStore = defineStore('essay', () => {
 
   async function updateMeta(patch: { title?: string; question?: string }) {
     if (!activeEssay.value) return
-    await window.electronAPI.updateEssayMeta({ id: activeEssay.value.id, ...patch })
+    await window.electronAPI.updateEssayMeta(toIpcPayload({ id: activeEssay.value.id, ...patch }))
     Object.assign(activeEssay.value, patch)
     const idx = essays.value.findIndex((e) => e.id === activeEssay.value!.id)
     if (idx >= 0) Object.assign(essays.value[idx], patch)
@@ -134,7 +132,7 @@ export const useEssayStore = defineStore('essay', () => {
 
   async function restoreVersion(versionId: string) {
     if (!activeEssay.value) return
-    await window.electronAPI.restoreEssayVersion({ essayId: activeEssay.value.id, versionId })
+    await window.electronAPI.restoreEssayVersion(toIpcPayload({ essayId: activeEssay.value.id, versionId }))
     await openEssay(activeEssay.value.id)
   }
 
@@ -170,12 +168,12 @@ export const useEssayStore = defineStore('essay', () => {
     if (!sec) return
     suggesting.value = { ...suggesting.value, [sectionKey]: true }
     try {
-      const res = await window.electronAPI.essayAiSuggest({
+      const res = await window.electronAPI.essayAiSuggest(toIpcPayload({
         section_key: sectionKey,
         section_label: sectionLabel,
         current_content: sec.content,
         word_target: wordTarget,
-      })
+      }))
       if (res.success) suggestions.value = { ...suggestions.value, [sectionKey]: res.data.suggestions }
     } finally {
       suggesting.value = { ...suggesting.value, [sectionKey]: false }

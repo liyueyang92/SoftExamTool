@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
+import { toIpcPayload } from '../utils/ipc'
 
 export interface Question {
   id: string
@@ -25,21 +26,6 @@ export interface QuestionFilter {
   pageSize?: number
 }
 
-function toPlainQuestion(input: unknown): unknown {
-  if (!input || typeof input !== 'object') return input
-
-  const q = input as Partial<Question> & Record<string, unknown>
-  return {
-    ...q,
-    options: Array.isArray(q.options) ? [...q.options] : q.options,
-    knowledge_tags: Array.isArray(q.knowledge_tags) ? [...q.knowledge_tags] : q.knowledge_tags,
-  }
-}
-
-function toPlainQuestionList(qs: unknown[]): unknown[] {
-  return qs.map((q) => toPlainQuestion(q))
-}
-
 export const useQuestionStore = defineStore('question', () => {
   const questions = ref<Question[]>([])
   const total = ref(0)
@@ -50,7 +36,7 @@ export const useQuestionStore = defineStore('question', () => {
   async function fetchPage() {
     loading.value = true
     try {
-      const res = await window.electronAPI.queryQuestions({ ...filter })
+      const res = await window.electronAPI.queryQuestions(toIpcPayload({ ...filter }))
       if (res.success) {
         questions.value = res.data.items as Question[]
         total.value = res.data.total
@@ -61,13 +47,13 @@ export const useQuestionStore = defineStore('question', () => {
   }
 
   async function search(q: string): Promise<Question[]> {
-    const res = await window.electronAPI.searchQuestions({ q })
+    const res = await window.electronAPI.searchQuestions(toIpcPayload({ q }))
     if (res.success) return res.data as Question[]
     return []
   }
 
   async function insert(q: Omit<Question, 'id' | 'created_at' | 'is_favorite'>): Promise<Question | null> {
-    const res = await window.electronAPI.insertQuestion(q)
+    const res = await window.electronAPI.insertQuestion(toIpcPayload(q))
     if (res.success) {
       await fetchPage()
       return res.data as Question
@@ -76,7 +62,7 @@ export const useQuestionStore = defineStore('question', () => {
   }
 
   async function batchImport(qs: unknown[]): Promise<number> {
-    const res = await window.electronAPI.batchInsertQuestions({ questions: toPlainQuestionList(qs) })
+    const res = await window.electronAPI.batchInsertQuestions(toIpcPayload({ questions: qs }))
     if (res.success) {
       await fetchPage()
       await loadStats()
@@ -86,7 +72,7 @@ export const useQuestionStore = defineStore('question', () => {
   }
 
   async function update(id: string, changes: Partial<Question>) {
-    await window.electronAPI.updateQuestion({ id, changes })
+    await window.electronAPI.updateQuestion(toIpcPayload({ id, changes }))
     const idx = questions.value.findIndex((q) => q.id === id)
     if (idx >= 0) questions.value[idx] = { ...questions.value[idx], ...changes }
   }
