@@ -35,6 +35,32 @@ function toPlainAiConfigPatch(patch?: Partial<AiConfig>): Partial<AiConfig> | un
   return plain
 }
 
+function toPlainGenerateParams(params: GenerateParams): GenerateParams {
+  return {
+    count: params.count,
+    types: [...params.types],
+    knowledge_tags: [...params.knowledge_tags],
+    difficulty: params.difficulty,
+    context: params.context,
+  }
+}
+
+function toPlainGradeArgs(args: {
+  question: string
+  reference_points?: string
+  user_answer: string
+}): {
+  question: string
+  reference_points?: string
+  user_answer: string
+} {
+  return {
+    question: args.question,
+    reference_points: args.reference_points,
+    user_answer: args.user_answer,
+  }
+}
+
 export const useAiStore = defineStore('ai', () => {
   const config = ref<AiConfig>({
     mode: 'openai',
@@ -82,7 +108,7 @@ export const useAiStore = defineStore('ai', () => {
     generating.value = true
     generatedQuestions.value = []
     try {
-      const res = await window.electronAPI.generateQuestions(params)
+      const res = await window.electronAPI.generateQuestions(toPlainGenerateParams(params))
       if (res.success) {
         generatedQuestions.value = (res.data as { questions: Question[] }).questions
         return generatedQuestions.value
@@ -97,7 +123,7 @@ export const useAiStore = defineStore('ai', () => {
     grading.value = true
     gradeResult.value = null
     try {
-      const res = await window.electronAPI.gradeEssay(args)
+      const res = await window.electronAPI.gradeEssay(toPlainGradeArgs(args))
       if (res.success) {
         gradeResult.value = res.data as GradeResult
         return gradeResult.value

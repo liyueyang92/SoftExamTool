@@ -47,6 +47,13 @@ export const SECTION_CONFIG = [
   { key: 'summary',    label: '总结',     target: 300,  hint: '项目收获、改进方向、个人体会（300字）' },
 ] as const
 
+function toPlainEssayMaterialPatch(mat: Partial<EssayMaterial>): Partial<EssayMaterial> {
+  return {
+    ...mat,
+    knowledge_tags: Array.isArray(mat.knowledge_tags) ? [...mat.knowledge_tags] : mat.knowledge_tags,
+  }
+}
+
 export const useEssayStore = defineStore('essay', () => {
   const essays = ref<Essay[]>([])
   const activeEssay = ref<Essay | null>(null)
@@ -143,7 +150,7 @@ export const useEssayStore = defineStore('essay', () => {
   }
 
   async function upsertMaterial(mat: Partial<EssayMaterial>): Promise<EssayMaterial> {
-    const res = await window.electronAPI.upsertEssayMaterial(mat)
+    const res = await window.electronAPI.upsertEssayMaterial(toPlainEssayMaterialPatch(mat))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const updated = res.data as EssayMaterial
     const idx = materials.value.findIndex((m) => m.id === updated.id)

@@ -25,6 +25,21 @@ export interface QuestionFilter {
   pageSize?: number
 }
 
+function toPlainQuestion(input: unknown): unknown {
+  if (!input || typeof input !== 'object') return input
+
+  const q = input as Partial<Question> & Record<string, unknown>
+  return {
+    ...q,
+    options: Array.isArray(q.options) ? [...q.options] : q.options,
+    knowledge_tags: Array.isArray(q.knowledge_tags) ? [...q.knowledge_tags] : q.knowledge_tags,
+  }
+}
+
+function toPlainQuestionList(qs: unknown[]): unknown[] {
+  return qs.map((q) => toPlainQuestion(q))
+}
+
 export const useQuestionStore = defineStore('question', () => {
   const questions = ref<Question[]>([])
   const total = ref(0)
@@ -61,7 +76,7 @@ export const useQuestionStore = defineStore('question', () => {
   }
 
   async function batchImport(qs: unknown[]): Promise<number> {
-    const res = await window.electronAPI.batchInsertQuestions({ questions: qs })
+    const res = await window.electronAPI.batchInsertQuestions({ questions: toPlainQuestionList(qs) })
     if (res.success) {
       await fetchPage()
       await loadStats()
