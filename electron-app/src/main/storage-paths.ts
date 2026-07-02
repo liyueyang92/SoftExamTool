@@ -1,6 +1,6 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
-import { join, resolve } from 'path'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import { basename, dirname, join, resolve } from 'path'
 
 export interface StoragePathConfig {
   dataRootDir?: string
@@ -29,6 +29,48 @@ function normalizeDirectory(input?: string): string | undefined {
 
 function getBootstrapConfigPath(): string {
   return join(app.getPath('userData'), 'storage-paths.json')
+}
+
+function hasDataArtifacts(rootDir: string): boolean {
+  const entries = [
+    'storage-paths.json',
+    'app.db',
+    'ai-config.json',
+    'app-settings.json',
+    'db.key.enc',
+    'documents',
+    'backups',
+  ]
+  return entries.some((name) => existsSync(join(rootDir, name)))
+}
+
+export function migrateLegacyUserDataIfNeeded(): void {
+  const currentUserDataDir = resolve(app.getPath('userData'))
+  if (hasDataArtifacts(currentUserDataDir)) return
+
+  const currentBaseName = basename(currentUserDataDir).toLowerCase()
+  if (currentBaseName === 'electron-app') return
+
+  const legacyUserDataDir = join(dirname(currentUserDataDir), 'electron-app')
+  if (!existsSync(legacyUserDataDir) || !hasDataArtifacts(legacyUserDataDir)) return
+
+  mkdirSync(currentUserDataDir, { recursive: true })
+
+  const legacyBootstrap = join(legacyUserDataDir, 'storage-paths.json')
+  const currentBootstrap = join(currentUserDataDir, 'storage-paths.json')
+  if (existsSync(legacyBootstrap)) {
+    copyFileSync(legacyBootstrap, currentBootstrap)
+    return
+  }
+
+  for (const name of ['app.db', 'ai-config.json', 'app-settings.json', 'db.key.enc']) {
+    const source = join(legacyUserDataDir, name)
+    if (existsSync(source)) copyFileSync(source, join(currentUserDataDir, name))
+  }
+  for (const name of ['documents', 'backups']) {
+    const source = join(legacyUserDataDir, name)
+    if (existsSync(source)) cpSync(source, join(currentUserDataDir, name), { recursive: true, force: false, errorOnExist: false })
+  }
 }
 
 export function loadStoragePathConfig(): StoragePathConfig {

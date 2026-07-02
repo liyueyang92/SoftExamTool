@@ -29,30 +29,26 @@ async function storeKeytarKey(key: string): Promise<boolean> {
   }
 }
 
-async function getOrCreateKey(dbPath: string): Promise<string> {
-  const dbExists = existsSync(dbPath)
+async function readStoredKey(): Promise<string | null> {
   const keyFile = getStoragePaths().databaseKeyPath
-
-  if (dbExists) {
-    const fromKeytar = await getKeytarKey()
-    if (fromKeytar) {
-      console.log('[DB] Key loaded from Windows Credential Manager')
-      return fromKeytar
-    }
-
-    if (existsSync(keyFile)) {
-      try {
-        console.log('[DB] Key loaded from safeStorage fallback')
-        return safeStorage.decryptString(readFileSync(keyFile))
-      } catch (e) {
-        console.warn('[DB] safeStorage key unreadable:', (e as Error).message)
-      }
-    }
-
-    console.warn('[DB] Encryption key not found for existing database; resetting database file')
-    unlinkSync(dbPath)
+  const fromKeytar = await getKeytarKey()
+  if (fromKeytar) {
+    return fromKeytar
   }
 
+  if (existsSync(keyFile)) {
+    try {
+      return safeStorage.decryptString(readFileSync(keyFile))
+    } catch (e) {
+      console.warn('[DB] safeStorage key unreadable:', (e as Error).message)
+    }
+  }
+
+  return null
+}
+
+async function createAndStoreKey(): Promise<string> {
+  const keyFile = getStoragePaths().databaseKeyPath
   const key = crypto.randomBytes(32).toString('hex')
   const storedInKeytar = await storeKeytarKey(key)
   if (storedInKeytar) {
@@ -63,6 +59,29 @@ async function getOrCreateKey(dbPath: string): Promise<string> {
     console.log('[DB] New key stored via safeStorage fallback')
   }
   return key
+}
+
+export async function getOrCreateDatabaseKey(): Promise<string> {
+  ensureStorageDirectories()
+  const existing = await readStoredKey()
+  if (existing) return existing
+  return createAndStoreKey()
+}
+
+async function getOrCreateKey(dbPath: string): Promise<string> {
+  const dbExists = existsSync(dbPath)
+  const existing = await readStoredKey()
+
+  if (dbExists) {
+    if (existing) {
+      console.log('[DB] Key loaded from secure storage')
+      return existing
+    }
+    console.warn('[DB] Encryption key not found for existing database; resetting database file')
+    unlinkSync(dbPath)
+  }
+
+  return existing ?? createAndStoreKey()
 }
 
 let dbInstance: InstanceType<typeof Database> | null = null

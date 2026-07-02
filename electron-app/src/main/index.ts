@@ -2,11 +2,12 @@ import { app, shell, BrowserWindow, dialog, safeStorage, Notification } from 'el
 import { spawn } from 'child_process'
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import Database from 'better-sqlite3-multiple-ciphers'
 import icon from '../../resources/icon.png?asset'
 import { PythonManager } from './python-manager'
 import { IPC } from './ipc-channels'
 import { verifySQLCipher } from './db/verify'
-import { initDatabase, getDatabase, closeDatabase } from './db/index'
+import { initDatabase, getDatabase, closeDatabase, getOrCreateDatabaseKey } from './db/index'
 import { TaskManager } from './task-manager'
 import { WsProgressClient } from './ws-client'
 import { registerHandler } from './ipc-handler'
@@ -54,6 +55,7 @@ import {
   readdirSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'fs'
@@ -62,6 +64,7 @@ import {
   getStoragePathConfig,
   getStoragePaths,
   loadStoragePathConfig,
+  migrateLegacyUserDataIfNeeded,
   resolveStoragePaths,
   saveStoragePathConfig,
   type StoragePathConfig,
@@ -1050,11 +1053,19 @@ function registerIpcHandlers(): void {
 
     const backupPath = result.filePaths[0]
     const dbPath = getStoragePaths().databasePath
+    const walPath = `${dbPath}-wal`
+    const shmPath = `${dbPath}-shm`
 
     // Close DB, copy backup over current DB, reopen
     closeDatabase()
     try {
+      const dbKey = await getOrCreateDatabaseKey()
+      if (existsSync(walPath)) rmSync(walPath, { force: true })
+      if (existsSync(shmPath)) rmSync(shmPath, { force: true })
       copyFileSync(backupPath, dbPath)
+      const restoredDb = new Database(dbPath)
+      restoredDb.pragma(`rekey='${dbKey}'`)
+      restoredDb.close()
     } catch (e) {
       // Reopen with whatever exists
       await initDatabase()
@@ -1081,6 +1092,7 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  migrateLegacyUserDataIfNeeded()
   loadStoragePathConfig()
   ensureStorageDirectories()
   verifySQLCipher()
