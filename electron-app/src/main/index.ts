@@ -26,7 +26,10 @@ import {
 } from './db/documents'
 import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
-  createCrawlerRun, updateCrawlerRun, listCrawlerRuns, addCrawledCount
+  createCrawlerRun, updateCrawlerRun, listCrawlerRuns, addCrawledCount,
+  saveCrawlerReviewItems, listCrawlerReviewItems, updateCrawlerReviewStatus,
+  getCrawlerReviewItemsByIds,
+  type NormalizedCrawlerPayload,
 } from './db/crawler'
 import {
   listEssays, createEssay, getEssay, updateEssaySection, updateEssayMeta,
@@ -804,8 +807,12 @@ function registerIpcHandlers(): void {
       body: JSON.stringify({ rule, test_url }),
     })
     if (!res.ok) {
-      const err = await res.json() as { detail?: string }
-      throw Object.assign(new Error(err.detail ?? 'Test failed'), { code: 'CRAWLER_TEST_FAILED' })
+      const err = await res.json() as { detail?: string | { code?: string; message?: string } }
+      const detail = typeof err.detail === 'object' ? err.detail : null
+      throw Object.assign(
+        new Error(detail?.message ?? String(err.detail ?? 'Test failed')),
+        { code: detail?.code ?? 'CRAWLER_TEST_FAILED' }
+      )
     }
     return res.json()
   })
@@ -821,30 +828,28 @@ function registerIpcHandlers(): void {
     if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
     const resolvedGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
 
-    const run = createCrawlerRun(db, ruleId)
+    const run = createCrawlerRun(db, ruleId, resolvedGroupId)
     const taskId = taskManager!.createTask('crawl', { ruleId, runId: run.id, target_group_id: resolvedGroupId })
     wsClient.connect(taskId)
 
     wsClient.onComplete(taskId, (_, result) => {
       const { questions, total_found } = result as {
-        questions: unknown[]
+        questions: NormalizedCrawlerPayload[]
         total_found: number
         rule_id: string
         target_group_id?: string | null
       }
       try {
-        const saved = batchInsertQuestions(
-          db,
-          questions.map((q) => ({
-            ...(q as object),
-            source_type: 'crawled',
-            group_id: resolvedGroupId ?? target_group_id ?? null,
-          })) as Parameters<typeof batchInsertQuestions>[1]
-        )
+        const saved = saveCrawlerReviewItems(db, {
+          ruleId,
+          runId: run.id,
+          items: questions,
+          targetGroupId: resolvedGroupId ?? target_group_id ?? null,
+        })
         updateCrawlerRun(db, run.id, {
           status: 'completed',
           total_found,
-          total_saved: saved,
+          total_saved: 0,
           ended_at: new Date().toISOString(),
         })
         addCrawledCount(db, ruleId, saved)
@@ -854,7 +859,16 @@ function registerIpcHandlers(): void {
       }
     })
     wsClient.onError(taskId, (_, error) => {
-      updateCrawlerRun(db, run.id, { status: 'failed', ended_at: new Date().toISOString(), error_msg: String(error) })
+      const parsed = typeof error === 'object' && error
+        ? error as { code?: string; stage?: string; message?: string }
+        : null
+      updateCrawlerRun(db, run.id, {
+        status: 'failed',
+        ended_at: new Date().toISOString(),
+        error_code: parsed?.code,
+        error_stage: parsed?.stage,
+        error_msg: parsed?.message ?? String(error),
+      })
       taskManager!.updateTask(taskId, 'failed', { error })
     })
 
@@ -865,6 +879,41 @@ function registerIpcHandlers(): void {
     }).catch((e) => console.error('[Crawler] Run request failed:', e))
 
     return { taskId, runId: run.id }
+  })
+
+  registerHandler(IPC.CRAWLER_LIST_REVIEW_ITEMS, async (args) =>
+    listCrawlerReviewItems(db, args as Parameters<typeof listCrawlerReviewItems>[1]))
+
+  registerHandler(IPC.CRAWLER_REJECT_REVIEW_ITEMS, async (args) => {
+    const { ids, notes = '' } = args as { ids: string[]; notes?: string }
+    updateCrawlerReviewStatus(db, ids, 'rejected', notes)
+  })
+
+  registerHandler(IPC.CRAWLER_IMPORT_REVIEW_ITEMS, async (args) => {
+    const { ids, target_group_id = null, new_group = null } = args as {
+      ids: string[]
+      target_group_id?: string | null
+      new_group?: QuestionGroupInput | null
+    }
+    const items = getCrawlerReviewItemsByIds(db, ids)
+      .filter((item) => item.review_status === 'pending' || item.review_status === 'approved')
+    const fallbackGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
+    const questions = items.map((item) => ({
+      ...item.normalized_payload,
+      source_type: 'crawled',
+      group_id: fallbackGroupId ?? item.target_group_id ?? null,
+    })) as Parameters<typeof batchInsertQuestions>[1]
+    const saved = batchInsertQuestions(db, questions)
+    updateCrawlerReviewStatus(db, items.map((item) => item.id), 'imported')
+
+    const byRun = new Map<string, number>()
+    for (const item of items) byRun.set(item.run_id, (byRun.get(item.run_id) ?? 0) + 1)
+    for (const [runId, count] of byRun) {
+      const run = db.prepare('SELECT total_saved FROM crawler_runs WHERE id=?').get(runId) as { total_saved: number } | undefined
+      updateCrawlerRun(db, runId, { total_saved: (run?.total_saved ?? 0) + count })
+    }
+
+    return { count: saved }
   })
 
   // Phase 5 - Knowledge Graph (computed in main process from SQLite)

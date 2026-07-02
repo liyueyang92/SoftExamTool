@@ -100,6 +100,9 @@ declare global {
       testCrawl: (args: unknown) => Promise<IpcResponse<{ count: number; samples: unknown[] }>>
       runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
       listCrawlerRuns: (ruleId: string) => Promise<IpcResponse<unknown[]>>
+      listCrawlerReviewItems: (args?: { status?: string; ruleId?: string; runId?: string; limit?: number }) => Promise<IpcResponse<unknown[]>>
+      rejectCrawlerReviewItems: (args: { ids: string[]; notes?: string }) => Promise<IpcResponse<void>>
+      importCrawlerReviewItems: (args: { ids: string[]; target_group_id?: string | null; new_group?: unknown | null }) => Promise<IpcResponse<{ count: number }>>
 
       buildGraph: () => Promise<IpcResponse<{ nodes: unknown[]; edges: unknown[] }>>
 

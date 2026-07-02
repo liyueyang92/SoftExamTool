@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useCrawlerStore, type CrawlerRule } from '../stores/crawler'
+import { computed, onMounted, ref } from 'vue'
+import { useCrawlerStore, type CrawlerRule, type NewCrawlerTargetGroup } from '../stores/crawler'
 import { useQuestionStore } from '../stores/question'
 
 const store = useCrawlerStore()
@@ -8,28 +8,39 @@ const questionStore = useQuestionStore()
 
 const showEdit = ref(false)
 const editTarget = ref<Partial<CrawlerRule>>({})
+const ruleJsonText = ref('{}')
 const saving = ref(false)
+const selectedRuleId = ref<string | null>(null)
+
 const activeRun = ref<{ taskId: string; runId: string; ruleId: string } | null>(null)
 const runProgress = ref(0)
 const runMessage = ref('')
 const runError = ref('')
-const testResult = ref<{ count: number; samples: unknown[] } | null>(null)
+
 const testing = ref(false)
 const testUrl = ref('')
+const testResult = ref<{ count: number; samples: unknown[] } | null>(null)
 const testError = ref('')
-const selectedRuleId = ref<string | null>(null)
-const crawlGroupMode = ref<'none' | 'existing' | 'new'>('none')
-const crawlTargetGroupId = ref('')
-const crawlNewGroupName = ref('')
-const crawlNewGroupType = ref<'crawled' | 'past_exam' | 'custom'>('crawled')
-const crawlNewGroupYear = ref<number | null>(null)
-const crawlNewGroupPeriod = ref<'H1' | 'H2'>('H1')
+
+const groupMode = ref<'none' | 'existing' | 'new'>('none')
+const targetGroupId = ref('')
+const newGroupName = ref('')
+const newGroupType = ref<'crawled' | 'past_exam' | 'custom'>('crawled')
+const newGroupYear = ref<number | null>(null)
+const newGroupPeriod = ref<'H1' | 'H2'>('H1')
+
+const selectedReviewIds = ref<string[]>([])
+const reviewMessage = ref('')
 
 const selectedRule = computed(() => store.rules.find((r) => r.id === selectedRuleId.value) ?? null)
+const pendingCount = computed(() => store.reviewItems.length)
 
 onMounted(async () => {
-  await Promise.all([store.fetchRules(), questionStore.fetchGroups()])
-  // Watch task progress
+  await Promise.all([
+    store.fetchRules(),
+    store.fetchReviewItems({ status: 'pending', limit: 100 }),
+    questionStore.fetchGroups(),
+  ])
   window.electronAPI.onTaskProgress((msg) => {
     if (activeRun.value && msg.taskId === activeRun.value.taskId) {
       runProgress.value = msg.progress
@@ -38,36 +49,95 @@ onMounted(async () => {
   })
 })
 
-function openNew() {
-  editTarget.value = {
+function defaultRule(): Partial<CrawlerRule> {
+  return {
     site_name: '',
+    adapter: 'http_rule',
+    auth_required: 0,
+    auth_mode: 'none',
+    login_url: '',
+    validate_url: '',
     url_template: 'https://example.com/questions?page={page}',
     item_selector: '.question-item',
     question_field: '.question-content',
     options_field: '.option',
     answer_field: '.answer',
     expl_field: '.explanation',
+    rule_json: '{}',
+    version: 1,
     max_pages: 5,
     delay_ms: 1500,
     is_enabled: 1,
   }
+}
+
+function openNew() {
+  editTarget.value = defaultRule()
+  ruleJsonText.value = buildRuleJson(editTarget.value)
+  testUrl.value = String(editTarget.value.url_template ?? '').replace('{page}', '1')
   testResult.value = null
-  testUrl.value = editTarget.value.url_template?.replace('{page}', '1') ?? ''
+  testError.value = ''
   showEdit.value = true
 }
 
 function openEdit(rule: CrawlerRule) {
   editTarget.value = { ...rule }
-  testResult.value = null
+  ruleJsonText.value = rule.rule_json && rule.rule_json !== '{}'
+    ? JSON.stringify(JSON.parse(rule.rule_json), null, 2)
+    : buildRuleJson(rule)
   testUrl.value = rule.url_template.replace('{page}', '1')
+  testResult.value = null
+  testError.value = ''
   showEdit.value = true
 }
 
+function buildRuleJson(rule: Partial<CrawlerRule>) {
+  if (rule.adapter === 'api_json') {
+    return JSON.stringify({
+      api: {
+        url: rule.url_template,
+        method: 'GET',
+        items_path: 'items',
+        fields: { title: 'title', content: 'content', answer: 'answer', explanation: 'explanation', source_url: 'url' },
+      },
+    }, null, 2)
+  }
+  if (rule.adapter === 'feed_import') {
+    return JSON.stringify({ feed: { url: rule.url_template } }, null, 2)
+  }
+  return JSON.stringify({
+    list: {
+      url_template: rule.url_template,
+      item_selector: rule.item_selector,
+      fields: {
+        content: rule.question_field,
+        options: rule.options_field,
+        answer: rule.answer_field,
+        explanation: rule.expl_field,
+      },
+    },
+    pagination: { type: 'page_param', max_pages: rule.max_pages },
+    request: { delay_ms: rule.delay_ms },
+  }, null, 2)
+}
+
+function syncRuleJsonTemplate() {
+  ruleJsonText.value = buildRuleJson(editTarget.value)
+}
+
 async function save() {
-  if (!editTarget.value.site_name?.trim() || !editTarget.value.url_template?.trim()) return
+  if (!editTarget.value.site_name?.trim()) return
   saving.value = true
   try {
-    await store.upsert(editTarget.value)
+    JSON.parse(ruleJsonText.value || '{}')
+    const authRequired = editTarget.value.auth_required ? 1 : 0
+    const saved = await store.upsert({
+      ...editTarget.value,
+      auth_required: authRequired,
+      auth_mode: authRequired ? 'manual_session' : 'none',
+      rule_json: ruleJsonText.value || '{}',
+    })
+    selectedRuleId.value = saved.id
     showEdit.value = false
   } finally {
     saving.value = false
@@ -75,12 +145,14 @@ async function save() {
 }
 
 async function doTest() {
-  testError.value = ''
-  testResult.value = null
   testing.value = true
+  testResult.value = null
+  testError.value = ''
   try {
-    const res = await store.testCrawl(editTarget.value, testUrl.value)
-    testResult.value = res as { count: number; samples: unknown[] }
+    testResult.value = await store.testCrawl({ ...editTarget.value, rule_json: ruleJsonText.value }, testUrl.value) as {
+      count: number
+      samples: unknown[]
+    }
   } catch (e) {
     testError.value = String(e)
   } finally {
@@ -88,29 +160,30 @@ async function doTest() {
   }
 }
 
+function currentGroupPayload(): { target_group_id?: string | null; new_group?: NewCrawlerTargetGroup | null } {
+  if (groupMode.value === 'existing') return { target_group_id: targetGroupId.value || null, new_group: null }
+  if (groupMode.value === 'new' && newGroupName.value.trim()) {
+    return {
+      target_group_id: null,
+      new_group: {
+        name: newGroupName.value.trim(),
+        group_type: newGroupType.value,
+        exam_year: newGroupType.value === 'past_exam' ? newGroupYear.value : null,
+        exam_period: newGroupType.value === 'past_exam' ? newGroupPeriod.value : null,
+      },
+    }
+  }
+  return { target_group_id: null, new_group: null }
+}
+
 async function runCrawl(ruleId: string) {
   runProgress.value = 0
-  runMessage.value = '准备开始…'
+  runMessage.value = '准备启动'
   runError.value = ''
   activeRun.value = null
-  try {
-    const result = await store.run({
-      ruleId,
-      target_group_id: crawlGroupMode.value === 'existing' ? (crawlTargetGroupId.value || null) : null,
-      new_group: crawlGroupMode.value === 'new' && crawlNewGroupName.value.trim()
-        ? {
-            name: crawlNewGroupName.value.trim(),
-            group_type: crawlNewGroupType.value,
-            exam_year: crawlNewGroupType.value === 'past_exam' ? crawlNewGroupYear.value : null,
-            exam_period: crawlNewGroupType.value === 'past_exam' ? crawlNewGroupPeriod.value : null,
-          }
-        : null,
-    })
-    activeRun.value = { ...result, ruleId }
-    await store.fetchRuns(ruleId)
-  } catch (e) {
-    runError.value = String(e)
-  }
+  const result = await store.run({ ruleId, ...currentGroupPayload() })
+  activeRun.value = { ...result, ruleId }
+  await store.fetchRuns(ruleId)
 }
 
 async function selectRule(ruleId: string) {
@@ -118,309 +191,274 @@ async function selectRule(ruleId: string) {
   await store.fetchRuns(ruleId)
 }
 
-function statusColor(status: string) {
+function toggleReview(id: string, checked: boolean) {
+  if (checked && !selectedReviewIds.value.includes(id)) selectedReviewIds.value.push(id)
+  if (!checked) selectedReviewIds.value = selectedReviewIds.value.filter((x) => x !== id)
+}
+
+async function importSelected() {
+  if (!selectedReviewIds.value.length) return
+  const res = await store.importReviewItems({ ids: selectedReviewIds.value, ...currentGroupPayload() })
+  reviewMessage.value = `已入库 ${res.count} 条`
+  selectedReviewIds.value = []
+  await questionStore.fetchGroups()
+  if (selectedRuleId.value) await store.fetchRuns(selectedRuleId.value)
+}
+
+async function rejectSelected() {
+  if (!selectedReviewIds.value.length) return
+  await store.rejectReviewItems(selectedReviewIds.value, 'Rejected by user')
+  reviewMessage.value = `已丢弃 ${selectedReviewIds.value.length} 条`
+  selectedReviewIds.value = []
+}
+
+function statusClass(status: string) {
   if (status === 'completed') return 'ok'
   if (status === 'failed') return 'err'
   return 'warn'
 }
 
-function formatDate(iso: string) {
+function formatDate(iso?: string | null) {
+  if (!iso) return '-'
   return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 </script>
 
 <template>
   <div class="crawler-view">
-    <!-- Header -->
     <div class="view-header">
-      <h2 class="view-title">爬虫引擎</h2>
-      <button class="btn-primary" @click="openNew">+ 新建规则</button>
+      <div>
+        <h2>爬虫工作台</h2>
+        <p>规则测试、运行任务、待确认入库</p>
+      </div>
+      <button class="btn-primary" @click="openNew">新建规则</button>
     </div>
 
-    <div class="main-layout">
-      <!-- Rule list -->
-      <div class="rule-list">
-        <div v-if="store.loading" class="empty-tip">加载中…</div>
-        <div v-else-if="store.rules.length === 0" class="empty-tip">
-          <div style="font-size:32px;margin-bottom:8px">🕷</div>
-          <div>还没有爬虫规则</div>
-          <div style="font-size:12px;margin-top:4px;color:var(--c-text-3)">点击上方「新建规则」</div>
-        </div>
-        <div
+    <div class="workspace">
+      <aside class="rule-list">
+        <button
           v-for="rule in store.rules"
           :key="rule.id"
           class="rule-item"
           :class="{ active: selectedRuleId === rule.id }"
           @click="selectRule(rule.id)"
         >
-          <div class="rule-info">
-            <div class="rule-name">{{ rule.site_name }}</div>
-            <div class="rule-meta">
-              已抓取 {{ rule.total_crawled }} 题 &nbsp;·&nbsp; {{ rule.max_pages }} 页
-            </div>
-          </div>
-          <div class="rule-actions">
-            <button class="icon-btn" @click.stop="openEdit(rule)" title="编辑">✎</button>
-            <button class="icon-btn btn-run" @click.stop="runCrawl(rule.id)" title="运行">▷</button>
-            <button class="icon-btn danger" @click.stop="store.remove(rule.id)" title="删除">✕</button>
-          </div>
-        </div>
-      </div>
+          <span class="rule-title">{{ rule.site_name }}</span>
+          <span class="rule-meta">{{ rule.adapter }} · 已抓取 {{ rule.total_crawled }}</span>
+        </button>
+        <div v-if="!store.loading && !store.rules.length" class="empty">暂无规则</div>
+      </aside>
 
-      <!-- Right panel: runs + progress -->
-      <div class="right-panel">
-        <div v-if="!selectedRule" class="empty-tip" style="height:100%;display:flex;align-items:center;justify-content:center;">
-          <div style="text-align:center;color:var(--c-border-2)">
-            <div style="font-size:32px;margin-bottom:8px">←</div>
-            <div>选择左侧规则查看运行记录</div>
-          </div>
-        </div>
+      <main class="panel">
+        <div v-if="!selectedRule" class="empty fill">选择一个规则查看运行记录</div>
         <template v-else>
-          <div class="panel-header">
-            <h3>{{ selectedRule.site_name }}</h3>
-            <div style="display:flex;gap:8px">
-              <button class="btn-sm" @click="openEdit(selectedRule)">编辑</button>
-              <button class="btn-sm btn-primary" @click="runCrawl(selectedRule.id)">▷ 运行</button>
+          <div class="panel-head">
+            <div>
+              <h3>{{ selectedRule.site_name }}</h3>
+              <p>{{ selectedRule.url_template }}</p>
+            </div>
+            <div class="actions">
+              <button class="btn" @click="openEdit(selectedRule)">编辑</button>
+              <button class="btn-primary" @click="runCrawl(selectedRule.id)">运行</button>
             </div>
           </div>
 
-          <!-- Live progress -->
-          <div v-if="activeRun && activeRun.ruleId === selectedRule.id" class="progress-card">
+          <div v-if="activeRun?.ruleId === selectedRule.id" class="progress-box">
             <div class="progress-label">
               <span>{{ runMessage }}</span>
-              <span>{{ runProgress }}%</span>
+              <strong>{{ runProgress }}%</strong>
             </div>
-            <div class="progress-bg">
-              <div class="progress-bar" :style="{ width: runProgress + '%' }"></div>
-            </div>
-            <p v-if="runError" class="error-text">{{ runError }}</p>
+            <div class="progress-track"><div class="progress-bar" :style="{ width: `${runProgress}%` }"></div></div>
+            <p v-if="runError" class="error">{{ runError }}</p>
           </div>
 
-          <!-- URL template info -->
-          <div class="url-info">
-            <span class="label-sm">URL模板：</span>
-            <code class="code-text">{{ selectedRule.url_template }}</code>
-          </div>
-
-          <div class="test-panel">
-            <div class="form-group">
-              <label class="label-sm">写入分组</label>
-              <div style="display:flex;gap:12px;flex-wrap:wrap">
-                <label class="label-sm"><input type="radio" value="none" v-model="crawlGroupMode" /> 不指定</label>
-                <label class="label-sm"><input type="radio" value="existing" v-model="crawlGroupMode" /> 现有分组</label>
-                <label class="label-sm"><input type="radio" value="new" v-model="crawlGroupMode" /> 新建分组</label>
-              </div>
+          <section class="target-box">
+            <label>入库分组</label>
+            <div class="segmented">
+              <button :class="{ active: groupMode === 'none' }" @click="groupMode = 'none'">不指定</button>
+              <button :class="{ active: groupMode === 'existing' }" @click="groupMode = 'existing'">现有分组</button>
+              <button :class="{ active: groupMode === 'new' }" @click="groupMode = 'new'">新建分组</button>
             </div>
-            <div v-if="crawlGroupMode === 'existing'" class="form-group">
-              <select v-model="crawlTargetGroupId" class="input-sm">
-                <option value="">请选择分组</option>
-                <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            <select v-if="groupMode === 'existing'" v-model="targetGroupId" class="input">
+              <option value="">选择分组</option>
+              <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+            <div v-if="groupMode === 'new'" class="group-grid">
+              <input v-model="newGroupName" class="input" placeholder="分组名称" />
+              <select v-model="newGroupType" class="input">
+                <option value="crawled">爬虫导入</option>
+                <option value="past_exam">历年真题</option>
+                <option value="custom">自定义</option>
+              </select>
+              <input v-if="newGroupType === 'past_exam'" v-model.number="newGroupYear" class="input" type="number" placeholder="年份" />
+              <select v-if="newGroupType === 'past_exam'" v-model="newGroupPeriod" class="input">
+                <option value="H1">上半年</option>
+                <option value="H2">下半年</option>
               </select>
             </div>
-            <template v-if="crawlGroupMode === 'new'">
-              <div class="form-group">
-                <input v-model="crawlNewGroupName" class="input-sm" placeholder="新分组名称" />
-              </div>
-              <div class="form-row-2">
-                <div class="form-group">
-                  <label>分组类型</label>
-                  <select v-model="crawlNewGroupType" class="input-sm">
-                    <option value="crawled">爬虫导入</option>
-                    <option value="past_exam">历年真题</option>
-                    <option value="custom">自定义</option>
-                  </select>
-                </div>
-                <div v-if="crawlNewGroupType === 'past_exam'" class="form-group">
-                  <label>上/下半年</label>
-                  <select v-model="crawlNewGroupPeriod" class="input-sm">
-                    <option value="H1">上半年</option>
-                    <option value="H2">下半年</option>
-                  </select>
-                </div>
-              </div>
-              <div v-if="crawlNewGroupType === 'past_exam'" class="form-group">
-                <label>年份</label>
-                <input v-model.number="crawlNewGroupYear" type="number" min="2000" max="2100" class="input-sm" placeholder="如 2025" />
-              </div>
-            </template>
-          </div>
+          </section>
 
-          <!-- Run history -->
-          <div class="runs-header">运行历史</div>
-          <div v-if="store.runs.length === 0" class="empty-tip" style="min-height:60px;">暂无运行记录</div>
-          <div v-else class="runs-list">
-            <div v-for="run in store.runs" :key="run.id" class="run-item">
-              <span class="run-status" :class="statusColor(run.status)">{{ run.status }}</span>
-              <div class="run-stats">
-                找到 {{ run.total_found }} / 保存 {{ run.total_saved }}
+          <section>
+            <div class="section-title">运行历史</div>
+            <div v-if="!store.runs.length" class="empty">暂无运行记录</div>
+            <div v-else class="runs">
+              <div v-for="run in store.runs" :key="run.id" class="run-row">
+                <span class="badge" :class="statusClass(run.status)">{{ run.status }}</span>
+                <span>抓取 {{ run.total_found }}</span>
+                <span>待确认/入库 {{ run.total_saved }}</span>
+                <span>{{ formatDate(run.started_at) }}</span>
+                <small v-if="run.error_msg">{{ run.error_msg }}</small>
               </div>
-              <div class="run-time">{{ formatDate(run.started_at) }}</div>
-              <div v-if="run.error_msg" class="run-error">{{ run.error_msg.slice(0, 60) }}</div>
             </div>
-          </div>
+          </section>
         </template>
-      </div>
+      </main>
     </div>
 
-    <!-- Edit / Create modal -->
+    <section class="review-panel">
+      <div class="panel-head compact">
+        <div>
+          <h3>待确认结果</h3>
+          <p>{{ pendingCount }} 条待处理，确认后才写入题库</p>
+        </div>
+        <div class="actions">
+          <button class="btn" @click="store.fetchReviewItems({ status: 'pending', limit: 100 })">刷新</button>
+          <button class="btn" :disabled="!selectedReviewIds.length" @click="rejectSelected">丢弃</button>
+          <button class="btn-primary" :disabled="!selectedReviewIds.length" @click="importSelected">确认入库</button>
+        </div>
+      </div>
+      <p v-if="reviewMessage" class="success">{{ reviewMessage }}</p>
+      <div v-if="!store.reviewItems.length" class="empty">暂无待确认结果</div>
+      <div v-else class="review-list">
+        <label v-for="item in store.reviewItems" :key="item.id" class="review-item">
+          <input
+            type="checkbox"
+            :checked="selectedReviewIds.includes(item.id)"
+            @change="toggleReview(item.id, ($event.target as HTMLInputElement).checked)"
+          />
+          <div>
+            <strong>{{ item.normalized_payload.title || item.normalized_payload.content.slice(0, 42) }}</strong>
+            <p>{{ item.normalized_payload.content }}</p>
+            <small>{{ item.normalized_payload.type }} · {{ item.normalized_payload.source_url || 'no url' }}</small>
+          </div>
+        </label>
+      </div>
+    </section>
+
     <div v-if="showEdit" class="modal-backdrop" @click.self="showEdit = false">
       <div class="modal">
-        <div class="modal-header">
+        <header class="modal-head">
           <h3>{{ editTarget.id ? '编辑规则' : '新建规则' }}</h3>
-          <button class="close-btn" @click="showEdit = false">✕</button>
-        </div>
+          <button class="icon-button" @click="showEdit = false">×</button>
+        </header>
         <div class="modal-body">
           <div class="form-grid">
-            <div class="form-col">
-              <div class="form-group">
-                <label>站点名称</label>
-                <input v-model="editTarget.site_name" class="input-sm" placeholder="例：牛客题库" />
-              </div>
-              <div class="form-group">
-                <label>URL 模板 <span class="hint">({page} 替换页码)</span></label>
-                <input v-model="editTarget.url_template" class="input-sm" placeholder="https://…?page={page}" />
-              </div>
-              <div class="form-row-2">
-                <div class="form-group">
-                  <label>最大页数</label>
-                  <input v-model.number="editTarget.max_pages" type="number" min="1" max="50" class="input-sm" />
-                </div>
-                <div class="form-group">
-                  <label>延迟(ms)</label>
-                  <input v-model.number="editTarget.delay_ms" type="number" min="500" class="input-sm" />
-                </div>
-              </div>
-            </div>
-            <div class="form-col">
-              <div class="form-group">
-                <label>题目容器选择器 <span class="hint">(CSS)</span></label>
-                <input v-model="editTarget.item_selector" class="input-sm" placeholder=".question-item" />
-              </div>
-              <div class="form-group">
-                <label>题目文本选择器</label>
-                <input v-model="editTarget.question_field" class="input-sm" placeholder=".question-content" />
-              </div>
-              <div class="form-group">
-                <label>选项选择器 <span class="hint">(可选)</span></label>
-                <input v-model="editTarget.options_field" class="input-sm" placeholder=".option" />
-              </div>
-              <div class="form-group">
-                <label>答案选择器 <span class="hint">(可选)</span></label>
-                <input v-model="editTarget.answer_field" class="input-sm" placeholder=".answer" />
-              </div>
-              <div class="form-group">
-                <label>解析选择器 <span class="hint">(可选)</span></label>
-                <input v-model="editTarget.expl_field" class="input-sm" placeholder=".explanation" />
-              </div>
-            </div>
+            <label>站点名称<input v-model="editTarget.site_name" class="input" /></label>
+            <label>适配器
+              <select v-model="editTarget.adapter" class="input" @change="syncRuleJsonTemplate">
+                <option value="http_rule">静态页面</option>
+                <option value="browser_rule">动态页面</option>
+                <option value="api_json">JSON API</option>
+                <option value="feed_import">RSS/Atom</option>
+                <option value="manual_clip">手动剪藏</option>
+              </select>
+            </label>
+            <label class="wide">URL 模板<input v-model="editTarget.url_template" class="input" @blur="syncRuleJsonTemplate" /></label>
+            <label>最大页数<input v-model.number="editTarget.max_pages" class="input" type="number" min="1" /></label>
+            <label>延迟 ms<input v-model.number="editTarget.delay_ms" class="input" type="number" min="0" /></label>
+            <label>条目选择器<input v-model="editTarget.item_selector" class="input" /></label>
+            <label>题干选择器<input v-model="editTarget.question_field" class="input" /></label>
+            <label>选项选择器<input v-model="editTarget.options_field" class="input" /></label>
+            <label>答案选择器<input v-model="editTarget.answer_field" class="input" /></label>
+            <label>解析选择器<input v-model="editTarget.expl_field" class="input" /></label>
+            <label class="checkline"><input v-model="editTarget.auth_required" type="checkbox" :true-value="1" :false-value="0" /> 需要登录态</label>
+            <label>登录 URL<input v-model="editTarget.login_url" class="input" /></label>
+            <label>校验 URL<input v-model="editTarget.validate_url" class="input" /></label>
+            <label class="wide">规则 JSON<textarea v-model="ruleJsonText" class="input code-area"></textarea></label>
           </div>
 
-          <!-- Test panel -->
-          <div class="test-panel">
-            <div class="test-header">
-              <span class="label-sm">测试抓取</span>
-              <input v-model="testUrl" class="input-sm test-url" placeholder="测试 URL" />
-              <button class="btn-sm" @click="doTest" :disabled="testing">{{ testing ? '测试中…' : '测试' }}</button>
-            </div>
-            <p v-if="testError" class="error-text">{{ testError }}</p>
-            <div v-if="testResult" class="test-result">
-              <span class="success-text">找到 {{ testResult.count }} 题</span>
-              <div v-if="(testResult.samples as unknown[]).length" class="samples">
-                <div v-for="(s, i) in (testResult.samples as Array<{content:string;type:string}>)" :key="i" class="sample-item">
-                  <span class="sample-type">{{ s.type }}</span>
-                  {{ s.content?.slice(0, 80) }}…
-                </div>
-              </div>
-            </div>
+          <div class="test-box">
+            <input v-model="testUrl" class="input" placeholder="测试 URL" />
+            <button class="btn" :disabled="testing" @click="doTest">{{ testing ? '测试中' : '测试抓取' }}</button>
+          </div>
+          <p v-if="testError" class="error">{{ testError }}</p>
+          <div v-if="testResult" class="sample-box">
+            <strong>找到 {{ testResult.count }} 条</strong>
+            <pre>{{ JSON.stringify(testResult.samples, null, 2) }}</pre>
           </div>
         </div>
-        <div class="modal-footer">
-          <button class="btn-sm" @click="showEdit = false">取消</button>
-          <button class="btn-sm btn-primary" @click="save" :disabled="saving">
-            {{ saving ? '保存中…' : '保存' }}
-          </button>
-        </div>
+        <footer class="modal-foot">
+          <button class="btn" @click="showEdit = false">取消</button>
+          <button class="btn-primary" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存' }}</button>
+        </footer>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.crawler-view { display: flex; flex-direction: column; gap: 16px; height: 100%; }
-.view-header { display: flex; align-items: center; gap: 12px; }
-.view-title { font-size: 20px; font-weight: 700; color: var(--c-text); flex: 1; }
-.btn-primary { background: #1d4ed8; border: none; border-radius: 8px; color: #fff; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
-.btn-primary:hover:not(:disabled) { background: #2563eb; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-sm { background: var(--c-border); border: none; border-radius: 6px; color: var(--c-text); padding: 6px 12px; font-size: 13px; cursor: pointer; }
-.btn-sm:hover:not(:disabled) { background: var(--c-border-2); }
-.btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.main-layout { flex: 1; display: grid; grid-template-columns: 260px 1fr; gap: 12px; overflow: hidden; }
-
-.rule-list { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 10px; overflow-y: auto; }
-.rule-item { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--c-border); cursor: pointer; }
-.rule-item:hover { background: #1a2740; }
-.rule-item.active { background: #1e3a5f; }
-.rule-info { flex: 1; min-width: 0; }
-.rule-name { font-size: 13px; font-weight: 600; color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rule-meta { font-size: 11px; color: var(--c-text-3); margin-top: 2px; }
-.rule-actions { display: flex; gap: 4px; flex-shrink: 0; }
-.icon-btn { background: none; border: 1px solid var(--c-border-2); border-radius: 4px; color: var(--c-text-2); width: 26px; height: 26px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 13px; }
-.icon-btn:hover { border-color: var(--c-text-2); color: var(--c-text); }
-.icon-btn.btn-run:hover { border-color: #4ade80; color: #4ade80; }
-.icon-btn.danger:hover { border-color: #f87171; color: #f87171; }
-
-.right-panel { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
-.panel-header { display: flex; align-items: center; justify-content: space-between; }
-.panel-header h3 { font-size: 15px; font-weight: 600; color: var(--c-text); }
-
-.progress-card { background: var(--c-bg); border-radius: 8px; padding: 12px; }
+.crawler-view { display: flex; flex-direction: column; gap: 14px; height: 100%; overflow: hidden; }
+.view-header, .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.view-header h2, .panel-head h3 { font-size: 20px; font-weight: 700; color: var(--c-text); }
+.view-header p, .panel-head p { font-size: 12px; color: var(--c-text-2); margin-top: 2px; }
+.workspace { min-height: 0; flex: 1; display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 12px; }
+.rule-list, .panel, .review-panel { border: 1px solid var(--c-border); background: var(--c-panel); border-radius: 8px; }
+.rule-list { padding: 8px; overflow: auto; }
+.rule-item { width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 10px; cursor: pointer; color: var(--c-text); }
+.rule-item:hover, .rule-item.active { background: var(--c-hover); border-color: var(--c-border); }
+.rule-title { display: block; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-meta { display: block; margin-top: 2px; color: var(--c-text-2); font-size: 12px; }
+.panel { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+.compact h3 { font-size: 16px; }
+.actions { display: flex; gap: 8px; align-items: center; }
+.btn, .btn-primary { border: 1px solid var(--c-border); border-radius: 6px; height: 32px; padding: 0 12px; cursor: pointer; color: var(--c-text); background: var(--c-panel); }
+.btn:hover:not(:disabled) { background: var(--c-hover); }
+.btn-primary { border-color: #1d4ed8; background: #1d4ed8; color: white; font-weight: 700; }
+.btn:disabled, .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+.progress-box, .target-box { border: 1px solid var(--c-border); background: var(--c-bg); border-radius: 8px; padding: 12px; }
 .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--c-text-2); margin-bottom: 6px; }
-.progress-bg { height: 6px; background: var(--c-border); border-radius: 3px; overflow: hidden; }
-.progress-bar { height: 100%; background: #1d4ed8; border-radius: 3px; transition: width 0.3s; }
-
-.url-info { display: flex; align-items: center; gap: 8px; }
-.label-sm { font-size: 12px; color: var(--c-text-2); white-space: nowrap; }
-.code-text { font-family: monospace; font-size: 12px; color: #86efac; background: var(--c-bg); padding: 2px 6px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
-
-.runs-header { font-size: 12px; font-weight: 600; color: var(--c-text-3); text-transform: uppercase; letter-spacing: 0.05em; }
-.runs-list { display: flex; flex-direction: column; gap: 6px; }
-.run-item { background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 6px; padding: 8px 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.run-status { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
-.run-status.ok { background: var(--c-ok-bg); color: #4ade80; }
-.run-status.err { background: #450a0a; color: #f87171; }
-.run-status.warn { background: #431407; color: #fb923c; }
-.run-stats { font-size: 12px; color: var(--c-text-2); flex: 1; }
-.run-time { font-size: 11px; color: var(--c-border-2); }
-.run-error { font-size: 11px; color: #f87171; width: 100%; }
-
-.empty-tip { text-align: center; padding: 32px; color: var(--c-border-2); font-size: 13px; }
-.error-text { color: #f87171; font-size: 13px; }
-.success-text { color: #4ade80; font-size: 13px; }
-
-/* Modal */
-.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px; width: 780px; max-height: 85vh; display: flex; flex-direction: column; }
-.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--c-border); }
-.modal-header h3 { font-size: 16px; font-weight: 700; color: var(--c-text); }
-.close-btn { background: none; border: none; color: var(--c-text-2); font-size: 18px; cursor: pointer; }
-.modal-body { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
-.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--c-border); }
-
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.form-col { display: flex; flex-direction: column; gap: 10px; }
-.form-group { display: flex; flex-direction: column; gap: 4px; }
-.form-group label { font-size: 12px; color: var(--c-text-2); }
-.form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.input-sm { background: var(--c-bg); border: 1px solid var(--c-border-2); border-radius: 6px; color: var(--c-text); padding: 6px 10px; font-size: 13px; width: 100%; }
-.hint { color: var(--c-border-2); font-size: 11px; }
-
-.test-panel { background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.test-header { display: flex; align-items: center; gap: 8px; }
-.test-url { flex: 1; }
-.test-result { display: flex; flex-direction: column; gap: 6px; }
-.samples { display: flex; flex-direction: column; gap: 4px; }
-.sample-item { font-size: 12px; color: #cbd5e1; background: var(--c-panel); border-radius: 4px; padding: 6px 8px; }
-.sample-type { display: inline-block; background: #1e3a5f; color: var(--c-brand); border-radius: 3px; padding: 1px 4px; font-size: 10px; margin-right: 6px; }
+.progress-track { height: 7px; background: var(--c-border); border-radius: 999px; overflow: hidden; }
+.progress-bar { height: 100%; background: #2563eb; transition: width .2s; }
+.target-box { display: flex; flex-direction: column; gap: 8px; }
+.target-box > label, .section-title { font-size: 12px; color: var(--c-text-2); font-weight: 700; }
+.segmented { display: inline-flex; border: 1px solid var(--c-border); border-radius: 6px; overflow: hidden; width: fit-content; }
+.segmented button { border: 0; border-right: 1px solid var(--c-border); background: var(--c-panel); color: var(--c-text); height: 30px; padding: 0 10px; cursor: pointer; }
+.segmented button:last-child { border-right: 0; }
+.segmented button.active { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
+.group-grid, .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.input { width: 100%; border: 1px solid var(--c-input-border); background: var(--c-input); color: var(--c-text); border-radius: 6px; padding: 7px 9px; min-height: 34px; }
+.runs, .review-list { display: flex; flex-direction: column; gap: 8px; }
+.run-row { display: grid; grid-template-columns: 92px 100px 130px 120px 1fr; gap: 8px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.badge { border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; width: fit-content; }
+.badge.ok { background: var(--c-ok-bg); color: var(--c-ok-text); }
+.badge.warn { background: var(--c-warn-bg); color: var(--c-warn-text); }
+.badge.err { background: #fee2e2; color: #dc2626; }
+.review-panel { max-height: 34%; min-height: 190px; padding: 14px; overflow: auto; }
+.review-item { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; padding: 10px; border: 1px solid var(--c-border); border-radius: 6px; cursor: pointer; }
+.review-item strong { font-weight: 700; color: var(--c-text); }
+.review-item p { color: var(--c-text-2); font-size: 12px; max-height: 38px; overflow: hidden; }
+.review-item small, .run-row small { color: var(--c-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { color: var(--c-text-3); text-align: center; padding: 24px; }
+.fill { margin: auto; }
+.success { color: var(--c-ok-text); font-size: 12px; }
+.error { color: #dc2626; font-size: 12px; }
+.modal-backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(15,23,42,.62); z-index: 100; }
+.modal { width: min(920px, calc(100vw - 40px)); max-height: min(860px, calc(100vh - 40px)); background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 8px; display: flex; flex-direction: column; }
+.modal-head, .modal-foot { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--c-border); }
+.modal-foot { border-top: 1px solid var(--c-border); border-bottom: 0; justify-content: flex-end; gap: 8px; }
+.modal-head h3 { font-size: 16px; font-weight: 700; }
+.icon-button { width: 30px; height: 30px; border: 0; background: transparent; font-size: 24px; color: var(--c-text-2); cursor: pointer; }
+.modal-body { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.form-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--c-text-2); font-weight: 700; }
+.wide { grid-column: 1 / -1; }
+.checkline { flex-direction: row !important; align-items: center; }
+.code-area { min-height: 150px; font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+.test-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.sample-box { border: 1px solid var(--c-border); background: var(--c-bg); border-radius: 6px; padding: 10px; }
+.sample-box pre { white-space: pre-wrap; max-height: 180px; overflow: auto; font-size: 12px; color: var(--c-text-2); }
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 1fr; }
+  .rule-list { max-height: 180px; }
+  .run-row { grid-template-columns: 1fr 1fr; }
+}
 </style>

@@ -132,6 +132,12 @@ const customAPI = {
   runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null }) =>
     invokeWithTimeout<{ taskId: string; runId: string }>('crawler:run', args),
   listCrawlerRuns: (ruleId: string) => invokeWithTimeout<unknown[]>('crawler:listRuns', ruleId),
+  listCrawlerReviewItems: (args?: { status?: string; ruleId?: string; runId?: string; limit?: number }) =>
+    invokeWithTimeout<unknown[]>('crawler:listReviewItems', args),
+  rejectCrawlerReviewItems: (args: { ids: string[]; notes?: string }) =>
+    invokeWithTimeout<void>('crawler:rejectReviewItems', args),
+  importCrawlerReviewItems: (args: { ids: string[]; target_group_id?: string | null; new_group?: unknown | null }) =>
+    invokeWithTimeout<{ count: number }>('crawler:importReviewItems', args),
 
   // Phase 5 — Knowledge Graph
   buildGraph: () => invokeWithTimeout<{ nodes: unknown[]; edges: unknown[] }>('graph:build'),

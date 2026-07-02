@@ -322,4 +322,66 @@ CREATE INDEX IF NOT EXISTS idx_question_groups_type      ON question_groups(grou
 CREATE INDEX IF NOT EXISTS idx_question_groups_exam_meta ON question_groups(exam_year, exam_period);
 `,
   },
+  {
+    version: 9,
+    sql: `
+ALTER TABLE crawler_rules ADD COLUMN adapter TEXT NOT NULL DEFAULT 'http_rule'
+  CHECK(adapter IN ('http_rule','browser_rule','api_json','feed_import','manual_clip'));
+ALTER TABLE crawler_rules ADD COLUMN auth_required INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE crawler_rules ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'none'
+  CHECK(auth_mode IN ('none','manual_session'));
+ALTER TABLE crawler_rules ADD COLUMN login_url TEXT;
+ALTER TABLE crawler_rules ADD COLUMN validate_url TEXT;
+ALTER TABLE crawler_rules ADD COLUMN rule_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE crawler_rules ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE crawler_rules ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+UPDATE crawler_rules
+SET updated_at = COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+WHERE updated_at = '';
+
+ALTER TABLE crawler_runs ADD COLUMN target_group_id TEXT REFERENCES question_groups(id) ON DELETE SET NULL;
+ALTER TABLE crawler_runs ADD COLUMN error_code TEXT;
+ALTER TABLE crawler_runs ADD COLUMN error_stage TEXT;
+
+CREATE TABLE IF NOT EXISTS crawler_site_sessions (
+  id                  TEXT PRIMARY KEY,
+  site_id             TEXT NOT NULL,
+  site_name           TEXT NOT NULL,
+  account_alias       TEXT NOT NULL DEFAULT 'default',
+  auth_mode           TEXT NOT NULL DEFAULT 'manual_session',
+  encrypted_state     BLOB NOT NULL,
+  storage_meta        TEXT NOT NULL DEFAULT '{}',
+  last_validated_at   TEXT,
+  expires_at          TEXT,
+  created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(site_id, account_alias)
+);
+
+CREATE TABLE IF NOT EXISTS crawler_review_items (
+  id                    TEXT PRIMARY KEY,
+  rule_id               TEXT NOT NULL REFERENCES crawler_rules(id) ON DELETE CASCADE,
+  run_id                TEXT NOT NULL REFERENCES crawler_runs(id) ON DELETE CASCADE,
+  content_hash          TEXT NOT NULL,
+  normalized_payload    TEXT NOT NULL,
+  target_group_id       TEXT REFERENCES question_groups(id) ON DELETE SET NULL,
+  target_group_snapshot TEXT,
+  review_status         TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(review_status IN ('pending','approved','rejected','imported')),
+  review_notes          TEXT NOT NULL DEFAULT '',
+  created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(rule_id, content_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawler_sessions_site
+  ON crawler_site_sessions(site_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crawler_review_status
+  ON crawler_review_items(review_status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crawler_review_run
+  ON crawler_review_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_crawler_review_rule_hash
+  ON crawler_review_items(rule_id, content_hash);
+`,
+  },
 ]

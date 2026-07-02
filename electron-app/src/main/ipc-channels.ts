@@ -53,6 +53,9 @@ export const IPC = {
   CRAWLER_TEST: 'crawler:test',
   CRAWLER_RUN: 'crawler:run',
   CRAWLER_LIST_RUNS: 'crawler:listRuns',
+  CRAWLER_LIST_REVIEW_ITEMS: 'crawler:listReviewItems',
+  CRAWLER_REJECT_REVIEW_ITEMS: 'crawler:rejectReviewItems',
+  CRAWLER_IMPORT_REVIEW_ITEMS: 'crawler:importReviewItems',
 
   GRAPH_BUILD: 'graph:build',
 
