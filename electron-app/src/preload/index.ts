@@ -43,6 +43,12 @@ const customAPI = {
   getSettings: () => invokeWithTimeout<Record<string, unknown>>('app:getSettings'),
   setSetting: (args: { key: string; value: unknown }) =>
     invokeWithTimeout<void>('app:setSetting', args),
+  getStoragePaths: () => invokeWithTimeout<unknown>('app:getStoragePaths'),
+  setStoragePaths: (args: { dataRootDir?: string }) =>
+    invokeWithTimeout<unknown>('app:setStoragePaths', args, 120_000),
+  pickDirectory: (args?: { title?: string; defaultPath?: string }) =>
+    invokeWithTimeout<string | null>('app:pickDirectory', args),
+  relaunchApp: () => invokeWithTimeout<void>('app:relaunch'),
 
   // Phase 2 — Questions
   queryQuestions: (filter?: Record<string, unknown>) =>

@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, dialog, safeStorage, Notification } from 'electron'
-import { join } from 'path'
+import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { PythonManager } from './python-manager'
@@ -16,7 +16,7 @@ import {
 import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
-  deleteDocument, insertChunks, getChunks
+  deleteDocument, getDocumentById, insertChunks, getChunks, remapManagedDocumentPaths
 } from './db/documents'
 import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
@@ -46,15 +46,32 @@ import {
   listBackups, createBackup, deleteBackupRecord, shouldAutoBackup, pruneOldBackups,
   getDefaultBackupDir
 } from './db/backup'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, unlinkSync } from 'fs'
-import { join as pathJoin } from 'path'
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs'
+import {
+  ensureStorageDirectories,
+  getStoragePathConfig,
+  getStoragePaths,
+  loadStoragePathConfig,
+  resolveStoragePaths,
+  saveStoragePathConfig,
+  type StoragePathConfig,
+} from './storage-paths'
 
 const pythonManager = new PythonManager()
 const wsClient = new WsProgressClient()
 let taskManager: TaskManager | null = null
 let mainWindow: BrowserWindow | null = null
 
-// AI config (persisted to userData/ai-config.json; API key via safeStorage)
+// AI config (persisted under the configured data root; API key via safeStorage)
 let aiConfig: Record<string, unknown> = {
   mode: 'openai',
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
@@ -70,12 +87,8 @@ type ProviderConfigOverride = {
   anthropic?: { apiKey?: string; model?: string }
 }
 
-function getAiConfigPath(): string {
-  return pathJoin(app.getPath('userData'), 'ai-config.json')
-}
-
 function loadAiConfig(): void {
-  const p = getAiConfigPath()
+  const p = getStoragePaths().aiConfigPath
   if (!existsSync(p)) return
   try {
     const raw = readFileSync(p, 'utf-8')
@@ -86,7 +99,8 @@ function loadAiConfig(): void {
 
 function saveAiConfig(): void {
   try {
-    writeFileSync(getAiConfigPath(), JSON.stringify(aiConfig, null, 2), 'utf-8')
+    ensureStorageDirectories()
+    writeFileSync(getStoragePaths().aiConfigPath, JSON.stringify(aiConfig, null, 2), 'utf-8')
   } catch { /* non-critical */ }
 }
 
@@ -150,8 +164,127 @@ function buildProviderConfig(override?: ProviderConfigOverride): Record<string, 
   return cfg
 }
 
-// In-memory app settings
 const appSettings: Record<string, unknown> = {}
+
+function loadAppSettings(): void {
+  const p = getStoragePaths().appSettingsPath
+  if (!existsSync(p)) return
+  try {
+    Object.assign(appSettings, JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>)
+  } catch { /* use defaults */ }
+}
+
+function saveAppSettings(): void {
+  try {
+    ensureStorageDirectories()
+    writeFileSync(getStoragePaths().appSettingsPath, JSON.stringify(appSettings, null, 2), 'utf-8')
+  } catch { /* non-critical */ }
+}
+
+function normalizeOptionalDir(input?: string): string | undefined {
+  if (!input) return undefined
+  const trimmed = input.trim()
+  if (!trimmed) return undefined
+  return resolve(trimmed)
+}
+
+function sanitizeFileName(input: string): string {
+  const sanitized = input.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim()
+  return sanitized || 'document'
+}
+
+function isPathInsideDirectory(filePath: string, dirPath: string): boolean {
+  const rel = relative(resolve(dirPath), resolve(filePath))
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+function copyDirectoryIfNeeded(sourceDir: string, targetDir: string): void {
+  if (!existsSync(sourceDir)) return
+  if (normalize(resolve(sourceDir)) === normalize(resolve(targetDir))) return
+  mkdirSync(targetDir, { recursive: true })
+  for (const entry of readdirSync(sourceDir)) {
+    cpSync(join(sourceDir, entry), join(targetDir, entry), { recursive: true, force: false, errorOnExist: false })
+  }
+}
+
+function copyFileIfNeeded(sourcePath: string, targetPath: string): void {
+  if (!existsSync(sourcePath)) return
+  if (normalize(resolve(sourcePath)) === normalize(resolve(targetPath))) return
+  mkdirSync(dirname(targetPath), { recursive: true })
+  copyFileSync(sourcePath, targetPath)
+}
+
+function copyDatabaseFiles(sourceDbPath: string, targetDbPath: string): void {
+  if (!existsSync(sourceDbPath)) return
+  if (normalize(resolve(sourceDbPath)) === normalize(resolve(targetDbPath))) return
+  mkdirSync(dirname(targetDbPath), { recursive: true })
+  copyFileSync(sourceDbPath, targetDbPath)
+  for (const suffix of ['-wal', '-shm']) {
+    const sourceExtra = `${sourceDbPath}${suffix}`
+    const targetExtra = `${targetDbPath}${suffix}`
+    if (existsSync(sourceExtra)) copyFileSync(sourceExtra, targetExtra)
+  }
+}
+
+function writeJsonFile(filePath: string, data: unknown): void {
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
+}
+
+function buildManagedDocumentPath(sourcePath: string, md5: string, paths = getStoragePaths()): string {
+  const extension = extname(sourcePath) || '.pdf'
+  const baseName = sanitizeFileName(basename(sourcePath, extension))
+  return join(paths.documentLibraryDir, `${baseName}-${md5.slice(0, 8)}${extension}`)
+}
+
+function getStorageSettingsPayload(paths = getStoragePaths()) {
+  const config = getStoragePathConfig()
+  return {
+    bootstrapConfigPath: paths.bootstrapConfigPath,
+    dataRootDir: paths.dataRootDir,
+    defaultDataRootDir: paths.defaultDataRootDir,
+    aiConfigPath: paths.aiConfigPath,
+    appSettingsPath: paths.appSettingsPath,
+    databasePath: paths.databasePath,
+    documentLibraryDir: paths.documentLibraryDir,
+    backupDir: paths.backupDir,
+    customDataRootDir: config.dataRootDir ?? '',
+    usingCustomDataRoot: Boolean(config.dataRootDir),
+  }
+}
+
+async function updateStoragePaths(args: {
+  dataRootDir?: string
+}): Promise<{ paths: ReturnType<typeof getStorageSettingsPayload>; restartRequired: boolean }> {
+  const currentPaths = getStoragePaths()
+  const nextConfig: StoragePathConfig = {
+    dataRootDir: normalizeOptionalDir(args.dataRootDir),
+  }
+  const nextPaths = resolveStoragePaths(nextConfig)
+
+  ensureStorageDirectories(nextPaths)
+
+  const db = getDatabase()
+  db.pragma('wal_checkpoint(FULL)')
+
+  if (currentPaths.documentLibraryDir !== nextPaths.documentLibraryDir) {
+    remapManagedDocumentPaths(db, currentPaths.documentLibraryDir, nextPaths.documentLibraryDir)
+    copyDirectoryIfNeeded(currentPaths.documentLibraryDir, nextPaths.documentLibraryDir)
+  }
+
+  writeJsonFile(nextPaths.aiConfigPath, aiConfig)
+  writeJsonFile(nextPaths.appSettingsPath, appSettings)
+  copyDatabaseFiles(currentPaths.databasePath, nextPaths.databasePath)
+  copyFileIfNeeded(currentPaths.databaseKeyPath, nextPaths.databaseKeyPath)
+
+  saveStoragePathConfig(nextConfig)
+
+  return {
+    paths: getStorageSettingsPayload(nextPaths),
+    restartRequired: currentPaths.databasePath !== nextPaths.databasePath
+      || currentPaths.documentLibraryDir !== nextPaths.documentLibraryDir,
+  }
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -204,6 +337,7 @@ function checkAndNotify(): void {
     const daysLeft = Math.max(0, Math.ceil((examDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
 
     appSettings['lastNotifyDate'] = today
+    saveAppSettings()
 
     if (pendingCount > 0) {
       new Notification({
@@ -286,9 +420,30 @@ function registerIpcHandlers(): void {
 
   // Phase 1 - App settings
   registerHandler(IPC.APP_GET_SETTINGS, async () => ({ ...appSettings }))
+  registerHandler(IPC.APP_GET_STORAGE_PATHS, async () => getStorageSettingsPayload())
+  registerHandler(IPC.APP_PICK_DIRECTORY, async (args) => {
+    const { title, defaultPath } = (args ?? {}) as { title?: string; defaultPath?: string }
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: title ?? '选择目录',
+      defaultPath,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths.length) return null
+    return result.filePaths[0]
+  })
+  registerHandler(IPC.APP_SET_STORAGE_PATHS, async (args) => updateStoragePaths(args as {
+    dataRootDir?: string
+  }))
+  registerHandler(IPC.APP_RELAUNCH, async () => {
+    setTimeout(() => {
+      app.relaunch()
+      app.exit(0)
+    }, 150)
+  })
   registerHandler(IPC.APP_SET_SETTING, async (args) => {
     const { key, value } = args as { key: string; value: unknown }
     appSettings[key] = value
+    saveAppSettings()
   })
 
   // Phase 2 - Questions
@@ -411,11 +566,17 @@ function registerIpcHandlers(): void {
     const existing = getDocumentByMd5(db, md5)
     if (existing) return { duplicate: true, document: existing }
 
-    const doc = insertDocument(db, { title, file_path: filePath, page_count: 0, md5 })
+    const managedFilePath = buildManagedDocumentPath(filePath, md5)
+    if (normalize(resolve(filePath)) !== normalize(resolve(managedFilePath))) {
+      mkdirSync(dirname(managedFilePath), { recursive: true })
+      copyFileSync(filePath, managedFilePath)
+    }
+
+    const doc = insertDocument(db, { title, file_path: managedFilePath, page_count: 0, md5 })
 
     const taskId = taskManager!.createTask('pdf_import', {
       docId: doc.id,
-      filePath,
+      filePath: managedFilePath,
       topMarginRatio,
       bottomMarginRatio,
       startPage,
@@ -444,7 +605,7 @@ function registerIpcHandlers(): void {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
       body: JSON.stringify({
-        file_path: filePath,
+        file_path: managedFilePath,
         doc_id: doc.id,
         task_id: taskId,
         top_margin_ratio: topMarginRatio,
@@ -457,7 +618,13 @@ function registerIpcHandlers(): void {
     return { document: doc, taskId }
   })
 
-  registerHandler(IPC.DOC_DELETE, async (id) => deleteDocument(db, id as string))
+  registerHandler(IPC.DOC_DELETE, async (id) => {
+    const doc = getDocumentById(db, id as string)
+    deleteDocument(db, id as string)
+    if (doc && isPathInsideDirectory(doc.file_path, getStoragePaths().documentLibraryDir) && existsSync(doc.file_path)) {
+      try { unlinkSync(doc.file_path) } catch { /* non-critical */ }
+    }
+  })
   registerHandler(IPC.DOC_GET_CHUNKS, async (docId) => getChunks(db, docId as string))
 
   // Phase 3 - AI config
@@ -861,7 +1028,7 @@ function registerIpcHandlers(): void {
     if (result.canceled || !result.filePaths.length) return { restored: false }
 
     const backupPath = result.filePaths[0]
-    const dbPath = pathJoin(app.getPath('userData'), 'softexam.db')
+    const dbPath = getStoragePaths().databasePath
 
     // Close DB, copy backup over current DB, reopen
     closeDatabase()
@@ -893,7 +1060,10 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  loadStoragePathConfig()
+  ensureStorageDirectories()
   verifySQLCipher()
+  loadAppSettings()
   loadAiConfig()
 
   try {

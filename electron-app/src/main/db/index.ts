@@ -1,15 +1,13 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import crypto from 'crypto'
-import { join } from 'path'
-import { existsSync, unlinkSync } from 'fs'
-import { app, safeStorage } from 'electron'
-import { readFileSync, writeFileSync } from 'fs'
+import { existsSync, unlinkSync, readFileSync, writeFileSync } from 'fs'
+import { safeStorage } from 'electron'
 import { runMigrations } from './migrator'
+import { ensureStorageDirectories, getStoragePaths } from '../storage-paths'
 
 const SERVICE = 'soft-exam-tool'
 const ACCOUNT = 'db-encryption-key'
 
-// Returns the stored key, or null if not found in this store.
 async function getKeytarKey(): Promise<string | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -33,15 +31,15 @@ async function storeKeytarKey(key: string): Promise<boolean> {
 
 async function getOrCreateKey(dbPath: string): Promise<string> {
   const dbExists = existsSync(dbPath)
-  const keyFile = join(app.getPath('userData'), 'db.key.enc')
+  const keyFile = getStoragePaths().databaseKeyPath
 
-  // --- Look up existing key ---
   if (dbExists) {
     const fromKeytar = await getKeytarKey()
     if (fromKeytar) {
       console.log('[DB] Key loaded from Windows Credential Manager')
       return fromKeytar
     }
+
     if (existsSync(keyFile)) {
       try {
         console.log('[DB] Key loaded from safeStorage fallback')
@@ -50,13 +48,11 @@ async function getOrCreateKey(dbPath: string): Promise<string> {
         console.warn('[DB] safeStorage key unreadable:', (e as Error).message)
       }
     }
-    // Key is gone but DB file exists — it cannot be opened. Remove it so a
-    // fresh encrypted database is created on the next open.
-    console.warn('[DB] Encryption key not found for existing database — resetting database file')
+
+    console.warn('[DB] Encryption key not found for existing database; resetting database file')
     unlinkSync(dbPath)
   }
 
-  // --- Create a new key ---
   const key = crypto.randomBytes(32).toString('hex')
   const storedInKeytar = await storeKeytarKey(key)
   if (storedInKeytar) {
@@ -69,18 +65,18 @@ async function getOrCreateKey(dbPath: string): Promise<string> {
   return key
 }
 
-let _db: InstanceType<typeof Database> | null = null
+let dbInstance: InstanceType<typeof Database> | null = null
 
 export async function initDatabase(): Promise<InstanceType<typeof Database>> {
-  if (_db) return _db
+  if (dbInstance) return dbInstance
 
-  const userDataPath = app.getPath('userData')
-  const dbPath = join(userDataPath, 'app.db')
-
+  const paths = getStoragePaths()
+  ensureStorageDirectories(paths)
+  const dbPath = paths.databasePath
   const key = await getOrCreateKey(dbPath)
 
-  function configureDb(db: InstanceType<typeof Database>, k: string): void {
-    db.pragma(`key='${k}'`)
+  function configureDb(db: InstanceType<typeof Database>, value: string): void {
+    db.pragma(`key='${value}'`)
     db.pragma('journal_mode = WAL')
     db.pragma('foreign_keys = ON')
   }
@@ -89,12 +85,11 @@ export async function initDatabase(): Promise<InstanceType<typeof Database>> {
   try {
     configureDb(rawDb, key)
   } catch (e) {
-    rawDb.close()  // release file handle before any unlink
+    rawDb.close()
     if ((e as NodeJS.ErrnoException & { code?: string }).code === 'SQLITE_NOTADB') {
-      // Stored key does not match the database — wipe both and start fresh.
-      console.warn('[DB] Stored key mismatch — resetting database and key store')
+      console.warn('[DB] Stored key mismatch; resetting database and key store')
       unlinkSync(dbPath)
-      const keyFile = join(app.getPath('userData'), 'db.key.enc')
+      const keyFile = getStoragePaths().databaseKeyPath
       if (existsSync(keyFile)) unlinkSync(keyFile)
       const freshKey = await getOrCreateKey(dbPath)
       rawDb = new Database(dbPath)
@@ -103,20 +98,19 @@ export async function initDatabase(): Promise<InstanceType<typeof Database>> {
       throw e
     }
   }
-  const db = rawDb
 
-  runMigrations(db)
-  _db = db
+  runMigrations(rawDb)
+  dbInstance = rawDb
   console.log('[DB] Initialized at', dbPath)
-  return db
+  return rawDb
 }
 
 export function getDatabase(): InstanceType<typeof Database> {
-  if (!_db) throw new Error('Database not initialized — call initDatabase() first')
-  return _db
+  if (!dbInstance) throw new Error('Database not initialized; call initDatabase() first')
+  return dbInstance
 }
 
 export function closeDatabase(): void {
-  _db?.close()
-  _db = null
+  dbInstance?.close()
+  dbInstance = null
 }

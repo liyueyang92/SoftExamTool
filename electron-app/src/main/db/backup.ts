@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import { randomUUID } from 'crypto'
 import { statSync, existsSync, unlinkSync } from 'fs'
-import { join, basename } from 'path'
-import { app } from 'electron'
+import { basename, join } from 'path'
+import { getStoragePaths } from '../storage-paths'
 
 export interface BackupRecord {
   id: string
@@ -69,11 +69,11 @@ export function pruneOldBackups(db: Database.Database, keepCount = 7): void {
 }
 
 export function getDbPath(): string {
-  return join(app.getPath('userData'), 'softexam.db')
+  return getStoragePaths().databasePath
 }
 
 export function getDefaultBackupDir(): string {
-  return join(app.getPath('userData'), 'backups')
+  return getStoragePaths().backupDir
 }
 
 export { basename }

@@ -123,3 +123,21 @@ export interface PdfPreviewResult {
   }
   text: string
 }
+
+export interface StoragePathsInfo {
+  bootstrapConfigPath: string
+  dataRootDir: string
+  defaultDataRootDir: string
+  aiConfigPath: string
+  appSettingsPath: string
+  databasePath: string
+  documentLibraryDir: string
+  backupDir: string
+  customDataRootDir: string
+  usingCustomDataRoot: boolean
+}
+
+export interface StoragePathsUpdateResult {
+  paths: StoragePathsInfo
+  restartRequired: boolean
+}

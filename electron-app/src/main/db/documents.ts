@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import { randomUUID } from 'crypto'
+import { isAbsolute, normalize, relative, resolve } from 'path'
 
 export interface Document {
   id: string
@@ -27,6 +28,10 @@ export function getDocumentByMd5(db: Database.Database, md5: string): Document |
   return (db.prepare('SELECT * FROM documents WHERE md5 = ?').get(md5) as Document) ?? null
 }
 
+export function getDocumentById(db: Database.Database, id: string): Document | null {
+  return (db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as Document) ?? null
+}
+
 export function insertDocument(db: Database.Database, doc: Omit<Document, 'id' | 'imported_at'>): Document {
   const id = randomUUID()
   db.prepare(`
@@ -42,6 +47,35 @@ export function updateDocumentPageCount(db: Database.Database, id: string, pageC
 
 export function deleteDocument(db: Database.Database, id: string): void {
   db.prepare('DELETE FROM documents WHERE id = ?').run(id)
+}
+
+function isPathInsideDirectory(filePath: string, dirPath: string): boolean {
+  const absoluteFile = normalize(resolve(filePath))
+  const absoluteDir = normalize(resolve(dirPath))
+  const rel = relative(absoluteDir, absoluteFile)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+export function remapManagedDocumentPaths(
+  db: Database.Database,
+  fromDir: string,
+  toDir: string,
+): number {
+  const docs = db.prepare('SELECT id, file_path FROM documents').all() as Array<{ id: string; file_path: string }>
+  const updateStmt = db.prepare('UPDATE documents SET file_path = ? WHERE id = ?')
+  let changed = 0
+
+  const updateAll = db.transaction(() => {
+    for (const doc of docs) {
+      if (!isPathInsideDirectory(doc.file_path, fromDir)) continue
+      const rel = relative(resolve(fromDir), resolve(doc.file_path))
+      updateStmt.run(resolve(toDir, rel), doc.id)
+      changed += 1
+    }
+  })
+  updateAll()
+
+  return changed
 }
 
 export function insertChunks(
