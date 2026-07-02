@@ -1,4 +1,5 @@
 import { app, shell, BrowserWindow, dialog, safeStorage, Notification } from 'electron'
+import { spawn } from 'child_process'
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -286,6 +287,23 @@ async function updateStoragePaths(args: {
   }
 }
 
+function relaunchApplication(): void {
+  if (is.dev) {
+    const child = spawn(process.execPath, process.argv.slice(1), {
+      cwd: process.cwd(),
+      detached: true,
+      env: { ...process.env },
+      stdio: 'ignore',
+    })
+    child.unref()
+    app.exit(0)
+    return
+  }
+
+  app.relaunch()
+  app.exit(0)
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
@@ -436,8 +454,7 @@ function registerIpcHandlers(): void {
   }))
   registerHandler(IPC.APP_RELAUNCH, async () => {
     setTimeout(() => {
-      app.relaunch()
-      app.exit(0)
+      relaunchApplication()
     }, 150)
   })
   registerHandler(IPC.APP_SET_SETTING, async (args) => {
