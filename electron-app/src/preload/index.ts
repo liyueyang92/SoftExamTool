@@ -137,7 +137,7 @@ const customAPI = {
   listCrawlerSessions: (args?: { ruleId?: string }) =>
     invokeWithTimeout<unknown[]>('crawler:listSessions', args),
   validateCrawlerSession: (args: { ruleId: string; account_alias: string }) =>
-    invokeWithTimeout<{ valid: boolean; status?: number; message?: string }>('crawler:validateSession', args, 60_000),
+    invokeWithTimeout<{ valid: boolean; status?: number; message?: string; checks?: Array<{ name: string; valid: boolean; message: string }> }>('crawler:validateSession', args, 60_000),
   deleteCrawlerSession: (args: { ruleId: string; account_alias: string }) =>
     invokeWithTimeout<void>('crawler:deleteSession', args),
   listCrawlerReviewItems: (args?: { status?: string; ruleId?: string; runId?: string; limit?: number }) =>

@@ -7,6 +7,7 @@ import {
   type CrawlerInspectPreviewResult,
   type CrawlerRule,
   type CrawlerSelectorCandidate,
+  type CrawlerSessionValidationResult,
   type NewCrawlerTargetGroup,
 } from '../stores/crawler'
 import { useQuestionStore } from '../stores/question'
@@ -24,6 +25,7 @@ const activeRun = ref<{ taskId: string; runId: string; ruleId: string } | null>(
 const runProgress = ref(0)
 const runMessage = ref('')
 const runError = ref('')
+const runStageFilter = ref<'all' | string>('all')
 
 const testing = ref(false)
 const testUrl = ref('')
@@ -55,6 +57,7 @@ const reviewMessage = ref('')
 const accountAlias = ref('default')
 const sessionMessage = ref('')
 const sessionBusy = ref(false)
+const sessionValidation = ref<CrawlerSessionValidationResult | null>(null)
 
 const selectedRule = computed(() => store.rules.find((r) => r.id === selectedRuleId.value) ?? null)
 const selectedSessions = computed(() => {
@@ -62,6 +65,18 @@ const selectedSessions = computed(() => {
   return ruleId ? store.sessions.filter((item) => item.site_id === ruleId) : []
 })
 const pendingCount = computed(() => store.reviewItems.length)
+const filteredRuns = computed(() => {
+  if (runStageFilter.value === 'all') return store.runs
+  return store.runs.filter((run) => (run.error_stage || run.status) === runStageFilter.value)
+})
+const runStageOptions = computed(() => {
+  const values = new Set<string>()
+  for (const run of store.runs) {
+    if (run.error_stage) values.add(run.error_stage)
+    else if (run.status) values.add(run.status)
+  }
+  return Array.from(values)
+})
 
 onMounted(async () => {
   await Promise.all([
@@ -137,6 +152,16 @@ function buildRuleJson(rule: Partial<CrawlerRule>) {
     return JSON.stringify({ feed: { url: rule.url_template } }, null, 2)
   }
   return JSON.stringify({
+    auth: {
+      validate: {
+        url: rule.validate_url || '',
+        success_statuses: [200],
+        success_text: [],
+        failure_text: [],
+        required_cookies: [],
+        url_pattern: '',
+      },
+    },
     list: {
       url_template: rule.url_template,
       item_selector: rule.item_selector,
@@ -329,6 +354,10 @@ async function runCrawl(ruleId: string) {
   await store.fetchRuns(ruleId)
 }
 
+async function retryRun(ruleId: string) {
+  await runCrawl(ruleId)
+}
+
 async function selectRule(ruleId: string) {
   selectedRuleId.value = ruleId
   await Promise.all([store.fetchRuns(ruleId), store.fetchSessions(ruleId)])
@@ -361,6 +390,7 @@ async function startAuth() {
   if (!selectedRule.value) return
   sessionBusy.value = true
   sessionMessage.value = ''
+  sessionValidation.value = null
   try {
     await store.startAuth(selectedRule.value.id, accountAlias.value || 'default')
     sessionMessage.value = '授权已保存'
@@ -375,8 +405,10 @@ async function validateSession() {
   if (!selectedRule.value) return
   sessionBusy.value = true
   sessionMessage.value = ''
+  sessionValidation.value = null
   try {
     const res = await store.validateSession(selectedRule.value.id, accountAlias.value || 'default')
+    sessionValidation.value = res
     sessionMessage.value = res.valid ? `会话有效${res.status ? ` (${res.status})` : ''}` : `会话无效${res.status ? ` (${res.status})` : ''}`
   } catch (e) {
     sessionMessage.value = String(e)
@@ -389,6 +421,7 @@ async function deleteSession() {
   if (!selectedRule.value) return
   sessionBusy.value = true
   sessionMessage.value = ''
+  sessionValidation.value = null
   try {
     await store.deleteSession(selectedRule.value.id, accountAlias.value || 'default')
     sessionMessage.value = '会话已清除'
@@ -505,19 +538,39 @@ function formatDate(iso?: string | null) {
               </button>
             </div>
             <p v-if="sessionMessage" class="session-message">{{ sessionMessage }}</p>
+            <div v-if="sessionValidation?.checks?.length" class="validation-list">
+              <div
+                v-for="check in sessionValidation.checks"
+                :key="check.name"
+                class="validation-row"
+                :class="{ ok: check.valid, err: !check.valid }"
+              >
+                <span>{{ check.valid ? '通过' : '失败' }}</span>
+                <strong>{{ check.name }}</strong>
+                <small>{{ check.message }}</small>
+              </div>
+            </div>
           </section>
 
           <section>
-            <div class="section-title">运行历史</div>
+            <div class="section-headline">
+              <div class="section-title">运行历史</div>
+              <select v-model="runStageFilter" class="input stage-filter">
+                <option value="all">全部阶段</option>
+                <option v-for="stage in runStageOptions" :key="stage" :value="stage">{{ stage }}</option>
+              </select>
+            </div>
             <div v-if="!store.runs.length" class="empty">暂无运行记录</div>
             <div v-else class="runs">
-              <div v-for="run in store.runs" :key="run.id" class="run-row">
+              <div v-for="run in filteredRuns" :key="run.id" class="run-row">
                 <span class="badge" :class="statusClass(run.status)">{{ run.status }}</span>
                 <span>抓取 {{ run.total_found }}</span>
                 <span>待确认/入库 {{ run.total_saved }}</span>
                 <span>{{ formatDate(run.started_at) }}</span>
-                <small v-if="run.error_msg">{{ run.error_msg }}</small>
+                <small v-if="run.error_msg">{{ run.error_stage || 'unknown' }} · {{ run.error_code || 'CRAWLER_ERROR' }} · {{ run.error_msg }}</small>
+                <button v-if="run.status === 'failed'" class="btn mini-btn" @click="retryRun(selectedRule.id)">重试</button>
               </div>
+              <div v-if="store.runs.length && !filteredRuns.length" class="empty">当前阶段没有运行记录</div>
             </div>
           </section>
         </template>
@@ -691,11 +744,20 @@ function formatDate(iso?: string | null) {
 .progress-bar { height: 100%; background: #2563eb; transition: width .2s; }
 .target-box { display: flex; flex-direction: column; gap: 8px; }
 .target-box > label, .section-title { font-size: 12px; color: var(--c-text-2); font-weight: 700; }
+.section-headline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.stage-filter { width: 150px; min-height: 30px; padding-block: 4px; font-size: 12px; }
 .session-row { display: grid; grid-template-columns: minmax(140px, 1fr) auto auto auto; gap: 8px; align-items: center; }
 .sessions { display: flex; flex-wrap: wrap; gap: 6px; }
 .session-pill { border: 1px solid var(--c-border); background: var(--c-panel); color: var(--c-text-2); border-radius: 999px; padding: 4px 9px; font-size: 12px; cursor: pointer; }
 .session-pill.active { border-color: #1d4ed8; color: #1d4ed8; background: #dbeafe; }
 .session-message { color: var(--c-text-2); font-size: 12px; }
+.validation-list { display: flex; flex-direction: column; gap: 6px; }
+.validation-row { display: grid; grid-template-columns: 42px 150px minmax(0, 1fr); gap: 8px; align-items: center; border: 1px solid var(--c-border); border-radius: 6px; padding: 7px 9px; font-size: 12px; }
+.validation-row span { font-weight: 700; }
+.validation-row.ok span { color: var(--c-ok-text); }
+.validation-row.err span { color: #dc2626; }
+.validation-row strong { color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.validation-row small { color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .segmented { display: inline-flex; border: 1px solid var(--c-border); border-radius: 6px; overflow: hidden; width: fit-content; }
 .segmented button { border: 0; border-right: 1px solid var(--c-border); background: var(--c-panel); color: var(--c-text); height: 30px; padding: 0 10px; cursor: pointer; }
 .segmented button:last-child { border-right: 0; }
@@ -703,7 +765,8 @@ function formatDate(iso?: string | null) {
 .group-grid, .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .input { width: 100%; border: 1px solid var(--c-input-border); background: var(--c-input); color: var(--c-text); border-radius: 6px; padding: 7px 9px; min-height: 34px; }
 .runs, .review-list { display: flex; flex-direction: column; gap: 8px; }
-.run-row { display: grid; grid-template-columns: 92px 100px 130px 120px 1fr; gap: 8px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.run-row { display: grid; grid-template-columns: 92px 100px 130px 120px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.mini-btn { height: 26px; padding: 0 8px; font-size: 12px; }
 .badge { border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; width: fit-content; }
 .badge.ok { background: var(--c-ok-bg); color: var(--c-ok-text); }
 .badge.warn { background: var(--c-warn-bg); color: var(--c-warn-text); }
@@ -757,6 +820,7 @@ function formatDate(iso?: string | null) {
   .rule-list { max-height: 180px; }
   .run-row { grid-template-columns: 1fr 1fr; }
   .session-row { grid-template-columns: 1fr 1fr; }
+  .validation-row { grid-template-columns: 1fr; }
   .inspect-toolbar, .inspector-grid { grid-template-columns: 1fr; }
 }
 </style>

@@ -33,8 +33,11 @@ export interface CrawlerRun {
   status: string
   total_found: number
   total_saved: number
+  target_group_id: string | null
   started_at: string
   ended_at: string | null
+  error_code: string | null
+  error_stage: string | null
   error_msg: string | null
 }
 
@@ -113,6 +116,13 @@ export interface CrawlerInspectPreviewResult {
   selector_matches: Record<string, number>
 }
 
+export interface CrawlerSessionValidationResult {
+  valid: boolean
+  status?: number
+  message?: string
+  checks?: Array<{ name: string; valid: boolean; message: string }>
+}
+
 export const useCrawlerStore = defineStore('crawler', () => {
   const rules = ref<CrawlerRule[]>([])
   const loading = ref(false)
@@ -189,7 +199,7 @@ export const useCrawlerStore = defineStore('crawler', () => {
     const res = await window.electronAPI.validateCrawlerSession(toIpcPayload({ ruleId, account_alias: accountAlias }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     await fetchSessions(ruleId)
-    return res.data
+    return res.data as CrawlerSessionValidationResult
   }
 
   async function deleteSession(ruleId: string, accountAlias: string) {

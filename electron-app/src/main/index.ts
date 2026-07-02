@@ -615,21 +615,138 @@ function getDecryptedCrawlerSessionPayload(
   return decryptCrawlerState(session.encrypted_state)
 }
 
+type CrawlerSessionValidationCheck = {
+  name: string
+  valid: boolean
+  message: string
+}
+
+type CrawlerSessionValidationResult = {
+  valid: boolean
+  status?: number
+  message?: string
+  checks?: CrawlerSessionValidationCheck[]
+}
+
+function parseCrawlerRuleJson(rule: CrawlerRule): Record<string, unknown> {
+  if (!rule.rule_json) return {}
+  try {
+    const parsed = JSON.parse(rule.rule_json) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function getNestedRecord(source: Record<string, unknown>, path: string[]): Record<string, unknown> {
+  let current: unknown = source
+  for (const key of path) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return {}
+    current = (current as Record<string, unknown>)[key]
+  }
+  return current && typeof current === 'object' && !Array.isArray(current)
+    ? current as Record<string, unknown>
+    : {}
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string')
+  return typeof value === 'string' && value.trim() ? [value] : []
+}
+
+function toNumberArray(value: unknown): number[] {
+  if (Array.isArray(value)) return value.filter((item): item is number => typeof item === 'number')
+  return typeof value === 'number' ? [value] : []
+}
+
 async function validateCrawlerSession(
   rule: CrawlerRule,
   state: unknown,
-): Promise<{ valid: boolean; status?: number; message?: string }> {
-  if (!rule.validate_url) return { valid: true, message: 'No validate_url configured' }
-  const typed = state as { cookies?: Array<{ name: string; value: string }> }
-  const cookieHeader = (typed.cookies ?? [])
+): Promise<CrawlerSessionValidationResult> {
+  const ruleJson = parseCrawlerRuleJson(rule)
+  const validateCfg = getNestedRecord(ruleJson, ['auth', 'validate'])
+  const validateUrl = String(validateCfg.url || rule.validate_url || '')
+  const typed = state as { cookies?: Array<{ name: string; value: string }>; url?: string }
+  const cookies = typed.cookies ?? []
+  const cookieHeader = cookies
     .filter((cookie) => cookie.name && cookie.value)
     .map((cookie) => `${cookie.name}=${cookie.value}`)
     .join('; ')
-  const res = await fetch(rule.validate_url, {
-    method: 'GET',
+  const checks: CrawlerSessionValidationCheck[] = []
+
+  const requiredCookies = toStringArray(validateCfg.required_cookies)
+  if (requiredCookies.length) {
+    const cookieNames = new Set(cookies.map((cookie) => cookie.name))
+    const missing = requiredCookies.filter((name) => !cookieNames.has(name))
+    checks.push({
+      name: 'required_cookies',
+      valid: missing.length === 0,
+      message: missing.length ? `Missing cookies: ${missing.join(', ')}` : 'Required cookies are present',
+    })
+  }
+
+  const urlPattern = typeof validateCfg.url_pattern === 'string' ? validateCfg.url_pattern : ''
+  if (urlPattern && typed.url) {
+    const matched = new RegExp(urlPattern).test(typed.url)
+    checks.push({
+      name: 'url_pattern',
+      valid: matched,
+      message: matched ? 'Session URL matched' : `Session URL did not match ${urlPattern}`,
+    })
+  }
+
+  if (!validateUrl) {
+    const valid = checks.length ? checks.every((check) => check.valid) : true
+    return {
+      valid,
+      message: checks.length ? (valid ? 'Session validation passed' : 'Session validation failed') : 'No validate_url configured',
+      checks,
+    }
+  }
+
+  const method = typeof validateCfg.method === 'string' ? validateCfg.method.toUpperCase() : 'GET'
+  const res = await fetch(validateUrl, {
+    method,
     headers: cookieHeader ? { Cookie: cookieHeader } : {},
   })
-  return { valid: res.ok, status: res.status, message: res.statusText }
+  const body = await res.text()
+  const successStatuses = toNumberArray(validateCfg.success_statuses)
+  const statusOk = successStatuses.length ? successStatuses.includes(res.status) : res.ok
+  checks.push({
+    name: 'status',
+    valid: statusOk,
+    message: `HTTP ${res.status} ${res.statusText}`,
+  })
+
+  const successTexts = toStringArray(validateCfg.success_text)
+  if (successTexts.length) {
+    const matched = successTexts.some((text) => body.includes(text))
+    checks.push({
+      name: 'success_text',
+      valid: matched,
+      message: matched ? 'Success text matched' : 'Success text not found',
+    })
+  }
+
+  const failureTexts = toStringArray(validateCfg.failure_text)
+  if (failureTexts.length) {
+    const matched = failureTexts.some((text) => body.includes(text))
+    checks.push({
+      name: 'failure_text',
+      valid: !matched,
+      message: matched ? 'Failure text was found' : 'Failure text not found',
+    })
+  }
+
+  const valid = checks.every((check) => check.valid)
+  return {
+    valid,
+    status: res.status,
+    message: valid ? 'Session validation passed' : 'Session validation failed',
+    checks,
+  }
 }
 
 function registerIpcHandlers(): void {
