@@ -216,6 +216,7 @@ async def essay_suggest(req: EssaySuggestRequest):
 class ChatRequest(BaseModel):
     ai_config: dict
     question: str
+    history: list[dict] = []
     doc_chunks: list[dict] = []   # [{content, page_num, doc_title}]
 
 
@@ -232,6 +233,11 @@ async def ai_chat(req: ChatRequest):
         context_text = '\n\n---\n\n'.join(parts)
 
     messages = [{'role': 'system', 'content': RAG_SYSTEM_PROMPT}]
+    for item in req.history[-12:]:
+        role = item.get('role')
+        content = item.get('content')
+        if role in ('user', 'assistant') and isinstance(content, str) and content.strip():
+            messages.append({'role': role, 'content': content.strip()})
     if context_text:
         messages.append({'role': 'user', 'content': f'参考资料：\n{context_text}\n\n问题：{req.question}'})
     else:

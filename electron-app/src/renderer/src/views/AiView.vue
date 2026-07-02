@@ -10,28 +10,115 @@ const questionStore = useQuestionStore()
 const activeTab = ref<'generate' | 'grade' | 'chat'>('generate')
 
 // Chat tab
-interface ChatMessage { role: 'user' | 'assistant'; content: string; sources?: { page_num: number; doc_title: string }[] }
+interface ChatSession {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+}
+
+interface ChatMessage {
+  id?: string
+  session_id?: string
+  role: 'user' | 'assistant'
+  content: string
+  sources?: { page_num: number | null; doc_title: string }[]
+  created_at?: string
+}
+const chatSessions = ref<ChatSession[]>([])
+const activeChatSessionId = ref('')
 const chatMessages = ref<ChatMessage[]>([])
 const chatInput = ref('')
 const chatLoading = ref(false)
 const useDocContext = ref(true)
 const chatError = ref('')
 
+async function loadChatSessions(preferredSessionId?: string) {
+  const res = await window.electronAPI.listAiChatSessions({ limit: 50 })
+  if (res.success) {
+    chatSessions.value = res.data as ChatSession[]
+    const activeExists = chatSessions.value.some((session) => session.id === preferredSessionId)
+    const fallbackId = chatSessions.value[0]?.id ?? ''
+    activeChatSessionId.value = activeExists ? (preferredSessionId ?? '') : fallbackId
+  } else {
+    chatError.value = (res.error as { message: string }).message
+  }
+}
+
+async function loadChatHistory(sessionId = activeChatSessionId.value) {
+  if (!sessionId) {
+    chatMessages.value = []
+    return
+  }
+  const res = await window.electronAPI.listAiChatMessages({ sessionId, limit: 100 })
+  if (res.success) {
+    chatMessages.value = res.data as ChatMessage[]
+  } else {
+    chatError.value = (res.error as { message: string }).message
+  }
+}
+
+async function createChatSession() {
+  const res = await window.electronAPI.createAiChatSession()
+  if (res.success) {
+    const session = res.data as ChatSession
+    await loadChatSessions(session.id)
+    await loadChatHistory(session.id)
+    chatInput.value = ''
+    chatError.value = ''
+  } else {
+    chatError.value = (res.error as { message: string }).message
+  }
+}
+
+async function deleteCurrentChatSession() {
+  if (!activeChatSessionId.value) return
+  const deletingId = activeChatSessionId.value
+  const res = await window.electronAPI.deleteAiChatSession(deletingId)
+  if (res.success) {
+    await loadChatSessions()
+    await loadChatHistory()
+    chatInput.value = ''
+    chatError.value = ''
+  } else {
+    chatError.value = (res.error as { message: string }).message
+  }
+}
+
+async function switchChatSession(sessionId: string) {
+  activeChatSessionId.value = sessionId
+  await loadChatHistory(sessionId)
+  chatError.value = ''
+}
+
 async function sendChat() {
   const q = chatInput.value.trim()
   if (!q || chatLoading.value) return
+  if (!activeChatSessionId.value) {
+    await createChatSession()
+  }
+  if (!activeChatSessionId.value) return
   chatInput.value = ''
   chatError.value = ''
-  chatMessages.value.push({ role: 'user', content: q })
+  const pendingUserMessage: ChatMessage = { role: 'user', content: q }
+  chatMessages.value.push(pendingUserMessage)
   chatLoading.value = true
   try {
-    const res = await window.electronAPI.aiChat(toIpcPayload({ question: q, useDocContext: useDocContext.value }))
+    const res = await window.electronAPI.aiChat(toIpcPayload({
+      sessionId: activeChatSessionId.value,
+      question: q,
+      useDocContext: useDocContext.value,
+    }))
     if (res.success) {
-      chatMessages.value.push({ role: 'assistant', content: res.data.answer, sources: res.data.sources as { page_num: number; doc_title: string }[] })
+      await loadChatSessions(activeChatSessionId.value)
+      await loadChatHistory(activeChatSessionId.value)
     } else {
+      if (chatMessages.value.at(-1) === pendingUserMessage) chatMessages.value.pop()
       chatError.value = (res.error as { message: string }).message
     }
   } catch (e) {
+    if (chatMessages.value.at(-1) === pendingUserMessage) chatMessages.value.pop()
     chatError.value = String(e)
   } finally {
     chatLoading.value = false
@@ -51,7 +138,11 @@ const gradeRef = ref('')
 const gradeAnswer = ref('')
 const gradeError = ref('')
 
-onMounted(() => ai.loadConfig())
+onMounted(async () => {
+  await ai.loadConfig()
+  await loadChatSessions()
+  await loadChatHistory()
+})
 
 function addGenTag() {
   const t = tagInput.value.trim()
@@ -257,6 +348,15 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
     <!-- Chat Tab -->
     <div v-if="activeTab === 'chat'" class="tab-panel chat-panel-wrap">
       <div class="chat-toolbar">
+        <div class="chat-session-controls">
+          <select v-model="activeChatSessionId" class="select-sm chat-session-select" @change="switchChatSession(activeChatSessionId)">
+            <option v-for="session in chatSessions" :key="session.id" :value="session.id">
+              {{ session.title }}
+            </option>
+          </select>
+          <button class="btn-sm" @click="createChatSession">New Session</button>
+          <button v-if="activeChatSessionId" class="btn-sm" @click="deleteCurrentChatSession">Delete Session</button>
+        </div>
         <label class="check-label">
           <input type="checkbox" v-model="useDocContext" />
           使用文档库作为参考资料（RAG）
@@ -266,7 +366,7 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
         <div v-if="chatMessages.length === 0" class="chat-empty">
           <div style="font-size:36px;margin-bottom:8px">✦</div>
           <div>向 AI 提问软考架构相关问题</div>
-          <div style="font-size:12px;margin-top:4px;color:var(--c-border-2)">勾选上方选项可引用已导入文档作为参考</div>
+          <div style="font-size:12px;margin-top:4px;color:var(--c-border-2)">新问题会自动带上当前会话的历史消息</div>
         </div>
         <template v-else>
           <div v-for="(msg, i) in chatMessages" :key="i" class="chat-msg" :class="msg.role">
@@ -381,7 +481,9 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
 
 /* Chat tab */
 .chat-panel-wrap { display: flex; flex-direction: column; height: 100%; }
-.chat-toolbar { padding: 8px 0; border-bottom: 1px solid var(--c-border); flex-shrink: 0; }
+.chat-toolbar { padding: 8px 0; border-bottom: 1px solid var(--c-border); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.chat-session-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chat-session-select { min-width: 220px; max-width: 320px; }
 .chat-messages { flex: 1; overflow-y: auto; padding: 12px 0; display: flex; flex-direction: column; gap: 12px; }
 .chat-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--c-border-2); font-size: 13px; }
 .chat-msg { display: flex; }

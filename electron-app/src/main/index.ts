@@ -34,6 +34,15 @@ import {
 } from './db/plan'
 import { listAchievements, checkAndUnlockAchievements } from './db/achievements'
 import {
+  createAiChatSession,
+  deleteAiChatSession,
+  getLatestAiChatSession,
+  insertAiChatMessage,
+  listAiChatMessages,
+  listAiChatSessions,
+  getAiChatSession,
+} from './db/ai-chat'
+import {
   listBackups, createBackup, deleteBackupRecord, shouldAutoBackup, pruneOldBackups,
   getDefaultBackupDir
 } from './db/backup'
@@ -682,9 +691,44 @@ function registerIpcHandlers(): void {
   })
 
   // Phase 5 - AI Chat with RAG (FTS5 doc context)
+  registerHandler(IPC.AI_CHAT_SESSIONS_LIST, async (args) => {
+    const { limit = 100 } = (args ?? {}) as { limit?: number }
+    const sessions = listAiChatSessions(db, limit)
+    if (sessions.length > 0) return sessions
+    return [createAiChatSession(db)]
+  })
+
+  registerHandler(IPC.AI_CHAT_SESSION_CREATE, async (args) => {
+    const { title } = (args ?? {}) as { title?: string }
+    return createAiChatSession(db, title)
+  })
+
+  registerHandler(IPC.AI_CHAT_SESSION_DELETE, async (sessionId) => {
+    deleteAiChatSession(db, sessionId as string)
+    if (!getLatestAiChatSession(db)) {
+      createAiChatSession(db)
+    }
+  })
+
+  registerHandler(IPC.AI_CHAT_MESSAGES_LIST, async (args) => {
+    const { sessionId, limit = 100 } = args as { sessionId: string; limit?: number }
+    return listAiChatMessages(db, sessionId, limit)
+  })
+
   registerHandler(IPC.AI_CHAT, async (args) => {
-    const { question, useDocContext = true } = args as { question: string; useDocContext?: boolean }
+    const { sessionId, question, useDocContext = true } = args as {
+      sessionId: string
+      question: string
+      useDocContext?: boolean
+    }
+    const session = getAiChatSession(db, sessionId)
+    if (!session) throw Object.assign(new Error('Chat session not found'), { code: 'AI_CHAT_SESSION_NOT_FOUND' })
+
     let docChunks: unknown[] = []
+    const history = listAiChatMessages(db, sessionId, 12).map((item) => ({
+      role: item.role,
+      content: item.content,
+    }))
 
     if (useDocContext) {
       try {
@@ -705,13 +749,21 @@ function registerIpcHandlers(): void {
     const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({ ai_config: buildProviderConfig(), question, doc_chunks: docChunks }),
+      body: JSON.stringify({ ai_config: buildProviderConfig(), question, history, doc_chunks: docChunks }),
     })
     if (!res.ok) {
       const err = await res.json() as { detail?: string }
       throw Object.assign(new Error(err.detail ?? 'Chat failed'), { code: 'AI_CHAT_FAILED' })
     }
-    return res.json()
+    const payload = await res.json() as { answer: string; sources: Array<{ page_num: number | null; doc_title: string }> }
+    insertAiChatMessage(db, { session_id: sessionId, role: 'user', content: question })
+    insertAiChatMessage(db, {
+      session_id: sessionId,
+      role: 'assistant',
+      content: payload.answer,
+      sources: payload.sources,
+    })
+    return payload
   })
 
   registerHandler(IPC.AI_GRADE_ESSAY, async (args) => {

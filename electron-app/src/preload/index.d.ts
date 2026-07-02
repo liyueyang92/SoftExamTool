@@ -118,7 +118,11 @@ declare global {
       essayAiSuggest: (args: unknown) => Promise<IpcResponse<{ suggestions: string }>>
 
       // Phase 5 — AI Chat with RAG
-      aiChat: (args: { question: string; useDocContext?: boolean }) => Promise<IpcResponse<{ answer: string; sources: unknown[] }>>
+      aiChat: (args: { sessionId: string; question: string; useDocContext?: boolean }) => Promise<IpcResponse<{ answer: string; sources: unknown[] }>>
+      listAiChatSessions: (args?: { limit?: number }) => Promise<IpcResponse<unknown[]>>
+      createAiChatSession: (args?: { title?: string }) => Promise<IpcResponse<unknown>>
+      deleteAiChatSession: (sessionId: string) => Promise<IpcResponse<void>>
+      listAiChatMessages: (args: { sessionId: string; limit?: number }) => Promise<IpcResponse<unknown[]>>
 
       // Phase 4 — Study Plans
       getPlanActive: () => Promise<IpcResponse<StudyPlan | null>>

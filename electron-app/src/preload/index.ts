@@ -142,8 +142,16 @@ const customAPI = {
   essayAiSuggest: (args: unknown) => invokeWithTimeout<{ suggestions: string }>('essay:aiSuggest', args, 60_000),
 
   // Phase 5 — AI Chat with RAG
-  aiChat: (args: { question: string; useDocContext?: boolean }) =>
+  aiChat: (args: { sessionId: string; question: string; useDocContext?: boolean }) =>
     invokeWithTimeout<{ answer: string; sources: unknown[] }>('ai:chat', args, 60_000),
+  listAiChatSessions: (args?: { limit?: number }) =>
+    invokeWithTimeout<unknown[]>('ai:chatSessions:list', args),
+  createAiChatSession: (args?: { title?: string }) =>
+    invokeWithTimeout<unknown>('ai:chatSession:create', args),
+  deleteAiChatSession: (sessionId: string) =>
+    invokeWithTimeout<void>('ai:chatSession:delete', sessionId),
+  listAiChatMessages: (args: { sessionId: string; limit?: number }) =>
+    invokeWithTimeout<unknown[]>('ai:chatMessages:list', args),
 
   // Phase 4 — Study Plans
   getPlanActive: () => invokeWithTimeout<unknown | null>('plan:getActive'),

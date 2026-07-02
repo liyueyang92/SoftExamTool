@@ -256,4 +256,46 @@ CREATE TABLE IF NOT EXISTS backup_records (
 CREATE INDEX IF NOT EXISTS idx_backup_created ON backup_records(created_at);
 `,
   },
+  {
+    version: 6,
+    sql: `
+CREATE TABLE IF NOT EXISTS ai_chat_messages (
+  id         TEXT PRIMARY KEY,
+  role       TEXT NOT NULL CHECK(role IN ('user','assistant')),
+  content    TEXT NOT NULL,
+  sources    TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_chat_created ON ai_chat_messages(created_at);
+`,
+  },
+  {
+    version: 7,
+    sql: `
+CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL DEFAULT 'New Chat',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+ALTER TABLE ai_chat_messages ADD COLUMN session_id TEXT;
+
+INSERT OR IGNORE INTO ai_chat_sessions (id, title)
+SELECT 'legacy-default-session', 'Imported History'
+WHERE EXISTS (
+  SELECT 1
+  FROM ai_chat_messages
+  WHERE session_id IS NULL OR session_id = ''
+);
+
+UPDATE ai_chat_messages
+SET session_id = 'legacy-default-session'
+WHERE session_id IS NULL OR session_id = '';
+
+CREATE INDEX IF NOT EXISTS idx_ai_chat_session_id ON ai_chat_messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_updated ON ai_chat_sessions(updated_at DESC);
+`,
+  },
 ]
