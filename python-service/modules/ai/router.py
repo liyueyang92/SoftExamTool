@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
-from modules.ai.providers import build_provider
+from modules.ai.providers import AIProviderError, build_provider
 
 router = APIRouter(prefix='/ai', tags=['ai'])
 
@@ -94,6 +94,14 @@ class TestConnectionRequest(BaseModel):
     ai_config: dict
 
 
+def _status_code_for_ai_error(exc: Exception) -> int:
+    if isinstance(exc, AIProviderError) and exc.status_code:
+        if 400 <= exc.status_code < 500:
+            return exc.status_code
+        return 502
+    return 500
+
+
 @router.post('/generate-questions')
 async def generate_questions(req: GenerateRequest):
     provider = build_provider(req.ai_config)
@@ -112,23 +120,19 @@ async def generate_questions(req: GenerateRequest):
 
     user_msg = f'请生成{type_summary}，共{req.count}题。{tag_hint} {diff_hint}{context_hint}'
 
-    last_error = None
-    for attempt in range(3):
-        try:
-            raw = await provider.chat([
-                {'role': 'system', 'content': GENERATE_SYSTEM_PROMPT},
-                {'role': 'user', 'content': user_msg},
-            ])
-            result = extract_json(raw)
-            questions = result.get('questions', [])
-            if not questions:
-                raise ValueError('No questions in response')
-            return {'questions': questions}
-        except Exception as e:
-            last_error = e
-            logger.warning('Question generation attempt {} failed: {}', attempt + 1, e)
-
-    raise HTTPException(status_code=500, detail=f'AI 出题失败（重试3次）: {last_error}')
+    try:
+        raw = await provider.chat([
+            {'role': 'system', 'content': GENERATE_SYSTEM_PROMPT},
+            {'role': 'user', 'content': user_msg},
+        ])
+        result = extract_json(raw)
+        questions = result.get('questions', [])
+        if not questions:
+            raise ValueError('No questions in response')
+        return {'questions': questions}
+    except Exception as e:
+        logger.warning('Question generation failed: {}', e)
+        raise HTTPException(status_code=_status_code_for_ai_error(e), detail=f'AI 出题失败: {e}')
 
 
 @router.post('/grade-essay')

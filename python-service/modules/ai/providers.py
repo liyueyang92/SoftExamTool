@@ -3,6 +3,13 @@ import httpx
 from loguru import logger
 
 
+class AIProviderError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None, retriable: bool = False):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retriable = retriable
+
+
 @runtime_checkable
 class AIProvider(Protocol):
     async def chat(self, messages: list[dict], temperature: float = 0.7) -> str: ...
@@ -46,11 +53,15 @@ def _extract_error_detail(resp: httpx.Response) -> str:
 def _build_http_error(context: str, resp: httpx.Response) -> RuntimeError:
     detail = _extract_error_detail(resp)
     suffix = f': {detail}' if detail else ''
-    return RuntimeError(f'{context} failed with HTTP {resp.status_code}{suffix}')
+    return AIProviderError(
+        f'{context} failed with HTTP {resp.status_code}{suffix}',
+        status_code=resp.status_code,
+        retriable=resp.status_code == 429 or resp.status_code >= 500,
+    )
 
 
 def _build_request_error(context: str, exc: httpx.HTTPError) -> RuntimeError:
-    return RuntimeError(f'{context} failed: {exc}')
+    return AIProviderError(f'{context} failed: {exc}', retriable=True)
 
 
 def _extract_openai_text(payload: dict[str, Any]) -> str:
@@ -107,6 +118,7 @@ class OpenAICompatProvider:
             return _extract_openai_text(resp.json())
 
     async def test_connection(self) -> str:
+        model_warning = ''
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 resp = await client.get(self._url('/models'), headers=self.headers)
@@ -126,8 +138,7 @@ class OpenAICompatProvider:
                 ]
                 if model_ids and self.model not in model_ids:
                     logger.warning('Configured model {} not found in provider model list', self.model)
-                    return f'Connected, but model "{self.model}" was not returned by /models'
-                return f'Connected to {self.model}'
+                    model_warning = f'Model "{self.model}" was not returned by /models'
 
         reply = await self.chat(
             [{'role': 'user', 'content': 'Reply with OK only.'}],
@@ -135,6 +146,8 @@ class OpenAICompatProvider:
         )
         if not reply.strip():
             raise RuntimeError('OpenAI-compatible chat probe returned an empty reply')
+        if model_warning:
+            return f'Connected to {self.model}, but {model_warning}'
         return f'Connected to {self.model}'
 
 

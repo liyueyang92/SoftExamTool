@@ -293,8 +293,8 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
             v-model="chatInput"
             class="chat-input"
             rows="2"
-            placeholder="输入问题后按 Ctrl+Enter 发送…"
-            @keydown.ctrl.enter.prevent="sendChat"
+            placeholder="按 Enter 发送，Shift+Enter 换行"
+            @keydown.enter.exact.prevent="sendChat"
           ></textarea>
           <button class="send-btn" @click="sendChat" :disabled="chatLoading || !chatInput.trim()">
             {{ chatLoading ? '…' : '发送' }}

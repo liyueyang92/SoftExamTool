@@ -453,13 +453,11 @@ function registerIpcHandlers(): void {
 
   // Phase 3 - AI config
   registerHandler(IPC.AI_GET_CONFIG, async () => {
-    const cfg = { ...aiConfig } as Record<string, Record<string, unknown>>
-    const hasOpenAIKey = !!(cfg.openai?.encryptedApiKey || cfg.openai?.apiKey)
-    const hasAnthropicKey = !!(cfg.anthropic?.encryptedApiKey || cfg.anthropic?.apiKey)
+    const cfg = buildProviderConfig() as Record<string, Record<string, unknown>>
     return {
       ...cfg,
-      openai: { ...cfg.openai, apiKey: hasOpenAIKey ? MASKED_SECRET : '', encryptedApiKey: undefined },
-      anthropic: { ...cfg.anthropic, apiKey: hasAnthropicKey ? MASKED_SECRET : '', encryptedApiKey: undefined },
+      openai: { ...cfg.openai, encryptedApiKey: undefined },
+      anthropic: { ...cfg.anthropic, encryptedApiKey: undefined },
     }
   })
 

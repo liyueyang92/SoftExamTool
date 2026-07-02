@@ -203,6 +203,28 @@ function clearChunkSearch() {
   chunkViewError.value = ''
 }
 
+function escapeHtml(text: string) {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function highlightText(text: string) {
+  const query = chunkSearchQuery.value.trim()
+  const escapedText = escapeHtml(text)
+  if (!query) return escapedText
+
+  const pattern = new RegExp(`(${escapeRegExp(query)})`, 'gi')
+  return escapedText.replace(pattern, '<mark class="chunk-highlight">$1</mark>')
+}
+
 async function jumpToPage() {
   chunkViewError.value = ''
   const page = Number(pageJumpInput.value)
@@ -319,10 +341,15 @@ function formatDate(iso: string) {
                 <div class="chunk-toggle">{{ isChunkExpanded(chunk.id) ? '收起' : '展开' }}</div>
               </div>
               <div class="chunk-content" :class="{ collapsed: !isChunkExpanded(chunk.id) }">
-                {{ chunk.content }}
+                <span v-html="highlightText(chunk.content)"></span>
               </div>
               <div class="chunk-tags">
-                <span v-for="tag in chunk.knowledge_tags" :key="tag" class="tag">{{ tag }}</span>
+                <span
+                  v-for="tag in chunk.knowledge_tags"
+                  :key="tag"
+                  class="tag"
+                  v-html="highlightText(tag)"
+                ></span>
               </div>
             </div>
           </div>
@@ -581,6 +608,12 @@ function formatDate(iso: string) {
   border-radius: 4px;
   padding: 1px 6px;
   font-size: 11px;
+}
+:deep(.chunk-highlight) {
+  background: #fde68a;
+  color: #1f2937;
+  padding: 0 2px;
+  border-radius: 3px;
 }
 .empty-tip { text-align: center; padding: 48px; color: var(--c-border-2); font-size: 13px; }
 .chunk-empty { height: 100%; display: flex; align-items: center; justify-content: center; }

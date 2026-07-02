@@ -10,6 +10,8 @@ const appStore = useAppStore()
 
 const apiKeyInput = ref('')
 const anthropicKeyInput = ref('')
+const showOpenAiKey = ref(false)
+const showAnthropicKey = ref(false)
 const saveMsg = ref('')
 const saveErr = ref('')
 const saving = ref(false)
@@ -183,10 +185,21 @@ function formatDt(iso: string) {
         </div>
         <div class="form-row">
           <label>API Key</label>
-          <input v-model="apiKeyInput" class="text-input" type="password" placeholder="sk-…" autocomplete="off" />
+          <div class="secret-input-row">
+            <input
+              v-model="apiKeyInput"
+              class="text-input"
+              :type="showOpenAiKey ? 'text' : 'password'"
+              placeholder="sk-..."
+              autocomplete="off"
+            />
+            <button class="btn-outline secret-toggle" type="button" @click="showOpenAiKey = !showOpenAiKey">
+              {{ showOpenAiKey ? 'Hide' : 'Show' }}
+            </button>
+          </div>
         </div>
         <div class="form-row">
-          <label>模型</label>
+          <label>Model</label>
           <input v-model="ai.config.openai.model" class="text-input" placeholder="gpt-4o-mini" />
         </div>
       </div>
@@ -194,14 +207,26 @@ function formatDt(iso: string) {
       <div v-if="ai.config.mode === 'anthropic'" class="sub-section">
         <div class="form-row">
           <label>API Key</label>
-          <input v-model="anthropicKeyInput" class="text-input" type="password" placeholder="sk-ant-…" autocomplete="off" />
+          <div class="secret-input-row">
+            <input
+              v-model="anthropicKeyInput"
+              class="text-input"
+              :type="showAnthropicKey ? 'text' : 'password'"
+              placeholder="sk-ant-..."
+              autocomplete="off"
+            />
+            <button class="btn-outline secret-toggle" type="button" @click="showAnthropicKey = !showAnthropicKey">
+              {{ showAnthropicKey ? 'Hide' : 'Show' }}
+            </button>
+          </div>
         </div>
         <div class="form-row">
-          <label>模型</label>
+          <label>Model</label>
           <input v-model="ai.config.anthropic.model" class="text-input" placeholder="claude-sonnet-4-6" />
         </div>
-        <div class="form-hint">使用 Anthropic 官方 API（api.anthropic.com）</div>
+        <div class="form-hint">Use the Anthropic official API: api.anthropic.com</div>
       </div>
+
 
       <div v-if="ai.config.mode === 'ollama'" class="sub-section">
         <div class="form-row">
@@ -329,8 +354,10 @@ function formatDt(iso: string) {
 .sub-section { background: var(--c-bg); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; transition: background-color 0.2s; }
 .form-row { display: flex; align-items: center; gap: 10px; }
 .form-row label { min-width: 70px; font-size: 13px; color: var(--c-text-2); flex-shrink: 0; }
+.secret-input-row { display: flex; align-items: center; gap: 8px; flex: 1; }
 .text-input { flex: 1; background: var(--c-input); border: 1px solid var(--c-input-border); border-radius: 6px; color: var(--c-text); padding: 7px 10px; font-size: 13px; transition: background-color 0.2s, border-color 0.2s, color 0.2s; }
 .text-input:focus { outline: none; border-color: var(--c-brand); }
+.secret-toggle { padding: 7px 12px; flex-shrink: 0; }
 
 .form-hint { font-size: 11px; color: var(--c-text-3); padding-top: 2px; }
 .action-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
