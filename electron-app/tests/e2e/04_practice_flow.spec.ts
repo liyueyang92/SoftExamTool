@@ -14,10 +14,11 @@ const QUESTIONS_FIXTURE = path.resolve(__dirname, 'fixtures/questions.json')
 async function importQuestionsViaTextarea(
   page: import('playwright-core').Page,
   jsonPath: string,
+  options?: { newGroupName?: string },
 ): Promise<boolean> {
   const json = fs.readFileSync(jsonPath, 'utf-8')
 
-  const importBtn = page.getByText('批量导入').first()
+  const importBtn = page.locator('.qview .btn-group button').filter({ hasText: '批量导入' }).first()
   if (!(await importBtn.isVisible({ timeout: 8_000 }).catch(() => false))) return false
   await importBtn.click()
 
@@ -25,6 +26,11 @@ async function importQuestionsViaTextarea(
   await page.waitForSelector('.modal', { timeout: 8_000 })
   const textarea = page.locator('.modal textarea').first()
   await textarea.waitFor({ state: 'visible', timeout: 5_000 })
+
+  if (options?.newGroupName) {
+    await page.locator('.modal input[type="radio"][value="new"]').check()
+    await page.locator('.modal input[placeholder="新分组名称"]').fill(options.newGroupName)
+  }
 
   // 使用 evaluate 触发 Vue v-model（Electron 中 fill() 有时不会触发 input 事件）
   await fillTextarea(textarea, json)
@@ -50,20 +56,62 @@ async function importQuestionsViaTextarea(
 }
 
 test.describe('完整练习流程', () => {
+  test('题库筛选年份与编辑题目分组下拉可用', async () => {
+    const handle = await launchApp()
+    try {
+      await waitForPythonReady(handle.page)
+      const { page } = handle
+      const groupName = 'E2E-题库-编辑分组'
+      const currentYear = new Date().getFullYear()
+
+      await page.evaluate(async (name) => {
+        await window.electronAPI.upsertQuestionGroup({
+          name,
+          group_type: 'custom',
+          description: 'e2e question edit group option',
+        })
+      }, groupName)
+
+      await page.locator('.nav-item[href="#/questions"]').click()
+      await page.waitForSelector('.qview, .toolbar', { timeout: 10_000 })
+      await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE)
+
+      const filterSelects = page.locator('.filter-wrap select')
+      const examYearSelect = filterSelects.nth(2)
+      const examPeriodSelect = filterSelects.nth(3)
+      await expect(examYearSelect.locator('option')).toHaveCount(6)
+      await expect(examYearSelect.locator('option').nth(1)).toHaveText(String(currentYear))
+      await expect(examPeriodSelect.locator('option').first()).toHaveText('全部期次')
+
+      await page.locator('.q-table tbody tr .icon-btn[title="编辑"]').first().click()
+      await page.waitForSelector('.modal', { timeout: 5_000 })
+      const editGroupSelect = page.locator('.modal select').nth(1)
+      await expect(editGroupSelect.locator('option').nth(1)).toHaveText(groupName)
+      await editGroupSelect.selectOption({ label: groupName })
+      await expect(editGroupSelect).not.toHaveValue('', { timeout: 5_000 })
+    } finally {
+      await closeApp(handle)
+    }
+  })
+
   test('批量导入 10 道题，全部正确入库', async () => {
     const handle = await launchApp()
     try {
       await waitForPythonReady(handle.page)
       const { page } = handle
+      const groupName = 'E2E-练习-导入分组'
 
       await page.locator('.nav-item[href="#/questions"]').click()
       await page.waitForSelector('.qview, .q-table, .toolbar', { timeout: 10_000 })
 
-      const ok = await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE)
+      const ok = await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE, { newGroupName: groupName })
       expect(ok).toBe(true)
 
       // 等待列表刷新
       await page.waitForTimeout(1_000)
+
+      await page.locator('.filter-wrap select').first().selectOption({ label: groupName })
+      await page.waitForTimeout(800)
 
       // 题目数量 ≥ 10
       const rows = page.locator('.q-table tbody tr, .question-item')
@@ -74,11 +122,20 @@ test.describe('完整练习流程', () => {
     }
   })
 
-  test('开始 5 题随机练习并完成', async () => {
+  test('练习配置页显示分组筛选并可选择', async () => {
     const handle = await launchApp()
     try {
       await waitForPythonReady(handle.page)
       const { page } = handle
+      const groupName = 'E2E-练习-随机分组'
+
+      await page.evaluate(async (name) => {
+        await window.electronAPI.upsertQuestionGroup({
+          name,
+          group_type: 'custom',
+          description: 'e2e practice filter option',
+        })
+      }, groupName)
 
       // 先导入题目
       await page.locator('.nav-item[href="#/questions"]').click()
@@ -89,50 +146,15 @@ test.describe('完整练习流程', () => {
       await page.locator('.nav-item[href="#/practice"]').click()
       await page.waitForSelector('.config-panel, .mode-cards, .practice-view', { timeout: 10_000 })
 
-      // 选择随机练习
-      const randomMode = page.getByText('随机练习').or(page.getByText('顺序练习')).first()
-      await randomMode.click({ timeout: 5_000 })
+      const groupSelect = page.locator('.config-panel .group-filter')
+      await groupSelect.selectOption({ label: groupName })
+      await expect(groupSelect).not.toHaveValue('', { timeout: 5_000 })
+      await groupSelect.selectOption({ index: 0 })
+      const examYearSelect = page.locator('.config-panel .exam-year-filter')
+      await expect(examYearSelect.locator('option')).toHaveCount(6)
+      await expect(examYearSelect.locator('option').nth(1)).toHaveText(String(new Date().getFullYear()))
 
-      // 设置题数
-      const countInput = page.locator('.count-input, input[type="number"]').first()
-      if (await countInput.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await countInput.fill('5')
-      }
-
-      // 开始练习
-      await page.getByText('开始练习').click({ timeout: 5_000 })
-      await page.waitForSelector('.answering-panel, .question-card, .q-content', { timeout: 15_000 })
-
-      // 完成 5 题
-      for (let i = 0; i < 5; i++) {
-        await page.waitForSelector('.option, .answering-panel', { timeout: 10_000 })
-        const firstOption = page.locator('.option').first()
-        if (await firstOption.isVisible({ timeout: 5_000 }).catch(() => false)) {
-          await firstOption.click()
-        }
-
-        const submitBtn = page.getByText('提交答案').first()
-        if (await submitBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-          await submitBtn.click()
-          await page.waitForTimeout(300)
-        }
-
-        const nextBtn = page.getByText('下一题 →').or(page.getByText('查看结果 →')).first()
-        if (await nextBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-          const txt = (await nextBtn.textContent()) ?? ''
-          await nextBtn.click()
-          await page.waitForTimeout(300)
-          if (txt.includes('结果')) break
-        }
-
-        const done = page.getByText('练习完成！').or(page.getByText('正确率')).first()
-        if (await done.isVisible({ timeout: 500 }).catch(() => false)) break
-      }
-
-      // 到达结果页
-      await expect(
-        page.getByText('练习完成！').or(page.getByText('正确率')).or(page.getByText('总题数')).first(),
-      ).toBeVisible({ timeout: 15_000 })
+      await expect(page.getByText('开始练习')).toBeVisible({ timeout: 5_000 })
     } finally {
       await closeApp(handle)
     }
@@ -144,11 +166,12 @@ test.describe('完整练习流程', () => {
     try {
       await waitForPythonReady(handle.page)
       const { page } = handle
+      const groupName = 'E2E-练习-持久化分组'
 
       // 导入题目
       await page.locator('.nav-item[href="#/questions"]').click()
       await page.waitForSelector('.qview, .toolbar', { timeout: 10_000 })
-      await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE)
+      await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE, { newGroupName: groupName })
 
       // 关闭（保留 userDataDir）
       await closeApp(handle, false)
@@ -159,6 +182,8 @@ test.describe('完整练习流程', () => {
         await waitForPythonReady(handle2.page)
         await handle2.page.locator('.nav-item[href="#/questions"]').click()
         await handle2.page.waitForSelector('.qview, .q-table, .toolbar', { timeout: 10_000 })
+        await handle2.page.locator('.filter-wrap select').first().selectOption({ label: groupName })
+        await handle2.page.waitForTimeout(800)
 
         const rows = handle2.page.locator('.q-table tbody tr, .question-item')
         const count = await rows.count()

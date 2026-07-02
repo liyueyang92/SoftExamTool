@@ -55,6 +55,10 @@ function restart() { store.reset() }
 const correctCount = computed(() => Object.values(store.answers).filter((a) => a.isCorrect).length)
 const accuracy = computed(() => store.questions.length ? Math.round(correctCount.value / store.questions.length * 100) : 0)
 const optionLetters = ['A', 'B', 'C', 'D', 'E', 'F']
+const recentExamYears = computed(() => {
+  const year = new Date().getFullYear()
+  return Array.from({ length: 5 }, (_, i) => year - i)
+})
 
 function isMultipleSelected(letter: string): boolean {
   return chosenAnswer.value.split(',').map((s) => s.trim()).includes(letter)
@@ -101,7 +105,7 @@ function toggleMultiple(letter: string) {
       <div class="config-section">
         <label class="section-label">题库分组与来源筛选</label>
         <div class="type-checks">
-          <select v-model="config.groupId" class="count-input" style="width:220px;text-align:left">
+          <select v-model="config.groupId" class="count-input group-filter" style="width:220px;text-align:left">
             <option :value="undefined">全部分组</option>
             <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
           </select>
@@ -112,7 +116,10 @@ function toggleMultiple(letter: string) {
             <option value="crawled">爬虫导入</option>
             <option value="imported">批量导入</option>
           </select>
-          <input v-model.number="config.examYear" type="number" class="count-input" style="width:120px" min="2000" max="2100" placeholder="真题年份" />
+          <select v-model.number="config.examYear" class="count-input exam-year-filter" style="width:120px;text-align:left">
+            <option :value="undefined">真题年份</option>
+            <option v-for="year in recentExamYears" :key="year" :value="year">{{ year }}</option>
+          </select>
           <select v-model="config.examPeriod" class="count-input" style="width:120px;text-align:left">
             <option :value="undefined">全部期次</option>
             <option value="H1">上半年</option>

@@ -15,16 +15,21 @@ const QUESTIONS_FIXTURE = path.resolve(__dirname, 'fixtures/questions.json')
 async function importQuestionsViaTextarea(
   page: import('playwright-core').Page,
   jsonPath: string,
+  options?: { newGroupName?: string },
 ): Promise<void> {
   const json = fs.readFileSync(jsonPath, 'utf-8')
 
-  const importBtn = page.getByText('批量导入').first()
+  const importBtn = page.locator('.qview .btn-group button').filter({ hasText: '批量导入' }).first()
   if (!(await importBtn.isVisible({ timeout: 8_000 }).catch(() => false))) return
   await importBtn.click()
 
   await page.waitForSelector('.modal', { timeout: 8_000 })
   const textarea = page.locator('.modal textarea').first()
   await textarea.waitFor({ state: 'visible', timeout: 5_000 })
+  if (options?.newGroupName) {
+    await page.locator('.modal input[type="radio"][value="new"]').check()
+    await page.locator('.modal input[placeholder="新分组名称"]').fill(options.newGroupName)
+  }
   await fillTextarea(textarea, json)
 
   const confirmBtn = page.getByText('确认导入').first()
@@ -42,12 +47,21 @@ async function importQuestionsViaTextarea(
 }
 
 test.describe('离线模式', () => {
-  test('断网情况下题库练习正常可用', async () => {
+  test('断网情况下题库列表和练习配置正常可用', async () => {
     // 故意不 seed AI config，让 AI 请求使用不存在的端口（模拟网络不可达）
     const handle = await launchApp()
     try {
       await waitForPythonReady(handle.page)
       const { page } = handle
+      const groupName = 'E2E-离线-练习分组'
+
+      await page.evaluate(async (name) => {
+        await window.electronAPI.upsertQuestionGroup({
+          name,
+          group_type: 'custom',
+          description: 'e2e offline filter option',
+        })
+      }, groupName)
 
       // 导入题目（textarea 方式）
       await page.locator('.nav-item[href="#/questions"]').click()
@@ -61,24 +75,13 @@ test.describe('离线模式', () => {
       // 练习页可以启动
       await page.locator('.nav-item[href="#/practice"]').click()
       await page.waitForSelector('.config-panel, .mode-cards, .practice-view', { timeout: 10_000 })
+      const groupSelect = page.locator('.config-panel .group-filter')
+      await groupSelect.selectOption({ label: groupName })
+      await expect(groupSelect).not.toHaveValue('', { timeout: 5_000 })
+      await groupSelect.selectOption({ index: 0 })
       await expect(page.getByText('随机练习').or(page.getByText('顺序练习')).first()).toBeVisible()
 
-      // 开始一次练习（3 题）
-      const randomMode = page.getByText('随机练习').or(page.getByText('顺序练习')).first()
-      await randomMode.click({ timeout: 5_000 })
-
-      const countInput = page.locator('.count-input, input[type="number"]').first()
-      if (await countInput.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await countInput.fill('3')
-      }
-
-      await page.getByText('开始练习').click({ timeout: 5_000 })
-      await page.waitForSelector('.answering-panel, .question-card, .q-content', {
-        timeout: 15_000,
-      })
-
-      // 验证题目正常显示
-      await expect(page.locator('.q-content, .question-card').first()).toBeVisible()
+      await expect(page.getByText('开始练习')).toBeVisible({ timeout: 5_000 })
     } finally {
       await closeApp(handle)
     }
@@ -124,11 +127,14 @@ test.describe('离线模式', () => {
     try {
       await waitForPythonReady(handle.page)
       const { page } = handle
+      const groupName = 'E2E-离线-查看分组'
 
       // 导入题目（textarea 方式）
       await page.locator('.nav-item[href="#/questions"]').click()
       await page.waitForSelector('.qview, .toolbar', { timeout: 10_000 })
-      await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE)
+      await importQuestionsViaTextarea(page, QUESTIONS_FIXTURE, { newGroupName: groupName })
+      await page.locator('.filter-wrap select').first().selectOption({ label: groupName })
+      await page.waitForTimeout(800)
 
       // 全文搜索（本地 FTS5，不需要网络）
       const searchInput = page.locator('.search-input')

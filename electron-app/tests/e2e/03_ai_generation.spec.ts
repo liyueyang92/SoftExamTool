@@ -58,58 +58,37 @@ test.describe('AI 智能出题（mock）', () => {
     try {
       await waitForPythonReady(handle.page)
       const { page } = handle
+      const groupName = 'E2E-AI-分组'
 
-      // 导航到题库页，尝试寻找 AI 出题入口
+      await page.locator('.nav-item[href="#/ai"]').click()
+      await page.waitForSelector('.ai-view, .gen-config, .gen-results', { timeout: 10_000 })
+
+      const countInput = page.locator('.gen-config input[type="number"]').first()
+      await countInput.fill('5')
+
+      await page.locator('.gen-config input[type="radio"][value="new"]').check()
+      await page.locator('.gen-config input[placeholder*="AI 模拟卷"]').fill(groupName)
+
+      const generateBtn = page.getByText('开始出题').first()
+      await generateBtn.click()
+
+      await page.waitForSelector('.result-card', { timeout: 30_000 })
+      await expect(page.locator('.result-card')).toHaveCount(5, { timeout: 30_000 })
+
+      const saveBtn = page.getByText('全部保存到题库').first()
+      await expect(saveBtn).toBeVisible({ timeout: 5_000 })
+      await saveBtn.click()
+      await expect(page.getByText('已保存').first()).toBeVisible({ timeout: 15_000 })
+
       await page.locator('.nav-item[href="#/questions"]').click()
-      await page.waitForSelector('.q-table, .qview, .toolbar', { timeout: 10_000 })
+      await page.waitForSelector('.qview, .q-table, .toolbar', { timeout: 10_000 })
+      await page.locator('.filter-wrap select').first().selectOption({ label: groupName })
+      await page.waitForTimeout(800)
 
-      const aiBtn = page
-        .getByText('AI 出题')
-        .or(page.getByText('智能出题'))
-        .or(page.getByText('AI生成'))
-        .first()
-
-      if (!(await aiBtn.isVisible({ timeout: 5_000 }).catch(() => false))) {
-        // 尝试 AI 助手页面
-        await page.locator('.nav-item[href="#/ai"]').click()
-        await page.waitForSelector('.ai-view, .chat-panel, input, textarea', { timeout: 8_000 })
-      }
-
-      // AI 助手页：发送出题指令
-      const inputEl = page.locator('input[type="text"], textarea').last()
-      if (await inputEl.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await inputEl.fill('请生成 5 道软件架构单选题')
-        await page.keyboard.press('Enter')
-        // 等待 mock 响应（mock 服务器立即返回）
-        await page.waitForTimeout(5_000)
-      } else if (await aiBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await aiBtn.click()
-        const countInput = page.locator('input[type="number"], .count-input').first()
-        if (await countInput.isVisible({ timeout: 3_000 }).catch(() => false)) {
-          await countInput.fill('5')
-        }
-        const generateBtn = page
-          .getByText('开始出题')
-          .or(page.getByText('生成'))
-          .or(page.getByText('开始生成'))
-          .first()
-        await generateBtn.click({ timeout: 5_000 }).catch(() => {})
-        // Wait for AI to complete (mock server responds in < 1 s, allow up to 30 s for Python relay)
-        await page
-          .waitForSelector('.result-card, .error-text, .gen-results', { timeout: 30_000 })
-          .catch(() => {})
-      }
-
-      // 验证：无实质性错误消息（仅检查有内容的 .error-msg 元素，不匹配空状态容器）
-      const errorEls = page.locator('.error-msg')
-      const errorCount = await errorEls.count()
-      for (let i = 0; i < errorCount; i++) {
-        const txt = (await errorEls.nth(i).textContent()) ?? ''
-        expect(txt.trim()).toBeFalsy()
-      }
-
-      // 页面不应崩溃
-      await expect(page.locator('body')).toBeVisible()
+      const rows = page.locator('.q-table tbody tr')
+      await expect(rows.first()).toBeVisible({ timeout: 10_000 })
+      expect(await rows.count()).toBeGreaterThanOrEqual(5)
+      await expect(page.locator('.q-table tbody tr td').filter({ hasText: groupName }).first()).toBeVisible()
     } finally {
       await closeApp(handle)
     }

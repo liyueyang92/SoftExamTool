@@ -155,9 +155,11 @@ export const useQuestionStore = defineStore('question', () => {
   }
 
   async function update(id: string, changes: Partial<Question>) {
-    await window.electronAPI.updateQuestion(toIpcPayload({ id, changes }))
+    const res = await window.electronAPI.updateQuestion(toIpcPayload({ id, changes }))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
     const idx = questions.value.findIndex((q) => q.id === id)
     if (idx >= 0) questions.value[idx] = { ...questions.value[idx], ...changes }
+    if (changes.group_id !== undefined) await fetchPage()
   }
 
   async function remove(id: string) {

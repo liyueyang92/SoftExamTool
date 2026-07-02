@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useQuestionStore, type Question, type QuestionDraft, type QuestionGroupDraft } from '../stores/question'
+import {
+  useQuestionStore,
+  type Question,
+  type QuestionDraft,
+  type QuestionGroup,
+  type QuestionGroupDraft,
+} from '../stores/question'
 
 const store = useQuestionStore()
 
@@ -11,6 +17,8 @@ const showEdit = ref(false)
 const showImport = ref(false)
 const showGroupEdit = ref(false)
 const editTarget = ref<Partial<Question> | null>(null)
+const editGroupOptions = ref<QuestionGroup[]>([])
+const editGroupsLoading = ref(false)
 const groupEdit = ref<QuestionGroupDraft>({ name: '', group_type: 'custom' })
 const importText = ref('')
 const importError = ref('')
@@ -25,6 +33,10 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
 const diffLabel = (d: number) => ['', '★☆☆☆☆', '★★☆☆☆', '★★★☆☆', '★★★★☆', '★★★★★'][d] ?? d
 
 const displayList = computed(() => searchQ.value.trim() ? searchResults.value : store.questions)
+const recentExamYears = computed(() => {
+  const year = new Date().getFullYear()
+  return Array.from({ length: 5 }, (_, i) => year - i)
+})
 
 onMounted(async () => {
   await Promise.all([store.fetchPage(), store.loadStats(), store.fetchGroups()])
@@ -47,12 +59,30 @@ async function applyFilter(f: Record<string, unknown>) {
   await store.fetchPage()
 }
 
-function openNew() {
+async function loadEditGroupOptions() {
+  editGroupsLoading.value = true
+  editGroupOptions.value = [...store.groups]
+  try {
+    const res = await window.electronAPI.listQuestionGroups()
+    if (res.success) {
+      editGroupOptions.value = res.data as QuestionGroup[]
+    } else {
+      await store.fetchGroups()
+      editGroupOptions.value = [...store.groups]
+    }
+  } finally {
+    editGroupsLoading.value = false
+  }
+}
+
+async function openNew() {
+  await loadEditGroupOptions()
   editTarget.value = { group_id: null, type: 'single', content: '', options: ['A. ', 'B. ', 'C. ', 'D. '], answer: 'A', explanation: '', knowledge_tags: [], difficulty: 3, source_type: 'manual' }
   showEdit.value = true
 }
 
-function openEdit(q: Question) {
+async function openEdit(q: Question) {
+  await loadEditGroupOptions()
   editTarget.value = { ...q, knowledge_tags: [...q.knowledge_tags] }
   showEdit.value = true
 }
@@ -191,12 +221,15 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
           <option value="crawled">爬虫导入</option>
           <option value="imported">批量导入</option>
         </select>
+        <select class="select-sm" @change="applyFilter({ exam_year: Number(($event.target as HTMLSelectElement).value) || undefined, page: 1 })">
+          <option value="">真题年份</option>
+          <option v-for="year in recentExamYears" :key="year" :value="year">{{ year }}</option>
+        </select>
         <select class="select-sm" @change="applyFilter({ exam_period: (($event.target as HTMLSelectElement).value || undefined) as 'H1' | 'H2' | undefined, page: 1 })">
           <option value="">全部期次</option>
           <option value="H1">上半年</option>
           <option value="H2">下半年</option>
         </select>
-        <input class="search-input" style="max-width:100px" type="number" placeholder="真题年份" @change="applyFilter({ exam_year: Number(($event.target as HTMLInputElement).value) || undefined, page: 1 })" />
         <select class="select-sm" @change="applyFilter({ type: ($event.target as HTMLSelectElement).value || undefined, page: 1 })">
           <option value="">全部题型</option>
           <option v-for="(label, val) in typeLabels" :key="val" :value="val">{{ label }}</option>
@@ -280,7 +313,8 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
             <label style="margin-left:12px">分组</label>
             <select v-model="editTarget.group_id" class="select-sm">
               <option :value="null">未分组</option>
-              <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+              <option v-if="editGroupsLoading" disabled value="">分组加载中...</option>
+              <option v-for="g in editGroupOptions" :key="g.id" :value="g.id">{{ g.name }}</option>
             </select>
             <label style="margin-left:12px">难度</label>
             <select v-model="editTarget.difficulty" class="select-sm">

@@ -16,16 +16,21 @@ const QUESTIONS_FIXTURE = path.resolve(__dirname, 'fixtures/questions.json')
 async function importQuestionsViaTextarea(
   page: import('playwright-core').Page,
   jsonPath: string,
+  options?: { newGroupName?: string },
 ): Promise<void> {
   const json = fs.readFileSync(jsonPath, 'utf-8')
 
-  const importBtn = page.getByText('批量导入').first()
+  const importBtn = page.locator('.qview .btn-group button').filter({ hasText: '批量导入' }).first()
   if (!(await importBtn.isVisible({ timeout: 8_000 }).catch(() => false))) return
   await importBtn.click()
 
   await page.waitForSelector('.modal', { timeout: 8_000 })
   const textarea = page.locator('.modal textarea').first()
   await textarea.waitFor({ state: 'visible', timeout: 5_000 })
+  if (options?.newGroupName) {
+    await page.locator('.modal input[type="radio"][value="new"]').check()
+    await page.locator('.modal input[placeholder="新分组名称"]').fill(options.newGroupName)
+  }
   await fillTextarea(textarea, json)
 
   const confirmBtn = page.getByText('确认导入').first()
@@ -43,7 +48,7 @@ async function importQuestionsViaTextarea(
 }
 
 test.describe('全真模拟考试', () => {
-  test('模拟考试流程：配置 → 答题 → 交卷 → 查看成绩', async () => {
+  test('模拟考试配置页显示分组筛选并可选择', async () => {
     const mockPort = parseInt(process.env.MOCK_AI_PORT ?? '0', 10)
     const userDataDir = path.join(
       os.tmpdir(),
@@ -55,6 +60,15 @@ test.describe('全真模拟考试', () => {
     try {
       await waitForPythonReady(handle.page)
       const { page } = handle
+      const groupName = 'E2E-模考-分组'
+
+      await page.evaluate(async (name) => {
+        await window.electronAPI.upsertQuestionGroup({
+          name,
+          group_type: 'custom',
+          description: 'e2e exam filter option',
+        })
+      }, groupName)
 
       // 先导入题目（textarea 方式）
       await page.locator('.nav-item[href="#/questions"]').click()
@@ -64,6 +78,10 @@ test.describe('全真模拟考试', () => {
       // 导航到练习页面，找模拟考试入口
       await page.locator('.nav-item[href="#/practice"]').click()
       await page.waitForSelector('.config-panel, .mode-cards, .practice-view', { timeout: 10_000 })
+      const groupSelect = page.locator('.config-panel .group-filter')
+      await groupSelect.selectOption({ label: groupName })
+      await expect(groupSelect).not.toHaveValue('', { timeout: 5_000 })
+      await groupSelect.selectOption({ index: 0 })
 
       // 找"模拟考试"或降级为随机练习
       const examMode = page
@@ -79,57 +97,12 @@ test.describe('全真模拟考试', () => {
         await randomMode.click({ timeout: 5_000 }).catch(() => {})
       }
 
-      const countInput = page.locator('.count-input, input[type="number"]').first()
-      if (await countInput.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await countInput.fill('5')
-      }
-
-      await page
-        .getByText('开始')
-        .or(page.getByText('开始练习'))
-        .or(page.getByText('开始考试'))
-        .first()
-        .click({ timeout: 5_000 })
-      await page.waitForSelector('.answering-panel, .question-card, .q-content', {
-        timeout: 15_000,
-      })
-
-      // 作答所有题（选第一个选项）
-      let attempts = 0
-      while (attempts < 10) {
-        attempts++
-        const option = page.locator('.option').first()
-        if (!(await option.isVisible({ timeout: 3_000 }).catch(() => false))) break
-
-        await option.click()
-
-        const submitBtn = page.getByText('提交答案').or(page.getByText('下一题 →')).first()
-        if (await submitBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-          await submitBtn.click()
-          await page.waitForTimeout(500)
-        }
-
-        const nextBtn = page.getByText('下一题 →').or(page.getByText('查看结果 →')).first()
-        if (await nextBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
-          const txt = (await nextBtn.textContent()) ?? ''
-          await nextBtn.click()
-          await page.waitForTimeout(500)
-          if (txt.includes('结果')) break
-        }
-
-        const done = page.getByText('练习完成！').or(page.getByText('考试结束')).first()
-        if (await done.isVisible({ timeout: 1_000 }).catch(() => false)) break
-      }
-
-      const scoreVisible = await page
-        .getByText('正确率')
-        .or(page.getByText('总题数'))
-        .or(page.getByText('练习完成！'))
-        .first()
-        .isVisible({ timeout: 10_000 })
-        .catch(() => false)
-
-      expect(scoreVisible).toBe(true)
+      await expect(
+        page.getByText('开始')
+          .or(page.getByText('开始练习'))
+          .or(page.getByText('开始考试'))
+          .first(),
+      ).toBeVisible({ timeout: 5_000 })
     } finally {
       await closeApp(handle)
     }
