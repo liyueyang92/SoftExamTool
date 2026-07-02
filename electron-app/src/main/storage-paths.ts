@@ -91,6 +91,7 @@ export function getStoragePaths(): ResolvedStoragePaths {
 export function ensureStorageDirectories(paths = getStoragePaths()): void {
   mkdirSync(paths.dataRootDir, { recursive: true })
   mkdirSync(paths.documentLibraryDir, { recursive: true })
+  mkdirSync(paths.backupDir, { recursive: true })
 }
 
 export function getStoragePathConfig(): StoragePathConfig {

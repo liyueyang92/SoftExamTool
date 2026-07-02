@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import { randomUUID } from 'crypto'
 import { statSync, existsSync, unlinkSync } from 'fs'
-import { basename, join } from 'path'
+import { basename, isAbsolute, join, normalize, relative, resolve } from 'path'
 import { getStoragePaths } from '../storage-paths'
 
 export interface BackupRecord {
@@ -18,6 +18,11 @@ export function listBackups(db: Database.Database): BackupRecord[] {
 
 export function deleteBackupRecord(db: Database.Database, id: string): void {
   db.prepare('DELETE FROM backup_records WHERE id = ?').run(id)
+}
+
+function isPathInsideDirectory(filePath: string, dirPath: string): boolean {
+  const rel = relative(resolve(dirPath), resolve(filePath))
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }
 
 export function createBackup(
@@ -66,6 +71,28 @@ export function pruneOldBackups(db: Database.Database, keepCount = 7): void {
     } catch { /* non-critical */ }
     deleteBackupRecord(db, rec.id)
   }
+}
+
+export function remapManagedBackupPaths(
+  db: Database.Database,
+  fromDir: string,
+  toDir: string,
+): number {
+  const backups = listBackups(db)
+  const updateStmt = db.prepare('UPDATE backup_records SET file_path = ? WHERE id = ?')
+  let changed = 0
+
+  const updateAll = db.transaction(() => {
+    for (const rec of backups) {
+      if (!isPathInsideDirectory(rec.file_path, fromDir)) continue
+      const rel = relative(normalize(resolve(fromDir)), normalize(resolve(rec.file_path)))
+      updateStmt.run(resolve(toDir, rel), rec.id)
+      changed += 1
+    }
+  })
+  updateAll()
+
+  return changed
 }
 
 export function getDbPath(): string {

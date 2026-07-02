@@ -45,7 +45,7 @@ import {
 } from './db/ai-chat'
 import {
   listBackups, createBackup, deleteBackupRecord, shouldAutoBackup, pruneOldBackups,
-  getDefaultBackupDir
+  getDefaultBackupDir, remapManagedBackupPaths
 } from './db/backup'
 import {
   copyFileSync,
@@ -271,6 +271,10 @@ async function updateStoragePaths(args: {
   if (currentPaths.documentLibraryDir !== nextPaths.documentLibraryDir) {
     remapManagedDocumentPaths(db, currentPaths.documentLibraryDir, nextPaths.documentLibraryDir)
     copyDirectoryIfNeeded(currentPaths.documentLibraryDir, nextPaths.documentLibraryDir)
+  }
+  if (currentPaths.backupDir !== nextPaths.backupDir) {
+    remapManagedBackupPaths(db, currentPaths.backupDir, nextPaths.backupDir)
+    copyDirectoryIfNeeded(currentPaths.backupDir, nextPaths.backupDir)
   }
 
   writeJsonFile(nextPaths.aiConfigPath, aiConfig)
