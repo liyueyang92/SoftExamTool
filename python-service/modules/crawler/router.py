@@ -4,7 +4,17 @@ from fastapi import APIRouter, HTTPException
 from loguru import logger
 
 from modules.crawler.errors import CrawlerError
-from modules.crawler.schemas import RunCrawlRequest, RuntimeContext, TestCrawlRequest
+from modules.crawler.inspector.page_loader import load_page_snapshot
+from modules.crawler.inspector.preview import preview_extraction
+from modules.crawler.inspector.selector_generator import suggest_selectors
+from modules.crawler.schemas import (
+    InspectLoadRequest,
+    InspectPreviewRequest,
+    RunCrawlRequest,
+    RuntimeContext,
+    SuggestSelectorRequest,
+    TestCrawlRequest,
+)
 from modules.crawler.service import crawl
 from modules.progress import push_complete, push_error, push_progress
 
@@ -34,6 +44,53 @@ async def test_crawl(req: TestCrawlRequest):
 async def run_crawl(req: RunCrawlRequest):
     asyncio.create_task(_do_crawl(req))
     return {'started': True}
+
+
+@router.post('/inspect/load')
+async def inspect_load(req: InspectLoadRequest):
+    try:
+        result = await load_page_snapshot(req.rule, RuntimeContext(
+            account_alias=req.account_alias,
+            session_state=req.session_state,
+        ), req.url)
+        return result.model_dump()
+    except CrawlerError as exc:
+        raise HTTPException(
+            400,
+            {'code': exc.code, 'stage': exc.stage, 'message': str(exc)},
+        ) from exc
+
+
+@router.post('/inspect/suggest-selector')
+async def inspect_suggest_selector(req: SuggestSelectorRequest):
+    try:
+        result = suggest_selectors(
+            req.html,
+            path=req.path,
+            selector=req.selector,
+            scope_selector=req.scope_selector,
+        )
+        return result.model_dump()
+    except CrawlerError as exc:
+        raise HTTPException(
+            400,
+            {'code': exc.code, 'stage': exc.stage, 'message': str(exc)},
+        ) from exc
+
+
+@router.post('/inspect/preview')
+async def inspect_preview(req: InspectPreviewRequest):
+    try:
+        result = await preview_extraction(req.rule, RuntimeContext(
+            account_alias=req.account_alias,
+            session_state=req.session_state,
+        ), html=req.html, url=req.url)
+        return result.model_dump()
+    except CrawlerError as exc:
+        raise HTTPException(
+            400,
+            {'code': exc.code, 'stage': exc.stage, 'message': str(exc)},
+        ) from exc
 
 
 async def _do_crawl(req: RunCrawlRequest) -> None:

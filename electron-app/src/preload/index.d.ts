@@ -107,6 +107,9 @@ declare global {
       listCrawlerReviewItems: (args?: { status?: string; ruleId?: string; runId?: string; limit?: number }) => Promise<IpcResponse<unknown[]>>
       rejectCrawlerReviewItems: (args: { ids: string[]; notes?: string }) => Promise<IpcResponse<void>>
       importCrawlerReviewItems: (args: { ids: string[]; target_group_id?: string | null; new_group?: unknown | null }) => Promise<IpcResponse<{ count: number }>>
+      inspectCrawlerLoad: (args: unknown) => Promise<IpcResponse<unknown>>
+      inspectCrawlerPreview: (args: unknown) => Promise<IpcResponse<unknown>>
+      suggestCrawlerSelector: (args: unknown) => Promise<IpcResponse<unknown>>
 
       buildGraph: () => Promise<IpcResponse<{ nodes: unknown[]; edges: unknown[] }>>
 

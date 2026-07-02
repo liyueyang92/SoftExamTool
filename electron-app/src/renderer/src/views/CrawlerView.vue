@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useCrawlerStore, type CrawlerRule, type NewCrawlerTargetGroup } from '../stores/crawler'
+import {
+  useCrawlerStore,
+  type CrawlerInspectLoadResult,
+  type CrawlerInspectNode,
+  type CrawlerInspectPreviewResult,
+  type CrawlerRule,
+  type CrawlerSelectorCandidate,
+  type NewCrawlerTargetGroup,
+} from '../stores/crawler'
 import { useQuestionStore } from '../stores/question'
 
 const store = useCrawlerStore()
@@ -21,6 +29,19 @@ const testing = ref(false)
 const testUrl = ref('')
 const testResult = ref<{ count: number; samples: unknown[] } | null>(null)
 const testError = ref('')
+
+type SelectorTarget = 'item' | 'content' | 'options' | 'answer' | 'explanation' | 'detail_link'
+
+const inspectUrl = ref('')
+const inspectLoading = ref(false)
+const inspectError = ref('')
+const inspectSnapshot = ref<CrawlerInspectLoadResult | null>(null)
+const selectedInspectNode = ref<CrawlerInspectNode | null>(null)
+const selectorCandidates = ref<CrawlerSelectorCandidate[]>([])
+const selectorTarget = ref<SelectorTarget>('item')
+const selectorBusy = ref(false)
+const previewBusy = ref(false)
+const inspectPreviewResult = ref<CrawlerInspectPreviewResult | null>(null)
 
 const groupMode = ref<'none' | 'existing' | 'new'>('none')
 const targetGroupId = ref('')
@@ -83,6 +104,7 @@ function openNew() {
   editTarget.value = defaultRule()
   ruleJsonText.value = buildRuleJson(editTarget.value)
   testUrl.value = String(editTarget.value.url_template ?? '').replace('{page}', '1')
+  resetInspector()
   testResult.value = null
   testError.value = ''
   showEdit.value = true
@@ -94,6 +116,7 @@ function openEdit(rule: CrawlerRule) {
     ? JSON.stringify(JSON.parse(rule.rule_json), null, 2)
     : buildRuleJson(rule)
   testUrl.value = rule.url_template.replace('{page}', '1')
+  resetInspector()
   testResult.value = null
   testError.value = ''
   showEdit.value = true
@@ -136,6 +159,109 @@ function buildRuleJson(rule: Partial<CrawlerRule>) {
 
 function syncRuleJsonTemplate() {
   ruleJsonText.value = buildRuleJson(editTarget.value)
+}
+
+function resetInspector() {
+  inspectUrl.value = testUrl.value || String(editTarget.value.url_template ?? '').replace('{page}', '1')
+  inspectError.value = ''
+  inspectSnapshot.value = null
+  selectedInspectNode.value = null
+  selectorCandidates.value = []
+  inspectPreviewResult.value = null
+}
+
+function draftRule(): Partial<CrawlerRule> {
+  return {
+    ...editTarget.value,
+    rule_json: ruleJsonText.value || '{}',
+  }
+}
+
+function patchRuleJson(mutator: (cfg: Record<string, unknown>) => void) {
+  let cfg: Record<string, unknown>
+  try {
+    cfg = JSON.parse(ruleJsonText.value || '{}') as Record<string, unknown>
+  } catch {
+    cfg = JSON.parse(buildRuleJson(editTarget.value)) as Record<string, unknown>
+  }
+  mutator(cfg)
+  ruleJsonText.value = JSON.stringify(cfg, null, 2)
+}
+
+function setNestedSelector(target: SelectorTarget, selector: string) {
+  if (target === 'item') editTarget.value.item_selector = selector
+  if (target === 'content') editTarget.value.question_field = selector
+  if (target === 'options') editTarget.value.options_field = selector
+  if (target === 'answer') editTarget.value.answer_field = selector
+  if (target === 'explanation') editTarget.value.expl_field = selector
+
+  patchRuleJson((cfg) => {
+    const list = (cfg.list && typeof cfg.list === 'object' ? cfg.list : {}) as Record<string, unknown>
+    const fields = (list.fields && typeof list.fields === 'object' ? list.fields : {}) as Record<string, unknown>
+    if (target === 'item') list.item_selector = selector
+    else if (target === 'detail_link') list.detail_link_selector = selector
+    else fields[target] = selector
+    list.fields = fields
+    list.url_template = editTarget.value.url_template ?? inspectUrl.value
+    cfg.list = list
+  })
+}
+
+async function loadInspectorPage() {
+  inspectLoading.value = true
+  inspectError.value = ''
+  selectorCandidates.value = []
+  selectedInspectNode.value = null
+  inspectPreviewResult.value = null
+  try {
+    inspectSnapshot.value = await store.inspectLoad(
+      draftRule(),
+      inspectUrl.value || testUrl.value || null,
+      accountAlias.value || null,
+    )
+    inspectUrl.value = inspectSnapshot.value.url
+  } catch (e) {
+    inspectError.value = String(e)
+  } finally {
+    inspectLoading.value = false
+  }
+}
+
+async function pickInspectNode(node: CrawlerInspectNode) {
+  if (!inspectSnapshot.value) return
+  selectedInspectNode.value = node
+  selectorBusy.value = true
+  inspectError.value = ''
+  try {
+    selectorCandidates.value = await store.suggestSelector({
+      html: inspectSnapshot.value.html,
+      path: node.path,
+      selector: node.selector,
+      scope_selector: selectorTarget.value === 'item' ? null : editTarget.value.item_selector || null,
+    })
+  } catch (e) {
+    inspectError.value = String(e)
+  } finally {
+    selectorBusy.value = false
+  }
+}
+
+async function previewInspector() {
+  previewBusy.value = true
+  inspectError.value = ''
+  inspectPreviewResult.value = null
+  try {
+    inspectPreviewResult.value = await store.inspectPreview({
+      rule: draftRule(),
+      html: inspectSnapshot.value?.html ?? null,
+      url: inspectSnapshot.value?.url ?? inspectUrl.value,
+      account_alias: accountAlias.value || null,
+    })
+  } catch (e) {
+    inspectError.value = String(e)
+  } finally {
+    previewBusy.value = false
+  }
 }
 
 async function save() {
@@ -457,6 +583,67 @@ function formatDate(iso?: string | null) {
             <label class="checkline"><input v-model="editTarget.auth_required" type="checkbox" :true-value="1" :false-value="0" /> 需要登录态</label>
             <label>登录 URL<input v-model="editTarget.login_url" class="input" /></label>
             <label>校验 URL<input v-model="editTarget.validate_url" class="input" /></label>
+            <section v-if="editTarget.adapter === 'http_rule' || editTarget.adapter === 'browser_rule'" class="wide inspector-box">
+              <div class="inspector-head">
+                <div>
+                  <strong>可视化规则配置</strong>
+                  <span>加载页面快照，选择节点后写回 Selector</span>
+                </div>
+                <button class="btn" :disabled="inspectLoading" @click="loadInspectorPage">
+                  {{ inspectLoading ? '加载中' : '加载页面' }}
+                </button>
+              </div>
+              <div class="inspect-toolbar">
+                <input v-model="inspectUrl" class="input" placeholder="预览 URL" />
+                <select v-model="selectorTarget" class="input selector-target">
+                  <option value="item">题目容器</option>
+                  <option value="content">题干字段</option>
+                  <option value="options">选项字段</option>
+                  <option value="answer">答案字段</option>
+                  <option value="explanation">解析字段</option>
+                  <option value="detail_link">详情链接</option>
+                </select>
+                <button class="btn" :disabled="previewBusy" @click="previewInspector">
+                  {{ previewBusy ? '预览中' : '预览匹配' }}
+                </button>
+              </div>
+              <p v-if="inspectError" class="error">{{ inspectError }}</p>
+              <div v-if="inspectSnapshot" class="inspector-grid">
+                <div class="node-list">
+                  <button
+                    v-for="node in inspectSnapshot.nodes"
+                    :key="node.path"
+                    class="node-row"
+                    :class="{ active: selectedInspectNode?.path === node.path }"
+                    @click="pickInspectNode(node)"
+                  >
+                    <span>{{ node.tag }} · {{ node.selector }}</span>
+                    <small>{{ node.text || node.classes.join('.') || node.id || node.path }}</small>
+                  </button>
+                </div>
+                <div class="candidate-panel">
+                  <div class="candidate-title">
+                    <strong>Selector 候选</strong>
+                    <span v-if="selectorBusy">生成中</span>
+                  </div>
+                  <div v-if="!selectorCandidates.length" class="empty small-empty">选择左侧节点</div>
+                  <button
+                    v-for="candidate in selectorCandidates"
+                    :key="candidate.selector"
+                    class="candidate-row"
+                    @click="setNestedSelector(selectorTarget, candidate.selector)"
+                  >
+                    <code>{{ candidate.selector }}</code>
+                    <span>{{ candidate.match_count }} 个匹配 · {{ candidate.stability }}</span>
+                  </button>
+                  <div v-if="inspectPreviewResult" class="preview-summary">
+                    <strong>匹配 {{ inspectPreviewResult.count }} 个容器</strong>
+                    <pre>{{ JSON.stringify(inspectPreviewResult.selector_matches, null, 2) }}</pre>
+                    <pre v-if="inspectPreviewResult.samples.length">{{ JSON.stringify(inspectPreviewResult.samples[0], null, 2) }}</pre>
+                  </div>
+                </div>
+              </div>
+            </section>
             <label class="wide">规则 JSON<textarea v-model="ruleJsonText" class="input code-area"></textarea></label>
           </div>
 
@@ -541,6 +728,27 @@ function formatDate(iso?: string | null) {
 .wide { grid-column: 1 / -1; }
 .checkline { flex-direction: row !important; align-items: center; }
 .code-area { min-height: 150px; font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+.inspector-box { border: 1px solid var(--c-border); background: var(--c-bg); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.inspector-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.inspector-head div { display: flex; flex-direction: column; gap: 2px; }
+.inspector-head strong, .candidate-title strong { color: var(--c-text); font-size: 13px; }
+.inspector-head span, .candidate-title span { color: var(--c-text-2); font-size: 12px; font-weight: 500; }
+.inspect-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 150px auto; gap: 8px; }
+.selector-target { min-width: 0; }
+.inspector-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(260px, .85fr); gap: 10px; min-height: 280px; }
+.node-list, .candidate-panel { border: 1px solid var(--c-border); background: var(--c-panel); border-radius: 6px; overflow: auto; max-height: 360px; }
+.node-list { padding: 6px; display: flex; flex-direction: column; gap: 5px; }
+.node-row, .candidate-row { width: 100%; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--c-text); cursor: pointer; text-align: left; padding: 8px; }
+.node-row:hover, .node-row.active, .candidate-row:hover { background: var(--c-hover); border-color: var(--c-border); }
+.node-row span, .candidate-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.node-row small, .candidate-row span { display: block; margin-top: 3px; color: var(--c-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.candidate-panel { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.candidate-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 2px 4px; }
+.candidate-row code { color: #1d4ed8; font-family: Consolas, monospace; }
+.small-empty { padding: 14px; }
+.preview-summary { border-top: 1px solid var(--c-border); margin-top: 4px; padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.preview-summary strong { color: var(--c-text); font-size: 12px; }
+.preview-summary pre { margin: 0; max-height: 120px; overflow: auto; white-space: pre-wrap; color: var(--c-text-2); font-size: 11px; }
 .test-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .sample-box { border: 1px solid var(--c-border); background: var(--c-bg); border-radius: 6px; padding: 10px; }
 .sample-box pre { white-space: pre-wrap; max-height: 180px; overflow: auto; font-size: 12px; color: var(--c-text-2); }
@@ -549,5 +757,6 @@ function formatDate(iso?: string | null) {
   .rule-list { max-height: 180px; }
   .run-row { grid-template-columns: 1fr 1fr; }
   .session-row { grid-template-columns: 1fr 1fr; }
+  .inspect-toolbar, .inspector-grid { grid-template-columns: 1fr; }
 }
 </style>

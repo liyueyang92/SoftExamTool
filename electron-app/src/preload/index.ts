@@ -146,6 +146,12 @@ const customAPI = {
     invokeWithTimeout<void>('crawler:rejectReviewItems', args),
   importCrawlerReviewItems: (args: { ids: string[]; target_group_id?: string | null; new_group?: unknown | null }) =>
     invokeWithTimeout<{ count: number }>('crawler:importReviewItems', args),
+  inspectCrawlerLoad: (args: unknown) =>
+    invokeWithTimeout<unknown>('crawler:inspectLoad', args, 60_000),
+  inspectCrawlerPreview: (args: unknown) =>
+    invokeWithTimeout<unknown>('crawler:inspectPreview', args, 60_000),
+  suggestCrawlerSelector: (args: unknown) =>
+    invokeWithTimeout<unknown>('crawler:suggestSelector', args, 30_000),
 
   // Phase 5 — Knowledge Graph
   buildGraph: () => invokeWithTimeout<{ nodes: unknown[]; edges: unknown[] }>('graph:build'),

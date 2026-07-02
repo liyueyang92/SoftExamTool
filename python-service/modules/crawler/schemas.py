@@ -114,3 +114,60 @@ class RunCrawlRequest(BaseModel):
     account_alias: Optional[str] = None
     session_state: dict[str, Any] | None = None
     manual_input: dict[str, Any] | None = None
+
+
+class InspectLoadRequest(BaseModel):
+    rule: CrawlRuleModel
+    url: Optional[str] = None
+    account_alias: Optional[str] = None
+    session_state: dict[str, Any] | None = None
+
+
+class InspectNode(BaseModel):
+    path: str
+    selector: str
+    tag: str
+    text: str = ''
+    classes: list[str] = Field(default_factory=list)
+    id: Optional[str] = None
+    match_count: int = 0
+
+
+class InspectLoadResponse(BaseModel):
+    url: str
+    adapter: CrawlerAdapter
+    html: str
+    title: str = ''
+    nodes: list[InspectNode] = Field(default_factory=list)
+
+
+class SuggestSelectorRequest(BaseModel):
+    html: str
+    path: Optional[str] = None
+    selector: Optional[str] = None
+    scope_selector: Optional[str] = None
+
+
+class SelectorCandidate(BaseModel):
+    selector: str
+    match_count: int
+    text_sample: str = ''
+    stability: Literal['high', 'medium', 'low'] = 'medium'
+
+
+class SuggestSelectorResponse(BaseModel):
+    candidates: list[SelectorCandidate]
+
+
+class InspectPreviewRequest(BaseModel):
+    rule: CrawlRuleModel
+    html: Optional[str] = None
+    url: Optional[str] = None
+    account_alias: Optional[str] = None
+    session_state: dict[str, Any] | None = None
+
+
+class InspectPreviewResponse(BaseModel):
+    count: int
+    samples: list[RawItem]
+    selector_matches: dict[str, int] = Field(default_factory=dict)

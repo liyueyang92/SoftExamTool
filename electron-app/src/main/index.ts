@@ -1099,6 +1099,70 @@ function registerIpcHandlers(): void {
     deleteCrawlerSiteSession(db, ruleId, account_alias)
   })
 
+  registerHandler(IPC.CRAWLER_INSPECT_LOAD, async (args) => {
+    const { rule, url = null, account_alias = null } = args as {
+      rule: CrawlerRule
+      url?: string | null
+      account_alias?: string | null
+    }
+    const session_state = getDecryptedCrawlerSessionPayload(db, rule, account_alias)
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/crawler/inspect/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ rule, url, account_alias, session_state }),
+    })
+    if (!res.ok) {
+      const err = await res.json() as { detail?: string | { code?: string; message?: string } }
+      const detail = typeof err.detail === 'object' ? err.detail : null
+      throw Object.assign(
+        new Error(detail?.message ?? String(err.detail ?? 'Inspect load failed')),
+        { code: detail?.code ?? 'CRAWLER_INSPECT_LOAD_FAILED' }
+      )
+    }
+    return res.json()
+  })
+
+  registerHandler(IPC.CRAWLER_SUGGEST_SELECTOR, async (args) => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/crawler/inspect/suggest-selector`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify(args ?? {}),
+    })
+    if (!res.ok) {
+      const err = await res.json() as { detail?: string | { code?: string; message?: string } }
+      const detail = typeof err.detail === 'object' ? err.detail : null
+      throw Object.assign(
+        new Error(detail?.message ?? String(err.detail ?? 'Selector suggestion failed')),
+        { code: detail?.code ?? 'CRAWLER_SELECTOR_FAILED' }
+      )
+    }
+    return res.json()
+  })
+
+  registerHandler(IPC.CRAWLER_INSPECT_PREVIEW, async (args) => {
+    const { rule, html = null, url = null, account_alias = null } = args as {
+      rule: CrawlerRule
+      html?: string | null
+      url?: string | null
+      account_alias?: string | null
+    }
+    const session_state = getDecryptedCrawlerSessionPayload(db, rule, account_alias)
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/crawler/inspect/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ rule, html, url, account_alias, session_state }),
+    })
+    if (!res.ok) {
+      const err = await res.json() as { detail?: string | { code?: string; message?: string } }
+      const detail = typeof err.detail === 'object' ? err.detail : null
+      throw Object.assign(
+        new Error(detail?.message ?? String(err.detail ?? 'Inspect preview failed')),
+        { code: detail?.code ?? 'CRAWLER_INSPECT_PREVIEW_FAILED' }
+      )
+    }
+    return res.json()
+  })
+
   registerHandler(IPC.CRAWLER_LIST_REVIEW_ITEMS, async (args) =>
     listCrawlerReviewItems(db, args as Parameters<typeof listCrawlerReviewItems>[1]))
 

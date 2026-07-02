@@ -60,6 +60,9 @@ export const IPC = {
   CRAWLER_LIST_SESSIONS: 'crawler:listSessions',
   CRAWLER_VALIDATE_SESSION: 'crawler:validateSession',
   CRAWLER_DELETE_SESSION: 'crawler:deleteSession',
+  CRAWLER_INSPECT_LOAD: 'crawler:inspectLoad',
+  CRAWLER_INSPECT_PREVIEW: 'crawler:inspectPreview',
+  CRAWLER_SUGGEST_SELECTOR: 'crawler:suggestSelector',
 
   GRAPH_BUILD: 'graph:build',
 

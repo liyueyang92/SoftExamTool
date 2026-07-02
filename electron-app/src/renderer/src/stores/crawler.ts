@@ -82,6 +82,37 @@ export interface NewCrawlerTargetGroup {
   description?: string
 }
 
+export interface CrawlerInspectNode {
+  path: string
+  selector: string
+  tag: string
+  text: string
+  classes: string[]
+  id?: string | null
+  match_count: number
+}
+
+export interface CrawlerInspectLoadResult {
+  url: string
+  adapter: CrawlerRule['adapter']
+  html: string
+  title: string
+  nodes: CrawlerInspectNode[]
+}
+
+export interface CrawlerSelectorCandidate {
+  selector: string
+  match_count: number
+  text_sample: string
+  stability: 'high' | 'medium' | 'low'
+}
+
+export interface CrawlerInspectPreviewResult {
+  count: number
+  samples: unknown[]
+  selector_matches: Record<string, number>
+}
+
 export const useCrawlerStore = defineStore('crawler', () => {
   const rules = ref<CrawlerRule[]>([])
   const loading = ref(false)
@@ -185,6 +216,38 @@ export const useCrawlerStore = defineStore('crawler', () => {
     return res.data
   }
 
+  async function inspectLoad(rule: Partial<CrawlerRule>, url?: string | null, accountAlias?: string | null) {
+    const res = await window.electronAPI.inspectCrawlerLoad(toIpcPayload({
+      rule,
+      url,
+      account_alias: accountAlias,
+    }))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    return res.data as CrawlerInspectLoadResult
+  }
+
+  async function suggestSelector(args: {
+    html: string
+    path?: string | null
+    selector?: string | null
+    scope_selector?: string | null
+  }) {
+    const res = await window.electronAPI.suggestCrawlerSelector(toIpcPayload(args))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    return (res.data as { candidates: CrawlerSelectorCandidate[] }).candidates
+  }
+
+  async function inspectPreview(args: {
+    rule: Partial<CrawlerRule>
+    html?: string | null
+    url?: string | null
+    account_alias?: string | null
+  }) {
+    const res = await window.electronAPI.inspectCrawlerPreview(toIpcPayload(args))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    return res.data as CrawlerInspectPreviewResult
+  }
+
   return {
     rules,
     loading,
@@ -205,5 +268,8 @@ export const useCrawlerStore = defineStore('crawler', () => {
     fetchReviewItems,
     rejectReviewItems,
     importReviewItems,
+    inspectLoad,
+    suggestSelector,
+    inspectPreview,
   }
 })
