@@ -131,6 +131,12 @@ const tagInput = ref('')
 const genError = ref('')
 const savingGenerated = ref(false)
 const saveSuccess = ref('')
+const aiGroupMode = ref<'none' | 'existing' | 'new'>('none')
+const aiTargetGroupId = ref('')
+const aiNewGroupName = ref('')
+const aiNewGroupType = ref<'ai_generated' | 'past_exam' | 'custom'>('ai_generated')
+const aiNewGroupYear = ref<number | null>(null)
+const aiNewGroupPeriod = ref<'H1' | 'H2'>('H1')
 
 // Grade tab
 const gradeQ = ref('')
@@ -140,6 +146,7 @@ const gradeError = ref('')
 
 onMounted(async () => {
   await ai.loadConfig()
+  await questionStore.fetchGroups()
   await loadChatSessions()
   await loadChatHistory()
 })
@@ -155,7 +162,23 @@ function removeGenTag(i: number) { genParams.value.knowledge_tags.splice(i, 1) }
 async function doGenerate() {
   genError.value = ''; saveSuccess.value = ''
   try {
-    await ai.generateQuestions(genParams.value)
+    const params: GenerateParams = { ...genParams.value }
+    if (aiGroupMode.value === 'existing' && aiTargetGroupId.value) {
+      params.target_group_id = aiTargetGroupId.value
+      params.new_group = null
+    } else if (aiGroupMode.value === 'new' && aiNewGroupName.value.trim()) {
+      params.target_group_id = null
+      params.new_group = {
+        name: aiNewGroupName.value.trim(),
+        group_type: aiNewGroupType.value,
+        exam_year: aiNewGroupType.value === 'past_exam' ? aiNewGroupYear.value : null,
+        exam_period: aiNewGroupType.value === 'past_exam' ? aiNewGroupPeriod.value : null,
+      }
+    } else {
+      params.target_group_id = null
+      params.new_group = null
+    }
+    await ai.generateQuestions(params)
   } catch (e) {
     genError.value = String(e)
   }
@@ -164,8 +187,20 @@ async function doGenerate() {
 async function saveGenerated() {
   savingGenerated.value = true
   try {
+    const groupId = await questionStore.ensureGroupId({
+      groupId: aiGroupMode.value === 'existing' ? (aiTargetGroupId.value || null) : null,
+      newGroup: aiGroupMode.value === 'new' && aiNewGroupName.value.trim()
+        ? {
+            name: aiNewGroupName.value.trim(),
+            group_type: aiNewGroupType.value,
+            exam_year: aiNewGroupType.value === 'past_exam' ? aiNewGroupYear.value : null,
+            exam_period: aiNewGroupType.value === 'past_exam' ? aiNewGroupPeriod.value : null,
+          }
+        : null,
+    })
     const count = await questionStore.batchImport(ai.generatedQuestions.map((q) => ({
       ...q,
+      group_id: groupId,
       source_type: 'ai_generated',
     })))
     saveSuccess.value = `已保存 ${count} 道题到题库`
@@ -233,6 +268,44 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
                 {{ tag }}<button @click="removeGenTag(i)">✕</button>
               </span>
               <input v-model="tagInput" class="tag-input" placeholder="输入后回车" @keyup.enter="addGenTag" />
+            </div>
+          </div>
+
+          <div class="form-group col">
+            <label>保存分组</label>
+            <div class="type-checks">
+              <label class="check-label"><input type="radio" value="none" v-model="aiGroupMode" /> 不指定</label>
+              <label class="check-label"><input type="radio" value="existing" v-model="aiGroupMode" /> 现有分组</label>
+              <label class="check-label"><input type="radio" value="new" v-model="aiGroupMode" /> 新建分组</label>
+            </div>
+          </div>
+
+          <div v-if="aiGroupMode === 'existing'" class="form-group">
+            <label>选择分组</label>
+            <select v-model="aiTargetGroupId" class="select-sm">
+              <option value="">请选择分组</option>
+              <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+          </div>
+
+          <div v-if="aiGroupMode === 'new'" class="form-group col">
+            <label>新分组名称</label>
+            <input v-model="aiNewGroupName" class="num-input" style="width:100%" placeholder="如：AI 模拟卷 2026-07-02" />
+            <div class="form-group" style="width:100%">
+              <label>分组类型</label>
+              <select v-model="aiNewGroupType" class="select-sm">
+                <option value="ai_generated">AI 出题</option>
+                <option value="past_exam">历年真题</option>
+                <option value="custom">自定义</option>
+              </select>
+            </div>
+            <div v-if="aiNewGroupType === 'past_exam'" class="form-group" style="width:100%">
+              <label>真题期次</label>
+              <input v-model.number="aiNewGroupYear" type="number" class="num-input" min="2000" max="2100" placeholder="年份" />
+              <select v-model="aiNewGroupPeriod" class="select-sm">
+                <option value="H1">上半年</option>
+                <option value="H2">下半年</option>
+              </select>
             </div>
           </div>
 

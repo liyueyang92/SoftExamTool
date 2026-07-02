@@ -15,6 +15,10 @@ import {
   queryQuestions, searchQuestions, insertQuestion, batchInsertQuestions,
   updateQuestion, deleteQuestion, toggleFavorite, getQuestionStats, getWrongQuestions
 } from './db/questions'
+import {
+  listQuestionGroups, upsertQuestionGroup, deleteQuestionGroup, getQuestionGroup,
+  type QuestionGroupInput, type QuestionGroupType,
+} from './db/question-groups'
 import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
@@ -426,6 +430,30 @@ function setupNotificationTimer(): void {
   setInterval(() => checkHealthReminder(), 5 * 60 * 1000)
 }
 
+function resolveQuestionGroupId(
+  db: Database.Database,
+  args: { target_group_id?: string | null; new_group?: QuestionGroupInput | null },
+  fallbackType: QuestionGroupType
+): string | null {
+  if (args.target_group_id) {
+    const existing = getQuestionGroup(db, args.target_group_id)
+    if (!existing) {
+      throw Object.assign(new Error('Question group not found'), { code: 'QUESTION_GROUP_NOT_FOUND' })
+    }
+    return existing.id
+  }
+
+  if (args.new_group?.name?.trim()) {
+    const created = upsertQuestionGroup(db, {
+      ...args.new_group,
+      group_type: args.new_group.group_type ?? fallbackType,
+    })
+    return created.id
+  }
+
+  return null
+}
+
 function registerIpcHandlers(): void {
   const db = getDatabase()
 
@@ -480,6 +508,10 @@ function registerIpcHandlers(): void {
   })
 
   // Phase 2 - Questions
+  registerHandler(IPC.QUESTION_GROUP_LIST, async () => listQuestionGroups(db))
+  registerHandler(IPC.QUESTION_GROUP_UPSERT, async (args) =>
+    upsertQuestionGroup(db, args as Parameters<typeof upsertQuestionGroup>[1]))
+  registerHandler(IPC.QUESTION_GROUP_DELETE, async (id) => deleteQuestionGroup(db, id as string))
   registerHandler(IPC.QUESTION_QUERY, async (args) => {
     return queryQuestions(db, args as Parameters<typeof queryQuestions>[1])
   })
@@ -733,7 +765,15 @@ function registerIpcHandlers(): void {
   })
 
   registerHandler(IPC.AI_GENERATE_QUESTIONS, async (args) => {
-    const params = args as { count?: number; types?: string[]; knowledge_tags?: string[]; difficulty?: number; context?: string }
+    const params = args as {
+      count?: number
+      types?: string[]
+      knowledge_tags?: string[]
+      difficulty?: number
+      context?: string
+      target_group_id?: string | null
+      new_group?: QuestionGroupInput | null
+    }
     const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/generate-questions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
@@ -771,19 +811,36 @@ function registerIpcHandlers(): void {
   })
 
   registerHandler(IPC.CRAWLER_RUN, async (args) => {
-    const { ruleId } = args as { ruleId: string }
+    const { ruleId, target_group_id = null, new_group = null } = args as {
+      ruleId: string
+      target_group_id?: string | null
+      new_group?: QuestionGroupInput | null
+    }
     const rules = listCrawlerRules(db)
     const rule = rules.find((r) => r.id === ruleId)
     if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
+    const resolvedGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
 
     const run = createCrawlerRun(db, ruleId)
-    const taskId = taskManager!.createTask('crawl', { ruleId, runId: run.id })
+    const taskId = taskManager!.createTask('crawl', { ruleId, runId: run.id, target_group_id: resolvedGroupId })
     wsClient.connect(taskId)
 
     wsClient.onComplete(taskId, (_, result) => {
-      const { questions, total_found } = result as { questions: unknown[]; total_found: number; rule_id: string }
+      const { questions, total_found } = result as {
+        questions: unknown[]
+        total_found: number
+        rule_id: string
+        target_group_id?: string | null
+      }
       try {
-        const saved = batchInsertQuestions(db, questions.map((q) => ({ ...(q as object), source_type: 'crawled' })) as Parameters<typeof batchInsertQuestions>[1])
+        const saved = batchInsertQuestions(
+          db,
+          questions.map((q) => ({
+            ...(q as object),
+            source_type: 'crawled',
+            group_id: resolvedGroupId ?? target_group_id ?? null,
+          })) as Parameters<typeof batchInsertQuestions>[1]
+        )
         updateCrawlerRun(db, run.id, {
           status: 'completed',
           total_found,
@@ -804,7 +861,7 @@ function registerIpcHandlers(): void {
     fetch(`http://127.0.0.1:${pythonManager.port}/crawler/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({ rule, task_id: taskId, rule_id: ruleId }),
+      body: JSON.stringify({ rule, task_id: taskId, rule_id: ruleId, target_group_id: resolvedGroupId, new_group }),
     }).catch((e) => console.error('[Crawler] Run request failed:', e))
 
     return { taskId, runId: run.id }

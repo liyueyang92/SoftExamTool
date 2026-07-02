@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { usePracticeStore, type PracticeConfig } from '../stores/practice'
+import { useQuestionStore } from '../stores/question'
 
 const store = usePracticeStore()
+const questionStore = useQuestionStore()
 
 const config = ref<PracticeConfig>({ mode: 'random', count: 20 })
 const chosenTypes = ref<string[]>(['single'])
 const essayAnswer = ref('')
 const startError = ref('')
 const starting = ref(false)
+
+onMounted(async () => {
+  await questionStore.fetchGroups()
+})
 
 async function startSession() {
   startError.value = ''
@@ -89,6 +95,29 @@ function toggleMultiple(letter: string) {
             <input type="checkbox" :value="t.value" v-model="chosenTypes" />
             {{ t.label }}
           </label>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <label class="section-label">题库分组与来源筛选</label>
+        <div class="type-checks">
+          <select v-model="config.groupId" class="count-input" style="width:220px;text-align:left">
+            <option :value="undefined">全部分组</option>
+            <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+          </select>
+          <select v-model="config.sourceType" class="count-input" style="width:140px;text-align:left">
+            <option :value="undefined">全部来源</option>
+            <option value="manual">手动录入</option>
+            <option value="ai_generated">AI 出题</option>
+            <option value="crawled">爬虫导入</option>
+            <option value="imported">批量导入</option>
+          </select>
+          <input v-model.number="config.examYear" type="number" class="count-input" style="width:120px" min="2000" max="2100" placeholder="真题年份" />
+          <select v-model="config.examPeriod" class="count-input" style="width:120px;text-align:left">
+            <option :value="undefined">全部期次</option>
+            <option value="H1">上半年</option>
+            <option value="H2">下半年</option>
+          </select>
         </div>
       </div>
 

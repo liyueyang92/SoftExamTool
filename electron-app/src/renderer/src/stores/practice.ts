@@ -6,6 +6,11 @@ import { toIpcPayload } from '../utils/ipc'
 export interface PracticeConfig {
   mode: 'random' | 'sequential' | 'wrong' | 'favorites'
   count: number
+  groupId?: string
+  groupType?: 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
+  examYear?: number
+  examPeriod?: 'H1' | 'H2'
+  sourceType?: 'manual' | 'ai_generated' | 'crawled' | 'imported'
   filterTags?: string[]
   filterTypes?: string[]
 }
@@ -43,6 +48,11 @@ export const usePracticeStore = defineStore('practice', () => {
     const payload = toIpcPayload<PracticeConfig>({
       mode: config.mode,
       count: config.count,
+      groupId: config.groupId,
+      groupType: config.groupType,
+      examYear: config.examYear,
+      examPeriod: config.examPeriod,
+      sourceType: config.sourceType,
       filterTags: config.filterTags ? [...config.filterTags] : undefined,
       filterTypes: config.filterTypes ? [...config.filterTypes] : undefined,
     })

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useQuestionStore, type Question } from '../stores/question'
+import { useQuestionStore, type Question, type QuestionDraft, type QuestionGroupDraft } from '../stores/question'
 
 const store = useQuestionStore()
 
@@ -9,12 +9,17 @@ const searching = ref(false)
 const searchResults = ref<Question[]>([])
 const showEdit = ref(false)
 const showImport = ref(false)
+const showGroupEdit = ref(false)
 const editTarget = ref<Partial<Question> | null>(null)
+const groupEdit = ref<QuestionGroupDraft>({ name: '', group_type: 'custom' })
 const importText = ref('')
 const importError = ref('')
 const importSuccess = ref('')
 const saving = ref(false)
 const importLoading = ref(false)
+const importGroupMode = ref<'none' | 'existing' | 'new'>('none')
+const importTargetGroupId = ref('')
+const importNewGroup = ref<QuestionGroupDraft>({ name: '', group_type: 'manual_import', exam_year: null, exam_period: null, description: '' })
 
 const typeLabels: Record<string, string> = { single: '单选', multiple: '多选', case: '案例', essay: '论文' }
 const diffLabel = (d: number) => ['', '★☆☆☆☆', '★★☆☆☆', '★★★☆☆', '★★★★☆', '★★★★★'][d] ?? d
@@ -22,7 +27,7 @@ const diffLabel = (d: number) => ['', '★☆☆☆☆', '★★☆☆☆', '★
 const displayList = computed(() => searchQ.value.trim() ? searchResults.value : store.questions)
 
 onMounted(async () => {
-  await Promise.all([store.fetchPage(), store.loadStats()])
+  await Promise.all([store.fetchPage(), store.loadStats(), store.fetchGroups()])
 })
 
 async function doSearch() {
@@ -43,7 +48,7 @@ async function applyFilter(f: Record<string, unknown>) {
 }
 
 function openNew() {
-  editTarget.value = { type: 'single', content: '', options: ['A. ', 'B. ', 'C. ', 'D. '], answer: 'A', explanation: '', knowledge_tags: [], difficulty: 3, source_type: 'manual' }
+  editTarget.value = { group_id: null, type: 'single', content: '', options: ['A. ', 'B. ', 'C. ', 'D. '], answer: 'A', explanation: '', knowledge_tags: [], difficulty: 3, source_type: 'manual' }
   showEdit.value = true
 }
 
@@ -59,12 +64,23 @@ async function saveQuestion() {
     if (editTarget.value.id) {
       await store.update(editTarget.value.id, editTarget.value)
     } else {
-      await store.insert(editTarget.value as Omit<Question, 'id' | 'created_at' | 'is_favorite'>)
+      await store.insert(editTarget.value as QuestionDraft)
     }
     showEdit.value = false
   } finally {
     saving.value = false
   }
+}
+
+function openNewGroup() {
+  groupEdit.value = { name: '', group_type: 'custom', exam_year: null, exam_period: null, description: '' }
+  showGroupEdit.value = true
+}
+
+async function saveGroup() {
+  if (!groupEdit.value.name.trim()) return
+  await store.saveGroup(groupEdit.value)
+  showGroupEdit.value = false
 }
 
 async function deleteQuestion(q: Question) {
@@ -96,7 +112,21 @@ async function doImport() {
   }
   importLoading.value = true
   try {
-    const count = await store.batchImport(data)
+    const groupId = await store.ensureGroupId({
+      groupId: importGroupMode.value === 'existing' ? (importTargetGroupId.value || null) : null,
+      newGroup: importGroupMode.value === 'new' && importNewGroup.value.name.trim() ? importNewGroup.value : null,
+    })
+    const normalized = data.map((item) => {
+      if (typeof item === 'object' && item !== null) {
+        return {
+          group_id: groupId,
+          source_type: 'imported',
+          ...(item as Record<string, unknown>),
+        }
+      }
+      return item
+    })
+    const count = await store.batchImport(normalized)
     importSuccess.value = `成功导入 ${count} 道题`
     importText.value = ''
   } catch (e) {
@@ -150,6 +180,23 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
       </div>
 
       <div class="filter-wrap">
+        <select class="select-sm" @change="applyFilter({ group_id: ($event.target as HTMLSelectElement).value || undefined, page: 1 })">
+          <option value="">全部分组</option>
+          <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+        </select>
+        <select class="select-sm" @change="applyFilter({ source_type: ($event.target as HTMLSelectElement).value || undefined, page: 1 })">
+          <option value="">全部来源</option>
+          <option value="manual">手动录入</option>
+          <option value="ai_generated">AI 出题</option>
+          <option value="crawled">爬虫导入</option>
+          <option value="imported">批量导入</option>
+        </select>
+        <select class="select-sm" @change="applyFilter({ exam_period: (($event.target as HTMLSelectElement).value || undefined) as 'H1' | 'H2' | undefined, page: 1 })">
+          <option value="">全部期次</option>
+          <option value="H1">上半年</option>
+          <option value="H2">下半年</option>
+        </select>
+        <input class="search-input" style="max-width:100px" type="number" placeholder="真题年份" @change="applyFilter({ exam_year: Number(($event.target as HTMLInputElement).value) || undefined, page: 1 })" />
         <select class="select-sm" @change="applyFilter({ type: ($event.target as HTMLSelectElement).value || undefined, page: 1 })">
           <option value="">全部题型</option>
           <option v-for="(label, val) in typeLabels" :key="val" :value="val">{{ label }}</option>
@@ -166,6 +213,7 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
 
       <div class="btn-group">
         <button class="btn-sm btn-primary" @click="openNew">+ 新建题目</button>
+        <button class="btn-sm" @click="openNewGroup">+ 新建分组</button>
         <button class="btn-sm" @click="showImport = true">批量导入</button>
       </div>
     </div>
@@ -179,6 +227,7 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
           <tr>
             <th style="width:50px">题型</th>
             <th>题目</th>
+            <th style="width:150px">分组</th>
             <th style="width:80px">难度</th>
             <th style="width:120px">知识点</th>
             <th style="width:100px">操作</th>
@@ -188,6 +237,10 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
           <tr v-for="q in displayList" :key="q.id">
             <td><span class="type-badge" :class="q.type">{{ typeLabels[q.type] }}</span></td>
             <td class="content-cell">{{ q.content.slice(0, 80) }}{{ q.content.length > 80 ? '…' : '' }}</td>
+            <td>
+              <div>{{ q.group_name || '未分组' }}</div>
+              <div v-if="q.exam_year" class="mini-meta">{{ q.exam_year }} {{ q.exam_period === 'H1' ? '上半年' : '下半年' }}</div>
+            </td>
             <td class="diff-cell">{{ diffLabel(q.difficulty) }}</td>
             <td>
               <span v-for="tag in q.knowledge_tags.slice(0,2)" :key="tag" class="tag">{{ tag }}</span>
@@ -223,6 +276,11 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
             <label>题型</label>
             <select v-model="editTarget.type" class="select-sm">
               <option v-for="(label, val) in typeLabels" :key="val" :value="val">{{ label }}</option>
+            </select>
+            <label style="margin-left:12px">分组</label>
+            <select v-model="editTarget.group_id" class="select-sm">
+              <option :value="null">未分组</option>
+              <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
             </select>
             <label style="margin-left:12px">难度</label>
             <select v-model="editTarget.difficulty" class="select-sm">
@@ -271,6 +329,45 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
       </div>
     </div>
 
+    <!-- Group Modal -->
+    <div v-if="showGroupEdit" class="modal-backdrop" @click.self="showGroupEdit = false">
+      <div class="modal" style="width:520px">
+        <div class="modal-header">
+          <h3>新建题库分组</h3>
+          <button class="close-btn" @click="showGroupEdit = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row col">
+            <label>分组名称 *</label>
+            <input v-model="groupEdit.name" class="input-sm" placeholder="如：2025上半年真题" />
+          </div>
+          <div class="form-row">
+            <label>分组类型</label>
+            <select v-model="groupEdit.group_type" class="select-sm">
+              <option value="custom">自定义</option>
+              <option value="past_exam">历年真题</option>
+              <option value="ai_generated">AI 出题</option>
+              <option value="crawled">爬虫导入</option>
+              <option value="manual_import">批量导入</option>
+            </select>
+          </div>
+          <div v-if="groupEdit.group_type === 'past_exam'" class="form-row">
+            <label>年份</label>
+            <input v-model.number="groupEdit.exam_year" type="number" min="2000" max="2100" class="input-sm" style="width:120px" />
+            <label>期次</label>
+            <select v-model="groupEdit.exam_period" class="select-sm">
+              <option value="H1">上半年</option>
+              <option value="H2">下半年</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="showGroupEdit = false">取消</button>
+          <button class="btn-sm btn-primary" @click="saveGroup">保存</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Import Modal -->
     <div v-if="showImport" class="modal-backdrop" @click.self="showImport = false">
       <div class="modal">
@@ -281,6 +378,40 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
         <div class="modal-body">
           <p class="hint-text">粘贴 JSON 数组，每个元素格式：</p>
           <pre class="code-hint">{"type":"single","content":"题目","options":["A.","B.","C.","D."],"answer":"A","explanation":"解析","knowledge_tags":["架构设计"],"difficulty":3}</pre>
+          <div class="form-row col">
+            <label>导入分组</label>
+            <div class="type-checks">
+              <label class="check-label"><input type="radio" value="none" v-model="importGroupMode" /> 不指定</label>
+              <label class="check-label"><input type="radio" value="existing" v-model="importGroupMode" /> 现有分组</label>
+              <label class="check-label"><input type="radio" value="new" v-model="importGroupMode" /> 新建分组</label>
+            </div>
+          </div>
+          <div v-if="importGroupMode === 'existing'" class="form-row">
+            <select v-model="importTargetGroupId" class="select-sm">
+              <option value="">请选择分组</option>
+              <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+          </div>
+          <div v-if="importGroupMode === 'new'" class="form-row col">
+            <input v-model="importNewGroup.name" class="input-sm" placeholder="新分组名称" />
+            <div class="form-row">
+              <label>分组类型</label>
+              <select v-model="importNewGroup.group_type" class="select-sm">
+                <option value="manual_import">批量导入</option>
+                <option value="past_exam">历年真题</option>
+                <option value="custom">自定义</option>
+              </select>
+            </div>
+            <div v-if="importNewGroup.group_type === 'past_exam'" class="form-row">
+              <label>年份</label>
+              <input v-model.number="importNewGroup.exam_year" type="number" min="2000" max="2100" class="input-sm" style="width:120px" />
+              <label>期次</label>
+              <select v-model="importNewGroup.exam_period" class="select-sm">
+                <option value="H1">上半年</option>
+                <option value="H2">下半年</option>
+              </select>
+            </div>
+          </div>
           <textarea v-model="importText" class="textarea" rows="10" placeholder='[{"type":"single","content":"…"}]'></textarea>
           <p v-if="importError" class="error-text">{{ importError }}</p>
           <p v-if="importSuccess" class="success-text">{{ importSuccess }}</p>
@@ -323,6 +454,7 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
 .q-table th { position: sticky; top: 0; background: var(--c-bg); padding: 10px 12px; text-align: left; color: var(--c-text-2); font-weight: 600; border-bottom: 1px solid var(--c-border); }
 .q-table td { padding: 10px 12px; border-bottom: 1px solid var(--c-panel); color: var(--c-text); vertical-align: middle; }
 .q-table tr:hover td { background: #1a2740; }
+.mini-meta { font-size: 11px; color: var(--c-text-2); margin-top: 2px; }
 
 .type-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
 .type-badge.single { background: #1e3a5f; color: var(--c-brand); }

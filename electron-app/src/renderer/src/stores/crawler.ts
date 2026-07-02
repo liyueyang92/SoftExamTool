@@ -30,6 +30,14 @@ export interface CrawlerRun {
   error_msg: string | null
 }
 
+export interface NewCrawlerTargetGroup {
+  name: string
+  group_type?: 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
+  exam_year?: number | null
+  exam_period?: 'H1' | 'H2' | null
+  description?: string
+}
+
 export const useCrawlerStore = defineStore('crawler', () => {
   const rules = ref<CrawlerRule[]>([])
   const loading = ref(false)
@@ -68,8 +76,8 @@ export const useCrawlerStore = defineStore('crawler', () => {
     return res.data
   }
 
-  async function run(ruleId: string) {
-    const res = await window.electronAPI.runCrawl(toIpcPayload({ ruleId }))
+  async function run(args: { ruleId: string; target_group_id?: string | null; new_group?: NewCrawlerTargetGroup | null }) {
+    const res = await window.electronAPI.runCrawl(toIpcPayload(args))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     return res.data
   }

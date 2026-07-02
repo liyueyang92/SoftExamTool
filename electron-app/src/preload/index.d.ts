@@ -59,6 +59,9 @@ declare global {
       pickDirectory: (args?: { title?: string; defaultPath?: string }) => Promise<IpcResponse<string | null>>
       relaunchApp: () => Promise<IpcResponse<void>>
 
+      listQuestionGroups: () => Promise<IpcResponse<unknown[]>>
+      upsertQuestionGroup: (args: unknown) => Promise<IpcResponse<unknown>>
+      deleteQuestionGroup: (id: string) => Promise<IpcResponse<void>>
       queryQuestions: (filter?: Record<string, unknown>) => Promise<IpcResponse<{ items: unknown[]; total: number }>>
       searchQuestions: (args: { q: string; limit?: number }) => Promise<IpcResponse<unknown[]>>
       insertQuestion: (q: unknown) => Promise<IpcResponse<unknown>>
@@ -88,14 +91,14 @@ declare global {
       getAiConfig: () => Promise<IpcResponse<Record<string, unknown>>>
       setAiConfig: (args: unknown) => Promise<IpcResponse<void>>
       testAiConnection: (args?: unknown) => Promise<IpcResponse<{ ok: boolean; reply: string }>>
-      generateQuestions: (args: unknown) => Promise<IpcResponse<{ questions: unknown[] }>>
+      generateQuestions: (args: unknown) => Promise<IpcResponse<{ questions: unknown[]; target_group_id?: string | null; new_group?: unknown | null }>>
       gradeEssay: (args: unknown) => Promise<IpcResponse<unknown>>
 
       listCrawlerRules: () => Promise<IpcResponse<unknown[]>>
       upsertCrawlerRule: (args: unknown) => Promise<IpcResponse<unknown>>
       deleteCrawlerRule: (id: string) => Promise<IpcResponse<void>>
       testCrawl: (args: unknown) => Promise<IpcResponse<{ count: number; samples: unknown[] }>>
-      runCrawl: (args: { ruleId: string }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
+      runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
       listCrawlerRuns: (ruleId: string) => Promise<IpcResponse<unknown[]>>
 
       buildGraph: () => Promise<IpcResponse<{ nodes: unknown[]; edges: unknown[] }>>

@@ -5,6 +5,11 @@ import { Question, queryQuestions, getWrongQuestions } from './questions'
 export interface PracticeConfig {
   mode: 'random' | 'sequential' | 'wrong' | 'favorites'
   count: number
+  groupId?: string
+  groupType?: 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
+  examYear?: number
+  examPeriod?: 'H1' | 'H2'
+  sourceType?: 'manual' | 'ai_generated' | 'crawled' | 'imported'
   filterTags?: string[]
   filterTypes?: string[]
 }
@@ -31,11 +36,22 @@ export function startPractice(db: Database.Database, config: PracticeConfig): { 
     questions = result.items
   } else {
     const result = queryQuestions(db, {
-      type: config.filterTypes?.length === 1 ? config.filterTypes[0] : undefined,
+      group_id: config.groupId,
+      group_type: config.groupType,
+      exam_year: config.examYear,
+      exam_period: config.examPeriod,
+      source_type: config.sourceType,
       knowledge_tag: config.filterTags?.[0],
-      pageSize: 200
+      pageSize: 500,
     })
     questions = result.items
+  }
+
+  if (config.filterTypes?.length) {
+    questions = questions.filter((q) => config.filterTypes!.includes(q.type))
+  }
+  if (config.filterTags?.length) {
+    questions = questions.filter((q) => q.knowledge_tags.some((tag) => config.filterTags!.includes(tag)))
   }
 
   if (config.mode === 'random' || config.mode === 'wrong' || config.mode === 'favorites') {

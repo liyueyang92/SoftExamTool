@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
+from modules.question_bank_models import NewQuestionGroupModel
+
 try:
     from bs4 import BeautifulSoup
     BS4_AVAILABLE = True
@@ -103,6 +105,8 @@ class RunCrawlRequest(BaseModel):
     rule: CrawlRuleModel
     task_id: str
     rule_id: str
+    target_group_id: str | None = None
+    new_group: NewQuestionGroupModel | None = None
 
 
 @router.post('/run')
@@ -141,6 +145,8 @@ async def _do_crawl(req: RunCrawlRequest) -> None:
             'questions': all_results,
             'total_found': len(all_results),
             'rule_id': req.rule_id,
+            'target_group_id': req.target_group_id,
+            'new_group': req.new_group.model_dump() if req.new_group else None,
         })
     except Exception as exc:
         logger.error('Crawl {} failed: {}', req.task_id, exc)

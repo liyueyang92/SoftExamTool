@@ -298,4 +298,28 @@ CREATE INDEX IF NOT EXISTS idx_ai_chat_session_id ON ai_chat_messages(session_id
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_updated ON ai_chat_sessions(updated_at DESC);
 `,
   },
+  {
+    version: 8,
+    sql: `
+CREATE TABLE IF NOT EXISTS question_groups (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  group_type  TEXT NOT NULL DEFAULT 'custom'
+               CHECK(group_type IN ('custom','past_exam','ai_generated','crawled','manual_import')),
+  exam_year   INTEGER,
+  exam_period TEXT
+               CHECK(exam_period IS NULL OR exam_period IN ('H1','H2')),
+  description TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+ALTER TABLE questions ADD COLUMN group_id TEXT REFERENCES question_groups(id) ON DELETE SET NULL;
+ALTER TABLE questions ADD COLUMN source_url TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_questions_group           ON questions(group_id);
+CREATE INDEX IF NOT EXISTS idx_question_groups_type      ON question_groups(group_type);
+CREATE INDEX IF NOT EXISTS idx_question_groups_exam_meta ON question_groups(exam_year, exam_period);
+`,
+  },
 ]

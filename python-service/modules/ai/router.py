@@ -6,6 +6,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from modules.ai.providers import AIProviderError, build_provider
+from modules.question_bank_models import NewQuestionGroupModel
 
 router = APIRouter(prefix='/ai', tags=['ai'])
 
@@ -81,6 +82,8 @@ class GenerateRequest(BaseModel):
     knowledge_tags: list[str] = []
     difficulty: int | None = None
     context: str | None = None  # Optional document context
+    target_group_id: str | None = None
+    new_group: NewQuestionGroupModel | None = None
 
 
 class GradeRequest(BaseModel):
@@ -129,7 +132,11 @@ async def generate_questions(req: GenerateRequest):
         questions = result.get('questions', [])
         if not questions:
             raise ValueError('No questions in response')
-        return {'questions': questions}
+        return {
+            'questions': questions,
+            'target_group_id': req.target_group_id,
+            'new_group': req.new_group.model_dump() if req.new_group else None,
+        }
     except Exception as e:
         logger.warning('Question generation failed: {}', e)
         raise HTTPException(status_code=_status_code_for_ai_error(e), detail=f'AI 出题失败: {e}')

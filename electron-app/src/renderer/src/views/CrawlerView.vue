@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useCrawlerStore, type CrawlerRule } from '../stores/crawler'
+import { useQuestionStore } from '../stores/question'
 
 const store = useCrawlerStore()
+const questionStore = useQuestionStore()
 
 const showEdit = ref(false)
 const editTarget = ref<Partial<CrawlerRule>>({})
@@ -16,11 +18,17 @@ const testing = ref(false)
 const testUrl = ref('')
 const testError = ref('')
 const selectedRuleId = ref<string | null>(null)
+const crawlGroupMode = ref<'none' | 'existing' | 'new'>('none')
+const crawlTargetGroupId = ref('')
+const crawlNewGroupName = ref('')
+const crawlNewGroupType = ref<'crawled' | 'past_exam' | 'custom'>('crawled')
+const crawlNewGroupYear = ref<number | null>(null)
+const crawlNewGroupPeriod = ref<'H1' | 'H2'>('H1')
 
 const selectedRule = computed(() => store.rules.find((r) => r.id === selectedRuleId.value) ?? null)
 
 onMounted(async () => {
-  await store.fetchRules()
+  await Promise.all([store.fetchRules(), questionStore.fetchGroups()])
   // Watch task progress
   window.electronAPI.onTaskProgress((msg) => {
     if (activeRun.value && msg.taskId === activeRun.value.taskId) {
@@ -86,7 +94,18 @@ async function runCrawl(ruleId: string) {
   runError.value = ''
   activeRun.value = null
   try {
-    const result = await store.run(ruleId)
+    const result = await store.run({
+      ruleId,
+      target_group_id: crawlGroupMode.value === 'existing' ? (crawlTargetGroupId.value || null) : null,
+      new_group: crawlGroupMode.value === 'new' && crawlNewGroupName.value.trim()
+        ? {
+            name: crawlNewGroupName.value.trim(),
+            group_type: crawlNewGroupType.value,
+            exam_year: crawlNewGroupType.value === 'past_exam' ? crawlNewGroupYear.value : null,
+            exam_period: crawlNewGroupType.value === 'past_exam' ? crawlNewGroupPeriod.value : null,
+          }
+        : null,
+    })
     activeRun.value = { ...result, ruleId }
     await store.fetchRuns(ruleId)
   } catch (e) {
@@ -181,6 +200,49 @@ function formatDate(iso: string) {
           <div class="url-info">
             <span class="label-sm">URL模板：</span>
             <code class="code-text">{{ selectedRule.url_template }}</code>
+          </div>
+
+          <div class="test-panel">
+            <div class="form-group">
+              <label class="label-sm">写入分组</label>
+              <div style="display:flex;gap:12px;flex-wrap:wrap">
+                <label class="label-sm"><input type="radio" value="none" v-model="crawlGroupMode" /> 不指定</label>
+                <label class="label-sm"><input type="radio" value="existing" v-model="crawlGroupMode" /> 现有分组</label>
+                <label class="label-sm"><input type="radio" value="new" v-model="crawlGroupMode" /> 新建分组</label>
+              </div>
+            </div>
+            <div v-if="crawlGroupMode === 'existing'" class="form-group">
+              <select v-model="crawlTargetGroupId" class="input-sm">
+                <option value="">请选择分组</option>
+                <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+              </select>
+            </div>
+            <template v-if="crawlGroupMode === 'new'">
+              <div class="form-group">
+                <input v-model="crawlNewGroupName" class="input-sm" placeholder="新分组名称" />
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>分组类型</label>
+                  <select v-model="crawlNewGroupType" class="input-sm">
+                    <option value="crawled">爬虫导入</option>
+                    <option value="past_exam">历年真题</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <div v-if="crawlNewGroupType === 'past_exam'" class="form-group">
+                  <label>上/下半年</label>
+                  <select v-model="crawlNewGroupPeriod" class="input-sm">
+                    <option value="H1">上半年</option>
+                    <option value="H2">下半年</option>
+                  </select>
+                </div>
+              </div>
+              <div v-if="crawlNewGroupType === 'past_exam'" class="form-group">
+                <label>年份</label>
+                <input v-model.number="crawlNewGroupYear" type="number" min="2000" max="2100" class="input-sm" placeholder="如 2025" />
+              </div>
+            </template>
           </div>
 
           <!-- Run history -->

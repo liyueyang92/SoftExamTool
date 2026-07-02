@@ -2,8 +2,32 @@ import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
 import { toIpcPayload } from '../utils/ipc'
 
+export type QuestionGroupType = 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
+export type ExamPeriod = 'H1' | 'H2'
+
+export interface QuestionGroup {
+  id: string
+  name: string
+  group_type: QuestionGroupType
+  exam_year: number | null
+  exam_period: ExamPeriod | null
+  description: string
+  created_at: string
+  updated_at: string
+}
+
+export interface QuestionGroupDraft {
+  id?: string
+  name: string
+  group_type?: QuestionGroupType
+  exam_year?: number | null
+  exam_period?: ExamPeriod | null
+  description?: string
+}
+
 export interface Question {
   id: string
+  group_id: string | null
   type: 'single' | 'multiple' | 'case' | 'essay'
   content: string
   options: string[] | null
@@ -12,11 +36,33 @@ export interface Question {
   knowledge_tags: string[]
   difficulty: number
   source_type: string
+  source_url?: string | null
   is_favorite: number
+  group_name?: string | null
+  group_type?: QuestionGroupType | null
+  exam_year?: number | null
+  exam_period?: ExamPeriod | null
   created_at: string
 }
 
+export interface QuestionDraft {
+  group_id?: string | null
+  type: Question['type']
+  content: string
+  options?: string[] | null
+  answer?: string | null
+  explanation?: string | null
+  knowledge_tags?: string[]
+  difficulty?: number
+  source_type?: string
+  source_url?: string | null
+}
+
 export interface QuestionFilter {
+  group_id?: string
+  group_type?: QuestionGroupType
+  exam_year?: number
+  exam_period?: ExamPeriod
   type?: string
   difficulty?: number
   source_type?: string
@@ -27,6 +73,8 @@ export interface QuestionFilter {
 }
 
 export const useQuestionStore = defineStore('question', () => {
+  const groups = ref<QuestionGroup[]>([])
+  const groupsLoading = ref(false)
   const questions = ref<Question[]>([])
   const total = ref(0)
   const loading = ref(false)
@@ -46,13 +94,48 @@ export const useQuestionStore = defineStore('question', () => {
     }
   }
 
+  async function fetchGroups() {
+    groupsLoading.value = true
+    try {
+      const res = await window.electronAPI.listQuestionGroups()
+      if (res.success) groups.value = res.data as QuestionGroup[]
+    } finally {
+      groupsLoading.value = false
+    }
+  }
+
+  async function saveGroup(group: QuestionGroupDraft): Promise<QuestionGroup> {
+    const res = await window.electronAPI.upsertQuestionGroup(toIpcPayload(group))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    const updated = res.data as QuestionGroup
+    const idx = groups.value.findIndex((g) => g.id === updated.id)
+    if (idx >= 0) groups.value[idx] = updated
+    else groups.value.unshift(updated)
+    return updated
+  }
+
+  async function removeGroup(id: string) {
+    const res = await window.electronAPI.deleteQuestionGroup(id)
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    groups.value = groups.value.filter((g) => g.id !== id)
+  }
+
+  async function ensureGroupId(args: { groupId?: string | null; newGroup?: QuestionGroupDraft | null }): Promise<string | null> {
+    if (args.groupId) return args.groupId
+    if (args.newGroup?.name?.trim()) {
+      const created = await saveGroup(args.newGroup)
+      return created.id
+    }
+    return null
+  }
+
   async function search(q: string): Promise<Question[]> {
     const res = await window.electronAPI.searchQuestions(toIpcPayload({ q }))
     if (res.success) return res.data as Question[]
     return []
   }
 
-  async function insert(q: Omit<Question, 'id' | 'created_at' | 'is_favorite'>): Promise<Question | null> {
+  async function insert(q: QuestionDraft): Promise<Question | null> {
     const res = await window.electronAPI.insertQuestion(toIpcPayload(q))
     if (res.success) {
       await fetchPage()
@@ -98,10 +181,24 @@ export const useQuestionStore = defineStore('question', () => {
 
   function setFilter(f: Partial<QuestionFilter>) {
     Object.assign(filter, f)
-    if (f.type !== undefined || f.difficulty !== undefined || f.source_type !== undefined || f.knowledge_tag !== undefined || f.is_favorite !== undefined) {
+    if (
+      f.group_id !== undefined ||
+      f.group_type !== undefined ||
+      f.exam_year !== undefined ||
+      f.exam_period !== undefined ||
+      f.type !== undefined ||
+      f.difficulty !== undefined ||
+      f.source_type !== undefined ||
+      f.knowledge_tag !== undefined ||
+      f.is_favorite !== undefined
+    ) {
       filter.page = 1
     }
   }
 
-  return { questions, total, loading, filter, stats, fetchPage, search, insert, batchImport, update, remove, toggleFavorite, loadStats, setFilter }
+  return {
+    groups, groupsLoading, questions, total, loading, filter, stats,
+    fetchGroups, saveGroup, removeGroup, ensureGroupId,
+    fetchPage, search, insert, batchImport, update, remove, toggleFavorite, loadStats, setFilter,
+  }
 })

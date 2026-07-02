@@ -3,6 +3,17 @@ import { ref } from 'vue'
 import type { Question } from './question'
 import { toIpcPayload } from '../utils/ipc'
 
+export type QuestionGroupType = 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
+export type ExamPeriod = 'H1' | 'H2'
+
+export interface NewQuestionGroupInput {
+  name: string
+  group_type?: QuestionGroupType
+  exam_year?: number | null
+  exam_period?: ExamPeriod | null
+  description?: string
+}
+
 export interface AiConfig {
   mode: 'openai' | 'ollama' | 'anthropic'
   openai: { baseUrl: string; apiKey: string; model: string }
@@ -16,6 +27,8 @@ export interface GenerateParams {
   knowledge_tags: string[]
   difficulty?: number
   context?: string
+  target_group_id?: string | null
+  new_group?: NewQuestionGroupInput | null
 }
 
 export interface GradeResult {

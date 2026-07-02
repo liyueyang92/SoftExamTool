@@ -19,6 +19,9 @@ export const IPC = {
 
   QUESTION_QUERY: 'question:query',
   QUESTION_SEARCH: 'question:search',
+  QUESTION_GROUP_LIST: 'questionGroup:list',
+  QUESTION_GROUP_UPSERT: 'questionGroup:upsert',
+  QUESTION_GROUP_DELETE: 'questionGroup:delete',
   QUESTION_INSERT: 'question:insert',
   QUESTION_BATCH_INSERT: 'question:batchInsert',
   QUESTION_UPDATE: 'question:update',

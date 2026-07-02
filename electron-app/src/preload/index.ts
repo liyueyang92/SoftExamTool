@@ -51,6 +51,12 @@ const customAPI = {
   relaunchApp: () => invokeWithTimeout<void>('app:relaunch'),
 
   // Phase 2 — Questions
+  listQuestionGroups: () =>
+    invokeWithTimeout<unknown[]>('questionGroup:list'),
+  upsertQuestionGroup: (args: unknown) =>
+    invokeWithTimeout<unknown>('questionGroup:upsert', args),
+  deleteQuestionGroup: (id: string) =>
+    invokeWithTimeout<void>('questionGroup:delete', id),
   queryQuestions: (filter?: Record<string, unknown>) =>
     invokeWithTimeout<{ items: unknown[]; total: number }>('question:query', filter),
   searchQuestions: (args: { q: string; limit?: number }) =>
@@ -114,7 +120,7 @@ const customAPI = {
   testAiConnection: (args?: unknown) =>
     invokeWithTimeout<{ ok: boolean; reply: string }>('ai:testConnection', args, 30_000),
   generateQuestions: (args: unknown) =>
-    invokeWithTimeout<{ questions: unknown[] }>('ai:generateQuestions', args, 120_000),
+    invokeWithTimeout<{ questions: unknown[]; target_group_id?: string | null; new_group?: unknown | null }>('ai:generateQuestions', args, 120_000),
   gradeEssay: (args: unknown) =>
     invokeWithTimeout<unknown>('ai:gradeEssay', args, 120_000),
 
@@ -123,7 +129,8 @@ const customAPI = {
   upsertCrawlerRule: (args: unknown) => invokeWithTimeout<unknown>('crawler:upsertRule', args),
   deleteCrawlerRule: (id: string) => invokeWithTimeout<void>('crawler:deleteRule', id),
   testCrawl: (args: unknown) => invokeWithTimeout<{ count: number; samples: unknown[] }>('crawler:test', args, 30_000),
-  runCrawl: (args: { ruleId: string }) => invokeWithTimeout<{ taskId: string; runId: string }>('crawler:run', args),
+  runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null }) =>
+    invokeWithTimeout<{ taskId: string; runId: string }>('crawler:run', args),
   listCrawlerRuns: (ruleId: string) => invokeWithTimeout<unknown[]>('crawler:listRuns', ruleId),
 
   // Phase 5 — Knowledge Graph
