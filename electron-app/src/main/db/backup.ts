@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import { randomUUID } from 'crypto'
-import { statSync, existsSync, unlinkSync } from 'fs'
+import { copyFileSync, statSync, existsSync, unlinkSync } from 'fs'
 import { basename, isAbsolute, join, normalize, relative, resolve } from 'path'
 import { getStoragePaths } from '../storage-paths'
 
@@ -34,9 +34,8 @@ export function createBackup(
   const fileName = `softexam-backup-${ts}.db`
   const destPath = join(destDir, fileName)
 
-  // VACUUM INTO creates a consistent copy that works with SQLCipher-encrypted sources.
-  // The backup file is unencrypted plain SQLite (portable, no key needed to restore).
-  db.exec(`VACUUM INTO '${destPath.replace(/'/g, "''")}'`)
+  db.pragma('wal_checkpoint(TRUNCATE)')
+  copyFileSync(getDbPath(), destPath)
 
   const size = existsSync(destPath) ? statSync(destPath).size : 0
   const id = randomUUID()

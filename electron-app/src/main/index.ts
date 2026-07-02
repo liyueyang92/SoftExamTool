@@ -235,6 +235,15 @@ function writeJsonFile(filePath: string, data: unknown): void {
   writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
 }
 
+function isPlainSqliteFile(filePath: string): boolean {
+  try {
+    const header = readFileSync(filePath).subarray(0, 16).toString('ascii')
+    return header === 'SQLite format 3\u0000'
+  } catch {
+    return false
+  }
+}
+
 function buildManagedDocumentPath(sourcePath: string, md5: string, paths = getStoragePaths()): string {
   const extension = extname(sourcePath) || '.pdf'
   const baseName = sanitizeFileName(basename(sourcePath, extension))
@@ -1055,18 +1064,37 @@ function registerIpcHandlers(): void {
     const dbPath = getStoragePaths().databasePath
     const walPath = `${dbPath}-wal`
     const shmPath = `${dbPath}-shm`
+    const tempEncryptedPath = `${dbPath}.restore-encrypted`
 
     // Close DB, copy backup over current DB, reopen
     closeDatabase()
     try {
-      const dbKey = await getOrCreateDatabaseKey()
       if (existsSync(walPath)) rmSync(walPath, { force: true })
       if (existsSync(shmPath)) rmSync(shmPath, { force: true })
-      copyFileSync(backupPath, dbPath)
-      const restoredDb = new Database(dbPath)
-      restoredDb.pragma(`rekey='${dbKey}'`)
-      restoredDb.close()
+
+      if (existsSync(dbPath)) rmSync(dbPath, { force: true })
+      if (isPlainSqliteFile(backupPath)) {
+        const dbKey = await getOrCreateDatabaseKey()
+        if (existsSync(tempEncryptedPath)) rmSync(tempEncryptedPath, { force: true })
+
+        const sourceDb = new Database(backupPath)
+        sourceDb.pragma("key=''");
+        const escapedTempPath = tempEncryptedPath.replace(/'/g, "''")
+        const escapedKey = dbKey.replace(/'/g, "''")
+        sourceDb.exec(`
+          ATTACH DATABASE '${escapedTempPath}' AS encrypted KEY '${escapedKey}';
+          SELECT sqlcipher_export('encrypted');
+          DETACH DATABASE encrypted;
+        `)
+        sourceDb.close()
+
+        copyFileSync(tempEncryptedPath, dbPath)
+        rmSync(tempEncryptedPath, { force: true })
+      } else {
+        copyFileSync(backupPath, dbPath)
+      }
     } catch (e) {
+      console.error('[Backup] Restore failed:', e)
       // Reopen with whatever exists
       await initDatabase()
       throw Object.assign(new Error('恢复失败：' + String(e)), { code: 'RESTORE_FAILED' })
