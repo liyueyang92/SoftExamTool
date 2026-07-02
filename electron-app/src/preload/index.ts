@@ -129,9 +129,17 @@ const customAPI = {
   upsertCrawlerRule: (args: unknown) => invokeWithTimeout<unknown>('crawler:upsertRule', args),
   deleteCrawlerRule: (id: string) => invokeWithTimeout<void>('crawler:deleteRule', id),
   testCrawl: (args: unknown) => invokeWithTimeout<{ count: number; samples: unknown[] }>('crawler:test', args, 30_000),
-  runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null }) =>
+  runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null; account_alias?: string | null }) =>
     invokeWithTimeout<{ taskId: string; runId: string }>('crawler:run', args),
   listCrawlerRuns: (ruleId: string) => invokeWithTimeout<unknown[]>('crawler:listRuns', ruleId),
+  startCrawlerAuth: (args: { ruleId: string; account_alias?: string }) =>
+    invokeWithTimeout<unknown>('crawler:authStart', args, 300_000),
+  listCrawlerSessions: (args?: { ruleId?: string }) =>
+    invokeWithTimeout<unknown[]>('crawler:listSessions', args),
+  validateCrawlerSession: (args: { ruleId: string; account_alias: string }) =>
+    invokeWithTimeout<{ valid: boolean; status?: number; message?: string }>('crawler:validateSession', args, 60_000),
+  deleteCrawlerSession: (args: { ruleId: string; account_alias: string }) =>
+    invokeWithTimeout<void>('crawler:deleteSession', args),
   listCrawlerReviewItems: (args?: { status?: string; ruleId?: string; runId?: string; limit?: number }) =>
     invokeWithTimeout<unknown[]>('crawler:listReviewItems', args),
   rejectCrawlerReviewItems: (args: { ids: string[]; notes?: string }) =>

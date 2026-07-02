@@ -46,6 +46,33 @@ export type CrawlerAdapter = 'http_rule' | 'browser_rule' | 'api_json' | 'feed_i
 export type CrawlerAuthMode = 'none' | 'manual_session'
 export type ReviewStatus = 'pending' | 'approved' | 'rejected' | 'imported'
 
+export interface CrawlerSiteSession {
+  id: string
+  site_id: string
+  site_name: string
+  account_alias: string
+  auth_mode: CrawlerAuthMode
+  encrypted_state: Buffer
+  storage_meta: string
+  last_validated_at: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CrawlerSessionPublic {
+  id: string
+  site_id: string
+  site_name: string
+  account_alias: string
+  auth_mode: CrawlerAuthMode
+  storage_meta: Record<string, unknown>
+  last_validated_at: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface NormalizedCrawlerPayload extends QuestionInput {
   title?: string | null
   content_hash?: string
@@ -102,6 +129,21 @@ function parseReviewItem(row: CrawlerReviewItem): ParsedCrawlerReviewItem {
     target_group_snapshot: row.target_group_snapshot
       ? JSON.parse(row.target_group_snapshot) as ParsedCrawlerReviewItem['target_group_snapshot']
       : null,
+  }
+}
+
+function parseSession(row: CrawlerSiteSession): CrawlerSessionPublic {
+  return {
+    id: row.id,
+    site_id: row.site_id,
+    site_name: row.site_name,
+    account_alias: row.account_alias,
+    auth_mode: row.auth_mode,
+    storage_meta: row.storage_meta ? JSON.parse(row.storage_meta) as Record<string, unknown> : {},
+    last_validated_at: row.last_validated_at,
+    expires_at: row.expires_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   }
 }
 
@@ -285,4 +327,89 @@ export function getCrawlerReviewItemsByIds(db: Database, ids: string[]): ParsedC
     WHERE id IN (${placeholders})
   `).all(...ids) as CrawlerReviewItem[]
   return rows.map(parseReviewItem)
+}
+
+export function upsertCrawlerSiteSession(
+  db: Database,
+  input: {
+    site_id: string
+    site_name: string
+    account_alias: string
+    auth_mode?: CrawlerAuthMode
+    encrypted_state: Buffer
+    storage_meta?: Record<string, unknown>
+    expires_at?: string | null
+  }
+): CrawlerSessionPublic {
+  const now = new Date().toISOString()
+  const existing = db.prepare(`
+    SELECT id
+    FROM crawler_site_sessions
+    WHERE site_id = ? AND account_alias = ?
+  `).get(input.site_id, input.account_alias) as { id: string } | undefined
+
+  if (existing) {
+    db.prepare(`
+      UPDATE crawler_site_sessions
+      SET site_name = ?, auth_mode = ?, encrypted_state = ?, storage_meta = ?,
+          expires_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      input.site_name,
+      input.auth_mode ?? 'manual_session',
+      input.encrypted_state,
+      JSON.stringify(input.storage_meta ?? {}),
+      input.expires_at ?? null,
+      now,
+      existing.id,
+    )
+    return parseSession(db.prepare('SELECT * FROM crawler_site_sessions WHERE id=?').get(existing.id) as CrawlerSiteSession)
+  }
+
+  const id = randomUUID()
+  db.prepare(`
+    INSERT INTO crawler_site_sessions
+      (id, site_id, site_name, account_alias, auth_mode, encrypted_state, storage_meta, expires_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    input.site_id,
+    input.site_name,
+    input.account_alias,
+    input.auth_mode ?? 'manual_session',
+    input.encrypted_state,
+    JSON.stringify(input.storage_meta ?? {}),
+    input.expires_at ?? null,
+    now,
+    now,
+  )
+  return parseSession(db.prepare('SELECT * FROM crawler_site_sessions WHERE id=?').get(id) as CrawlerSiteSession)
+}
+
+export function listCrawlerSiteSessions(db: Database, siteId?: string): CrawlerSessionPublic[] {
+  const rows = siteId
+    ? db.prepare('SELECT * FROM crawler_site_sessions WHERE site_id=? ORDER BY updated_at DESC').all(siteId)
+    : db.prepare('SELECT * FROM crawler_site_sessions ORDER BY updated_at DESC').all()
+  return (rows as CrawlerSiteSession[]).map(parseSession)
+}
+
+export function getCrawlerSiteSession(db: Database, siteId: string, accountAlias: string): CrawlerSiteSession | null {
+  return db.prepare(`
+    SELECT *
+    FROM crawler_site_sessions
+    WHERE site_id = ? AND account_alias = ?
+  `).get(siteId, accountAlias) as CrawlerSiteSession | null
+}
+
+export function touchCrawlerSiteSessionValidation(db: Database, siteId: string, accountAlias: string): void {
+  const now = new Date().toISOString()
+  db.prepare(`
+    UPDATE crawler_site_sessions
+    SET last_validated_at = ?, updated_at = ?
+    WHERE site_id = ? AND account_alias = ?
+  `).run(now, now, siteId, accountAlias)
+}
+
+export function deleteCrawlerSiteSession(db: Database, siteId: string, accountAlias: string): void {
+  db.prepare('DELETE FROM crawler_site_sessions WHERE site_id=? AND account_alias=?').run(siteId, accountAlias)
 }

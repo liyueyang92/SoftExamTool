@@ -29,7 +29,10 @@ import {
   createCrawlerRun, updateCrawlerRun, listCrawlerRuns, addCrawledCount,
   saveCrawlerReviewItems, listCrawlerReviewItems, updateCrawlerReviewStatus,
   getCrawlerReviewItemsByIds,
+  upsertCrawlerSiteSession, listCrawlerSiteSessions, getCrawlerSiteSession,
+  touchCrawlerSiteSessionValidation, deleteCrawlerSiteSession,
   type NormalizedCrawlerPayload,
+  type CrawlerRule,
 } from './db/crawler'
 import {
   listEssays, createEssay, getEssay, updateEssaySection, updateEssayMeta,
@@ -457,6 +460,178 @@ function resolveQuestionGroupId(
   return null
 }
 
+function getCrawlerSiteId(rule: Pick<CrawlerRule, 'id'>): string {
+  return rule.id
+}
+
+function encryptCrawlerState(state: unknown): Buffer {
+  const raw = JSON.stringify(state)
+  if (!safeStorage.isEncryptionAvailable()) {
+    return Buffer.from(raw, 'utf-8')
+  }
+  return safeStorage.encryptString(raw)
+}
+
+function decryptCrawlerState(encrypted: Buffer): unknown {
+  if (!safeStorage.isEncryptionAvailable()) {
+    return JSON.parse(Buffer.from(encrypted).toString('utf-8'))
+  }
+  return JSON.parse(safeStorage.decryptString(Buffer.from(encrypted)))
+}
+
+async function collectCrawlerWebState(win: BrowserWindow): Promise<{
+  cookies: Electron.Cookie[]
+  localStorage: Record<string, string>
+  origin: string
+  url: string
+}> {
+  const cookies = await win.webContents.session.cookies.get({})
+  const url = win.webContents.getURL()
+  const origin = new URL(url).origin
+  const localStorage = await win.webContents.executeJavaScript(`
+    (() => {
+      const data = {};
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key) data[key] = localStorage.getItem(key);
+      }
+      return data;
+    })()
+  `, true) as Record<string, string>
+  return { cookies, localStorage, origin, url }
+}
+
+async function openCrawlerAuthWindow(args: {
+  rule: CrawlerRule
+  accountAlias: string
+}): Promise<ReturnType<typeof upsertCrawlerSiteSession>> {
+  if (!args.rule.login_url) {
+    throw Object.assign(new Error('Login URL is required'), { code: 'CRAWLER_LOGIN_URL_REQUIRED' })
+  }
+
+  const authWindow = new BrowserWindow({
+    width: 1080,
+    height: 760,
+    title: `Authorize ${args.rule.site_name}`,
+    parent: mainWindow ?? undefined,
+    modal: false,
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      sandbox: false,
+    },
+  })
+
+  const finishPromise = new Promise<ReturnType<typeof upsertCrawlerSiteSession>>((resolvePromise, rejectPromise) => {
+    let settled = false
+    const settle = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      fn()
+      if (!authWindow.isDestroyed()) authWindow.close()
+    }
+
+    authWindow.once('ready-to-show', () => authWindow.show())
+    authWindow.on('closed', () => {
+      if (!settled) {
+        settled = true
+        rejectPromise(Object.assign(new Error('Authorization window closed'), { code: 'CRAWLER_AUTH_CANCELLED' }))
+      }
+    })
+    authWindow.webContents.setWindowOpenHandler((details) => {
+      authWindow.loadURL(details.url)
+      return { action: 'deny' }
+    })
+    authWindow.webContents.on('did-finish-load', async () => {
+      try {
+        await authWindow.webContents.insertCSS(`
+          #crawler-auth-finish {
+            position: fixed;
+            right: 18px;
+            bottom: 18px;
+            z-index: 2147483647;
+            border: 0;
+            border-radius: 6px;
+            background: #1d4ed8;
+            color: #fff;
+            padding: 10px 14px;
+            font: 600 14px system-ui, sans-serif;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, .28);
+            cursor: pointer;
+          }
+        `)
+        await authWindow.webContents.executeJavaScript(`
+          (() => {
+            if (document.getElementById('crawler-auth-finish')) return;
+            const btn = document.createElement('button');
+            btn.id = 'crawler-auth-finish';
+            btn.textContent = '完成授权';
+            btn.addEventListener('click', () => {
+              window.location.href = 'crawler-auth://finish';
+            });
+            document.body.appendChild(btn);
+          })()
+        `, true)
+      } catch {
+        // Page CSP may block injection; the menu fallback still works via close rejection.
+      }
+    })
+    authWindow.webContents.on('will-navigate', async (event, url) => {
+      if (url !== 'crawler-auth://finish') return
+      event.preventDefault()
+      try {
+        const state = await collectCrawlerWebState(authWindow)
+        const saved = upsertCrawlerSiteSession(getDatabase(), {
+          site_id: getCrawlerSiteId(args.rule),
+          site_name: args.rule.site_name,
+          account_alias: args.accountAlias,
+          encrypted_state: encryptCrawlerState(state),
+          storage_meta: {
+            cookie_count: state.cookies.length,
+            local_storage_keys: Object.keys(state.localStorage).length,
+            captured_origin: state.origin,
+            captured_url: state.url,
+          },
+        })
+        settle(() => resolvePromise(saved))
+      } catch (e) {
+        settle(() => rejectPromise(e))
+      }
+    })
+  })
+
+  await authWindow.loadURL(args.rule.login_url)
+  return finishPromise
+}
+
+function getDecryptedCrawlerSessionPayload(
+  db: Database.Database,
+  rule: CrawlerRule,
+  accountAlias?: string | null,
+): unknown | null {
+  if (!accountAlias) return null
+  const session = getCrawlerSiteSession(db, getCrawlerSiteId(rule), accountAlias)
+  if (!session) return null
+  return decryptCrawlerState(session.encrypted_state)
+}
+
+async function validateCrawlerSession(
+  rule: CrawlerRule,
+  state: unknown,
+): Promise<{ valid: boolean; status?: number; message?: string }> {
+  if (!rule.validate_url) return { valid: true, message: 'No validate_url configured' }
+  const typed = state as { cookies?: Array<{ name: string; value: string }> }
+  const cookieHeader = (typed.cookies ?? [])
+    .filter((cookie) => cookie.name && cookie.value)
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join('; ')
+  const res = await fetch(rule.validate_url, {
+    method: 'GET',
+    headers: cookieHeader ? { Cookie: cookieHeader } : {},
+  })
+  return { valid: res.ok, status: res.status, message: res.statusText }
+}
+
 function registerIpcHandlers(): void {
   const db = getDatabase()
 
@@ -800,11 +975,16 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.CRAWLER_LIST_RUNS, async (ruleId) => listCrawlerRuns(db, ruleId as string))
 
   registerHandler(IPC.CRAWLER_TEST, async (args) => {
-    const { rule, test_url } = args as { rule: unknown; test_url: string }
+    const { rule, test_url, account_alias = null } = args as {
+      rule: CrawlerRule
+      test_url: string
+      account_alias?: string | null
+    }
+    const session_state = getDecryptedCrawlerSessionPayload(db, rule, account_alias)
     const res = await fetch(`http://127.0.0.1:${pythonManager.port}/crawler/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({ rule, test_url }),
+      body: JSON.stringify({ rule, test_url, account_alias, session_state }),
     })
     if (!res.ok) {
       const err = await res.json() as { detail?: string | { code?: string; message?: string } }
@@ -818,10 +998,11 @@ function registerIpcHandlers(): void {
   })
 
   registerHandler(IPC.CRAWLER_RUN, async (args) => {
-    const { ruleId, target_group_id = null, new_group = null } = args as {
+    const { ruleId, target_group_id = null, new_group = null, account_alias = null } = args as {
       ruleId: string
       target_group_id?: string | null
       new_group?: QuestionGroupInput | null
+      account_alias?: string | null
     }
     const rules = listCrawlerRules(db)
     const rule = rules.find((r) => r.id === ruleId)
@@ -872,13 +1053,50 @@ function registerIpcHandlers(): void {
       taskManager!.updateTask(taskId, 'failed', { error })
     })
 
+    const session_state = getDecryptedCrawlerSessionPayload(db, rule, account_alias)
     fetch(`http://127.0.0.1:${pythonManager.port}/crawler/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({ rule, task_id: taskId, rule_id: ruleId, target_group_id: resolvedGroupId, new_group }),
+      body: JSON.stringify({
+        rule,
+        task_id: taskId,
+        rule_id: ruleId,
+        target_group_id: resolvedGroupId,
+        new_group,
+        account_alias,
+        session_state,
+      }),
     }).catch((e) => console.error('[Crawler] Run request failed:', e))
 
     return { taskId, runId: run.id }
+  })
+
+  registerHandler(IPC.CRAWLER_AUTH_START, async (args) => {
+    const { ruleId, account_alias = 'default' } = args as { ruleId: string; account_alias?: string }
+    const rule = listCrawlerRules(db).find((item) => item.id === ruleId)
+    if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
+    return openCrawlerAuthWindow({ rule, accountAlias: account_alias || 'default' })
+  })
+
+  registerHandler(IPC.CRAWLER_LIST_SESSIONS, async (args) => {
+    const { ruleId } = (args ?? {}) as { ruleId?: string }
+    return listCrawlerSiteSessions(db, ruleId)
+  })
+
+  registerHandler(IPC.CRAWLER_VALIDATE_SESSION, async (args) => {
+    const { ruleId, account_alias } = args as { ruleId: string; account_alias: string }
+    const rule = listCrawlerRules(db).find((item) => item.id === ruleId)
+    if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
+    const state = getDecryptedCrawlerSessionPayload(db, rule, account_alias)
+    if (!state) throw Object.assign(new Error('Session not found'), { code: 'CRAWLER_AUTH_INVALID' })
+    const result = await validateCrawlerSession(rule, state)
+    if (result.valid) touchCrawlerSiteSessionValidation(db, getCrawlerSiteId(rule), account_alias)
+    return result
+  })
+
+  registerHandler(IPC.CRAWLER_DELETE_SESSION, async (args) => {
+    const { ruleId, account_alias } = args as { ruleId: string; account_alias: string }
+    deleteCrawlerSiteSession(db, ruleId, account_alias)
   })
 
   registerHandler(IPC.CRAWLER_LIST_REVIEW_ITEMS, async (args) =>

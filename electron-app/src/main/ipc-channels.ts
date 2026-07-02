@@ -56,6 +56,10 @@ export const IPC = {
   CRAWLER_LIST_REVIEW_ITEMS: 'crawler:listReviewItems',
   CRAWLER_REJECT_REVIEW_ITEMS: 'crawler:rejectReviewItems',
   CRAWLER_IMPORT_REVIEW_ITEMS: 'crawler:importReviewItems',
+  CRAWLER_AUTH_START: 'crawler:authStart',
+  CRAWLER_LIST_SESSIONS: 'crawler:listSessions',
+  CRAWLER_VALIDATE_SESSION: 'crawler:validateSession',
+  CRAWLER_DELETE_SESSION: 'crawler:deleteSession',
 
   GRAPH_BUILD: 'graph:build',
 

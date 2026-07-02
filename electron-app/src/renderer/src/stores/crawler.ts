@@ -61,6 +61,19 @@ export interface CrawlerReviewItem {
   updated_at: string
 }
 
+export interface CrawlerSession {
+  id: string
+  site_id: string
+  site_name: string
+  account_alias: string
+  auth_mode: 'none' | 'manual_session'
+  storage_meta: Record<string, unknown>
+  last_validated_at: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface NewCrawlerTargetGroup {
   name: string
   group_type?: 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
@@ -74,6 +87,7 @@ export const useCrawlerStore = defineStore('crawler', () => {
   const loading = ref(false)
   const runs = ref<CrawlerRun[]>([])
   const reviewItems = ref<CrawlerReviewItem[]>([])
+  const sessions = ref<CrawlerSession[]>([])
   const activeRuleId = ref<string | null>(null)
 
   async function fetchRules() {
@@ -102,13 +116,22 @@ export const useCrawlerStore = defineStore('crawler', () => {
     if (activeRuleId.value === id) activeRuleId.value = null
   }
 
-  async function testCrawl(rule: Partial<CrawlerRule>, testUrl: string) {
-    const res = await window.electronAPI.testCrawl(toIpcPayload({ rule, test_url: testUrl }))
+  async function testCrawl(rule: Partial<CrawlerRule>, testUrl: string, accountAlias?: string | null) {
+    const res = await window.electronAPI.testCrawl(toIpcPayload({
+      rule,
+      test_url: testUrl,
+      account_alias: accountAlias,
+    }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     return res.data
   }
 
-  async function run(args: { ruleId: string; target_group_id?: string | null; new_group?: NewCrawlerTargetGroup | null }) {
+  async function run(args: {
+    ruleId: string
+    target_group_id?: string | null
+    new_group?: NewCrawlerTargetGroup | null
+    account_alias?: string | null
+  }) {
     const res = await window.electronAPI.runCrawl(toIpcPayload(args))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     return res.data
@@ -117,6 +140,31 @@ export const useCrawlerStore = defineStore('crawler', () => {
   async function fetchRuns(ruleId: string) {
     const res = await window.electronAPI.listCrawlerRuns(ruleId)
     if (res.success) runs.value = res.data as CrawlerRun[]
+  }
+
+  async function startAuth(ruleId: string, accountAlias: string) {
+    const res = await window.electronAPI.startCrawlerAuth(toIpcPayload({ ruleId, account_alias: accountAlias }))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    await fetchSessions(ruleId)
+    return res.data
+  }
+
+  async function fetchSessions(ruleId?: string) {
+    const res = await window.electronAPI.listCrawlerSessions(toIpcPayload({ ruleId }))
+    if (res.success) sessions.value = res.data as CrawlerSession[]
+  }
+
+  async function validateSession(ruleId: string, accountAlias: string) {
+    const res = await window.electronAPI.validateCrawlerSession(toIpcPayload({ ruleId, account_alias: accountAlias }))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    await fetchSessions(ruleId)
+    return res.data
+  }
+
+  async function deleteSession(ruleId: string, accountAlias: string) {
+    const res = await window.electronAPI.deleteCrawlerSession(toIpcPayload({ ruleId, account_alias: accountAlias }))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    sessions.value = sessions.value.filter((session) => !(session.site_id === ruleId && session.account_alias === accountAlias))
   }
 
   async function fetchReviewItems(filter: { status?: string; ruleId?: string; runId?: string; limit?: number } = { status: 'pending' }) {
@@ -142,6 +190,7 @@ export const useCrawlerStore = defineStore('crawler', () => {
     loading,
     runs,
     reviewItems,
+    sessions,
     activeRuleId,
     fetchRules,
     upsert,
@@ -149,6 +198,10 @@ export const useCrawlerStore = defineStore('crawler', () => {
     testCrawl,
     run,
     fetchRuns,
+    startAuth,
+    fetchSessions,
+    validateSession,
+    deleteSession,
     fetchReviewItems,
     rejectReviewItems,
     importReviewItems,

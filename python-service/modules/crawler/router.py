@@ -19,6 +19,7 @@ async def test_crawl(req: TestCrawlRequest):
             manual_input['url'] = req.test_url
         results = await crawl(req.rule, RuntimeContext(
             account_alias=req.account_alias,
+            session_state=req.session_state,
             manual_input=manual_input or None,
         ))
         return {'count': len(results), 'samples': [item.model_dump() for item in results[:3]]}
@@ -43,6 +44,7 @@ async def _do_crawl(req: RunCrawlRequest) -> None:
             rule_id=req.rule_id,
             target_group_id=req.target_group_id,
             account_alias=req.account_alias,
+            session_state=req.session_state,
             manual_input=req.manual_input,
         ))
         await push_progress(req.task_id, 95, 'Finalizing results')

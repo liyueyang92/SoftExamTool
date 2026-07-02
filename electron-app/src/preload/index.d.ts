@@ -98,8 +98,12 @@ declare global {
       upsertCrawlerRule: (args: unknown) => Promise<IpcResponse<unknown>>
       deleteCrawlerRule: (id: string) => Promise<IpcResponse<void>>
       testCrawl: (args: unknown) => Promise<IpcResponse<{ count: number; samples: unknown[] }>>
-      runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
+      runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null; account_alias?: string | null }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
       listCrawlerRuns: (ruleId: string) => Promise<IpcResponse<unknown[]>>
+      startCrawlerAuth: (args: { ruleId: string; account_alias?: string }) => Promise<IpcResponse<unknown>>
+      listCrawlerSessions: (args?: { ruleId?: string }) => Promise<IpcResponse<unknown[]>>
+      validateCrawlerSession: (args: { ruleId: string; account_alias: string }) => Promise<IpcResponse<{ valid: boolean; status?: number; message?: string }>>
+      deleteCrawlerSession: (args: { ruleId: string; account_alias: string }) => Promise<IpcResponse<void>>
       listCrawlerReviewItems: (args?: { status?: string; ruleId?: string; runId?: string; limit?: number }) => Promise<IpcResponse<unknown[]>>
       rejectCrawlerReviewItems: (args: { ids: string[]; notes?: string }) => Promise<IpcResponse<void>>
       importCrawlerReviewItems: (args: { ids: string[]; target_group_id?: string | null; new_group?: unknown | null }) => Promise<IpcResponse<{ count: number }>>

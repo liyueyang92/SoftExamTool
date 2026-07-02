@@ -93,6 +93,7 @@ class RuntimeContext(BaseModel):
     rule_id: Optional[str] = None
     account_alias: Optional[str] = None
     target_group_id: Optional[str] = None
+    session_state: dict[str, Any] | None = None
     manual_input: dict[str, Any] | None = None
 
 
@@ -100,6 +101,7 @@ class TestCrawlRequest(BaseModel):
     rule: CrawlRuleModel
     test_url: Optional[str] = None
     account_alias: Optional[str] = None
+    session_state: dict[str, Any] | None = None
     manual_input: dict[str, Any] | None = None
 
 
@@ -110,4 +112,5 @@ class RunCrawlRequest(BaseModel):
     target_group_id: str | None = None
     new_group: NewQuestionGroupModel | None = None
     account_alias: Optional[str] = None
+    session_state: dict[str, Any] | None = None
     manual_input: dict[str, Any] | None = None

@@ -31,14 +31,22 @@ const newGroupPeriod = ref<'H1' | 'H2'>('H1')
 
 const selectedReviewIds = ref<string[]>([])
 const reviewMessage = ref('')
+const accountAlias = ref('default')
+const sessionMessage = ref('')
+const sessionBusy = ref(false)
 
 const selectedRule = computed(() => store.rules.find((r) => r.id === selectedRuleId.value) ?? null)
+const selectedSessions = computed(() => {
+  const ruleId = selectedRule.value?.id
+  return ruleId ? store.sessions.filter((item) => item.site_id === ruleId) : []
+})
 const pendingCount = computed(() => store.reviewItems.length)
 
 onMounted(async () => {
   await Promise.all([
     store.fetchRules(),
     store.fetchReviewItems({ status: 'pending', limit: 100 }),
+    store.fetchSessions(),
     questionStore.fetchGroups(),
   ])
   window.electronAPI.onTaskProgress((msg) => {
@@ -117,6 +125,11 @@ function buildRuleJson(rule: Partial<CrawlerRule>) {
       },
     },
     pagination: { type: 'page_param', max_pages: rule.max_pages },
+    browser: {
+      wait_until: 'networkidle',
+      wait_selector: rule.item_selector,
+      timeout_ms: 30000,
+    },
     request: { delay_ms: rule.delay_ms },
   }, null, 2)
 }
@@ -149,7 +162,11 @@ async function doTest() {
   testResult.value = null
   testError.value = ''
   try {
-    testResult.value = await store.testCrawl({ ...editTarget.value, rule_json: ruleJsonText.value }, testUrl.value) as {
+    testResult.value = await store.testCrawl(
+      { ...editTarget.value, rule_json: ruleJsonText.value },
+      testUrl.value,
+      accountAlias.value || null,
+    ) as {
       count: number
       samples: unknown[]
     }
@@ -181,14 +198,16 @@ async function runCrawl(ruleId: string) {
   runMessage.value = '准备启动'
   runError.value = ''
   activeRun.value = null
-  const result = await store.run({ ruleId, ...currentGroupPayload() })
+  const result = await store.run({ ruleId, ...currentGroupPayload(), account_alias: accountAlias.value || null })
   activeRun.value = { ...result, ruleId }
   await store.fetchRuns(ruleId)
 }
 
 async function selectRule(ruleId: string) {
   selectedRuleId.value = ruleId
-  await store.fetchRuns(ruleId)
+  await Promise.all([store.fetchRuns(ruleId), store.fetchSessions(ruleId)])
+  const first = store.sessions.find((session) => session.site_id === ruleId)
+  if (first) accountAlias.value = first.account_alias
 }
 
 function toggleReview(id: string, checked: boolean) {
@@ -210,6 +229,48 @@ async function rejectSelected() {
   await store.rejectReviewItems(selectedReviewIds.value, 'Rejected by user')
   reviewMessage.value = `已丢弃 ${selectedReviewIds.value.length} 条`
   selectedReviewIds.value = []
+}
+
+async function startAuth() {
+  if (!selectedRule.value) return
+  sessionBusy.value = true
+  sessionMessage.value = ''
+  try {
+    await store.startAuth(selectedRule.value.id, accountAlias.value || 'default')
+    sessionMessage.value = '授权已保存'
+  } catch (e) {
+    sessionMessage.value = String(e)
+  } finally {
+    sessionBusy.value = false
+  }
+}
+
+async function validateSession() {
+  if (!selectedRule.value) return
+  sessionBusy.value = true
+  sessionMessage.value = ''
+  try {
+    const res = await store.validateSession(selectedRule.value.id, accountAlias.value || 'default')
+    sessionMessage.value = res.valid ? `会话有效${res.status ? ` (${res.status})` : ''}` : `会话无效${res.status ? ` (${res.status})` : ''}`
+  } catch (e) {
+    sessionMessage.value = String(e)
+  } finally {
+    sessionBusy.value = false
+  }
+}
+
+async function deleteSession() {
+  if (!selectedRule.value) return
+  sessionBusy.value = true
+  sessionMessage.value = ''
+  try {
+    await store.deleteSession(selectedRule.value.id, accountAlias.value || 'default')
+    sessionMessage.value = '会话已清除'
+  } catch (e) {
+    sessionMessage.value = String(e)
+  } finally {
+    sessionBusy.value = false
+  }
 }
 
 function statusClass(status: string) {
@@ -296,6 +357,28 @@ function formatDate(iso?: string | null) {
                 <option value="H2">下半年</option>
               </select>
             </div>
+          </section>
+
+          <section v-if="selectedRule.auth_required" class="target-box">
+            <label>登录态</label>
+            <div class="session-row">
+              <input v-model="accountAlias" class="input" placeholder="账号别名" />
+              <button class="btn" :disabled="sessionBusy" @click="startAuth">登录并授权</button>
+              <button class="btn" :disabled="sessionBusy" @click="validateSession">检查会话</button>
+              <button class="btn" :disabled="sessionBusy" @click="deleteSession">清除会话</button>
+            </div>
+            <div class="sessions">
+              <button
+                v-for="session in selectedSessions"
+                :key="session.id"
+                class="session-pill"
+                :class="{ active: accountAlias === session.account_alias }"
+                @click="accountAlias = session.account_alias"
+              >
+                {{ session.account_alias }} · {{ formatDate(session.updated_at) }}
+              </button>
+            </div>
+            <p v-if="sessionMessage" class="session-message">{{ sessionMessage }}</p>
           </section>
 
           <section>
@@ -421,6 +504,11 @@ function formatDate(iso?: string | null) {
 .progress-bar { height: 100%; background: #2563eb; transition: width .2s; }
 .target-box { display: flex; flex-direction: column; gap: 8px; }
 .target-box > label, .section-title { font-size: 12px; color: var(--c-text-2); font-weight: 700; }
+.session-row { display: grid; grid-template-columns: minmax(140px, 1fr) auto auto auto; gap: 8px; align-items: center; }
+.sessions { display: flex; flex-wrap: wrap; gap: 6px; }
+.session-pill { border: 1px solid var(--c-border); background: var(--c-panel); color: var(--c-text-2); border-radius: 999px; padding: 4px 9px; font-size: 12px; cursor: pointer; }
+.session-pill.active { border-color: #1d4ed8; color: #1d4ed8; background: #dbeafe; }
+.session-message { color: var(--c-text-2); font-size: 12px; }
 .segmented { display: inline-flex; border: 1px solid var(--c-border); border-radius: 6px; overflow: hidden; width: fit-content; }
 .segmented button { border: 0; border-right: 1px solid var(--c-border); background: var(--c-panel); color: var(--c-text); height: 30px; padding: 0 10px; cursor: pointer; }
 .segmented button:last-child { border-right: 0; }
@@ -460,5 +548,6 @@ function formatDate(iso?: string | null) {
   .workspace { grid-template-columns: 1fr; }
   .rule-list { max-height: 180px; }
   .run-row { grid-template-columns: 1fr 1fr; }
+  .session-row { grid-template-columns: 1fr 1fr; }
 }
 </style>

@@ -7,7 +7,7 @@ interface WsMessage {
   progress?: number
   message?: string
   result?: unknown
-  error?: string
+  error?: unknown
 }
 
 interface Connection {
@@ -19,7 +19,14 @@ interface Connection {
 }
 
 type CompleteCallback = (taskId: string, result: unknown) => void
-type ErrorCallback = (taskId: string, error: string) => void
+type ErrorCallback = (taskId: string, error: unknown) => void
+
+function errorMessage(error: unknown): string {
+  if (typeof error === 'object' && error) {
+    return (error as { message?: string }).message ?? JSON.stringify(error)
+  }
+  return String(error ?? 'Unknown error')
+}
 
 export class WsProgressClient {
   private connections = new Map<string, Connection>()
@@ -65,48 +72,42 @@ export class WsProgressClient {
         const type = msg.type ?? 'progress'
 
         if (type === 'complete') {
-          // Forward to renderer first
-          if (!this.mainWindow?.isDestroyed()) {
-            this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
-              taskId: msg.taskId,
-              progress: 100,
-              message: '完成'
-            })
-          }
-          // Call registered completion callback
+          this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
+            taskId: msg.taskId,
+            progress: 100,
+            message: 'Done',
+          })
           const cb = this.completeCallbacks.get(taskId)
           if (cb) {
             cb(msg.taskId, msg.result)
             this.completeCallbacks.delete(taskId)
           }
-          // Auto-disconnect after completion
           this.disconnect(taskId)
-        } else if (type === 'error') {
-          if (!this.mainWindow?.isDestroyed()) {
-            this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
-              taskId: msg.taskId,
-              progress: -1,
-              message: msg.error ?? '未知错误'
-            })
-          }
+          return
+        }
+
+        if (type === 'error') {
+          this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
+            taskId: msg.taskId,
+            progress: -1,
+            message: errorMessage(msg.error),
+          })
           const cb = this.errorCallbacks.get(taskId)
           if (cb) {
-            cb(msg.taskId, msg.error ?? '未知错误')
+            cb(msg.taskId, msg.error)
             this.errorCallbacks.delete(taskId)
           }
           this.disconnect(taskId)
-        } else {
-          // Progress message
-          if (!this.mainWindow?.isDestroyed()) {
-            this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
-              taskId: msg.taskId,
-              progress: msg.progress ?? 0,
-              message: msg.message ?? ''
-            })
-          }
+          return
         }
+
+        this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
+          taskId: msg.taskId,
+          progress: msg.progress ?? 0,
+          message: msg.message ?? '',
+        })
       } catch {
-        // ignore malformed messages
+        // Ignore malformed progress messages.
       }
     })
 
