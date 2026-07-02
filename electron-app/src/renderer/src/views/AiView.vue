@@ -317,8 +317,13 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
 
         <div class="gen-results">
           <div v-if="!ai.generatedQuestions.length && !ai.generating" class="empty-tip">
-            <div style="font-size:36px;margin-bottom:8px">✦</div>
-            <div>配置出题参数后点击「开始出题」</div>
+            <template v-if="saveSuccess">
+              <div class="success-text">{{ saveSuccess }}</div>
+            </template>
+            <template v-else>
+              <div style="font-size:36px;margin-bottom:8px">✦</div>
+              <div>配置出题参数后点击「开始出题」</div>
+            </template>
           </div>
           <div v-else-if="ai.generating" class="empty-tip">
             <div class="spinner"></div>

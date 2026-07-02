@@ -89,10 +89,12 @@ class OpenAICompatProvider:
     def __init__(self, base_url: str, api_key: str, model: str):
         self.base_url = base_url.rstrip('/')
         self.model = model
+        normalized_api_key = api_key.strip()
         self.headers = {
-            'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json',
         }
+        if normalized_api_key:
+            self.headers['Authorization'] = f'Bearer {normalized_api_key}'
 
     def _url(self, path: str) -> str:
         return f'{self.base_url}{path}'
