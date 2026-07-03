@@ -3,6 +3,7 @@ import random
 
 from modules.crawler.adapters.base import CrawlerAdapterBase
 from modules.crawler.auth.session_state import to_playwright_storage_state
+from modules.crawler.browser_runtime import launch_chromium
 from modules.crawler.errors import CrawlerFetchError, CrawlerParseError
 from modules.crawler.schemas import CrawlRuleModel, RawItem, RuntimeContext
 from modules.crawler.utils.extract import extract_raw_item
@@ -54,7 +55,7 @@ class BrowserRuleAdapter(CrawlerAdapterBase):
         results: list[RawItem] = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await launch_chromium(p, headless=True)
             try:
                 page_context = await browser.new_context(storage_state=storage_state)
                 page = await page_context.new_page()

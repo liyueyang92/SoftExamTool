@@ -1,6 +1,7 @@
 import httpx
 
 from modules.crawler.auth.session_state import to_playwright_storage_state
+from modules.crawler.browser_runtime import launch_chromium
 from modules.crawler.errors import CrawlerFetchError, CrawlerParseError
 from modules.crawler.schemas import CrawlRuleModel, InspectLoadResponse, InspectNode, RuntimeContext
 from modules.crawler.utils.ua import random_user_agent
@@ -120,7 +121,7 @@ async def _load_with_browser(rule: CrawlRuleModel, context: RuntimeContext, url:
     storage_state = to_playwright_storage_state(context.session_state, _origin_from_url(url))
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await launch_chromium(p, headless=True)
         try:
             page_context = await browser.new_context(storage_state=storage_state)
             page = await page_context.new_page()

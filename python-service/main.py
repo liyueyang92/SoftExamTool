@@ -1,3 +1,9 @@
+import asyncio
+import sys
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import uvicorn
 from fastapi import FastAPI
 from loguru import logger
@@ -28,4 +34,4 @@ async def ping():
 
 if __name__ == '__main__':
     logger.info('Starting Python service on port {}', settings.port)
-    uvicorn.run(app, host='127.0.0.1', port=settings.port, log_level='info')
+    uvicorn.run(app, host='127.0.0.1', port=settings.port, log_level='info', loop='asyncio')

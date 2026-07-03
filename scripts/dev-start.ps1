@@ -1,5 +1,5 @@
 # dev-start.ps1
-# One-shot dev launcher: Python service (uvicorn --reload) + Electron hot-reload.
+# One-shot dev launcher: Python service + Electron hot-reload.
 # Usage (from repo root):  .\scripts\dev-start.ps1
 # Usage (via npm):         cd electron-app && npm run dev:all
 #
@@ -43,11 +43,7 @@ Write-Host "[dev] Starting Python service on port $env:INTERNAL_PORT ..." -Foreg
 # -Environment is PS 7.3+ only; set vars in parent so the child inherits them.
 $PyProc = Start-Process `
     -FilePath $PyExe `
-    -ArgumentList '-m', 'uvicorn', 'main:app',
-                  '--host', '127.0.0.1',
-                  '--port', "$env:INTERNAL_PORT",
-                  '--reload',
-                  '--log-level', 'info' `
+    -ArgumentList 'main.py' `
     -WorkingDirectory $SvcDir `
     -PassThru -NoNewWindow
 
