@@ -626,7 +626,7 @@ function formatDate(iso?: string | null) {
       </div>
     </section>
 
-    <div v-if="showEdit" class="modal-backdrop" @click.self="showEdit = false">
+    <div v-if="showEdit" class="modal-backdrop">
       <div class="modal">
         <header class="modal-head">
           <h3>{{ editTarget.id ? '编辑规则' : '新建规则' }}</h3>
