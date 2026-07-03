@@ -17,14 +17,24 @@ $SvcDir     = Join-Path $Root 'python-service'
 $PyExe      = Join-Path $SvcDir '.venv\Scripts\python.exe'
 $PyInstaller = Join-Path $SvcDir '.venv\Scripts\pyinstaller.exe'
 $SpecFile   = Join-Path $SvcDir 'python-service.spec'
+$Requirements = Join-Path $SvcDir 'requirements.txt'
 $DestDir    = Join-Path $Root 'electron-app\resources\python-service'
 
 # ── Prerequisites ────────────────────────────────────────────────────────────
 if (-not (Test-Path $PyExe)) {
     Write-Error "[build-python] venv not found at $PyExe`nRun: python -m venv python-service/.venv && python-service/.venv/Scripts/pip install -r python-service/requirements.txt"
 }
+if (-not (Test-Path $Requirements)) {
+    Write-Error "[build-python] requirements.txt not found at $Requirements"
+}
+
+Write-Host "[build-python] Ensuring Python dependencies are installed..." -ForegroundColor Cyan
+& $PyExe -m pip install -r $Requirements
+if ($LASTEXITCODE -ne 0) {
+    throw "pip install -r requirements.txt exited with code $LASTEXITCODE"
+}
 if (-not (Test-Path $PyInstaller)) {
-    Write-Error "[build-python] PyInstaller not found. Run: $PyExe -m pip install pyinstaller"
+    Write-Error "[build-python] PyInstaller not found after installing requirements. Run: $PyExe -m pip install -r $Requirements"
 }
 
 # ── Clean previous outputs ───────────────────────────────────────────────────
