@@ -15,7 +15,6 @@ $ErrorActionPreference = 'Stop'
 $Root       = Split-Path -Parent $PSScriptRoot
 $SvcDir     = Join-Path $Root 'python-service'
 $PyExe      = Join-Path $SvcDir '.venv\Scripts\python.exe'
-$PyInstaller = Join-Path $SvcDir '.venv\Scripts\pyinstaller.exe'
 $SpecFile   = Join-Path $SvcDir 'python-service.spec'
 $Requirements = Join-Path $SvcDir 'requirements.txt'
 $DestDir    = Join-Path $Root 'electron-app\resources\python-service'
@@ -88,8 +87,9 @@ Write-Host "[build-python] Ensuring Python dependencies are installed..." -Foreg
 if ($LASTEXITCODE -ne 0) {
     throw "pip install -r requirements.txt exited with code $LASTEXITCODE"
 }
-if (-not (Test-Path $PyInstaller)) {
-    Write-Error "[build-python] PyInstaller not found after installing requirements. Run: $PyExe -m pip install -r $Requirements"
+& $PyExe -m PyInstaller --version | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "[build-python] PyInstaller not available after installing requirements. Run: $PyExe -m pip install -r $Requirements"
 }
 
 # ── Clean previous outputs ───────────────────────────────────────────────────
@@ -106,6 +106,7 @@ if (-not $SkipClean) {
 # ── PyInstaller build ────────────────────────────────────────────────────────
 if ($env:SKIP_PLAYWRIGHT_INSTALL -ne '1') {
     Write-Host "[build-python] Ensuring Playwright Chromium is installed..." -ForegroundColor Cyan
+    $playwrightReady = $false
     $playwrightInstallTimeoutSec = 600
     if ($env:PLAYWRIGHT_INSTALL_TIMEOUT_SEC) {
         $playwrightInstallTimeoutSec = [int]$env:PLAYWRIGHT_INSTALL_TIMEOUT_SEC
@@ -128,16 +129,20 @@ if ($env:SKIP_PLAYWRIGHT_INSTALL -ne '1') {
             if (-not (Install-PlaywrightChromiumFromNpmmirror)) {
                 throw "playwright install chromium timed out after ${playwrightInstallTimeoutSec}s. Check network access to Playwright browser downloads, set PLAYWRIGHT_DOWNLOAD_HOST to a valid mirror, or set SKIP_PLAYWRIGHT_INSTALL=1 to skip bundling Chromium."
             }
+            $playwrightReady = $true
         }
         $playwrightStdout = (Get-Content $playwrightInstallOut -ErrorAction SilentlyContinue) -join "`n"
         $playwrightStderr = (Get-Content $playwrightInstallErr -ErrorAction SilentlyContinue) -join "`n"
         if ($playwrightStdout) { Write-Host $playwrightStdout }
         if ($playwrightStderr) { Write-Warning $playwrightStderr }
-        if ($playwrightInstall.ExitCode -ne 0) {
-            Write-Warning "[build-python] playwright install chromium exited with code $($playwrightInstall.ExitCode), trying npmmirror fallback."
+        $playwrightInstall.Refresh()
+        $playwrightInstallExitCode = $playwrightInstall.ExitCode
+        if (-not $playwrightReady -and $null -ne $playwrightInstallExitCode -and $playwrightInstallExitCode -ne 0) {
+            Write-Warning "[build-python] playwright install chromium exited with code $playwrightInstallExitCode, trying npmmirror fallback."
             if (-not (Install-PlaywrightChromiumFromNpmmirror)) {
-                throw "playwright install chromium exited with code $($playwrightInstall.ExitCode). Set PLAYWRIGHT_DOWNLOAD_HOST to a valid mirror or SKIP_PLAYWRIGHT_INSTALL=1 to skip bundling Chromium."
+                throw "playwright install chromium exited with code $playwrightInstallExitCode. Set PLAYWRIGHT_DOWNLOAD_HOST to a valid mirror or SKIP_PLAYWRIGHT_INSTALL=1 to skip bundling Chromium."
             }
+            $playwrightReady = $true
         }
     } finally {
         $env:PLAYWRIGHT_BROWSERS_PATH = $_savedBrowsersPath
@@ -152,7 +157,7 @@ try {
     $_savedBrowsersPathForBuild = $env:PLAYWRIGHT_BROWSERS_PATH
     $env:PLAYWRIGHT_BROWSERS_PATH = '0'
     $extra = $env:PYINSTALLER_EXTRA_ARGS -split ' ' | Where-Object { $_ }
-    & $PyInstaller $SpecFile `
+    & $PyExe -m PyInstaller $SpecFile `
         --distpath dist `
         --workpath build-pyinstaller `
         --noconfirm `
