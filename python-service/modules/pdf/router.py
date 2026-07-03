@@ -15,6 +15,10 @@ router = APIRouter(prefix="/pdf", tags=["pdf"])
 DEFAULT_TOP_MARGIN_RATIO = 0.07
 DEFAULT_BOTTOM_MARGIN_RATIO = 0.07
 CID_PATTERN = re.compile(r"\(cid:\d+\)")
+SPARSE_TEXT_MIN_CHARS = 50
+OCR_RENDER_SCALE = 2.5
+OCR_MIN_CONFIDENCE = 0.4
+OCR_ENGINE = None
 
 KNOWLEDGE_TAG_KEYWORDS: dict[str, list[str]] = {
     "软件架构设计": ["架构", "分层", "mvc", "soa", "微服务", "架构风格", "架构模式"],
@@ -97,6 +101,17 @@ def normalize_extracted_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def count_meaningful_chars(text: str) -> int:
+    cleaned = re.sub(r"\s+", "", text)
+    for boilerplate in ("内部资料，禁止传播", "内部资料,禁止传播"):
+        cleaned = cleaned.replace(boilerplate, "")
+    return len(cleaned)
+
+
+def has_sparse_text(text: str) -> bool:
+    return count_meaningful_chars(text) < SPARSE_TEXT_MIN_CHARS
+
+
 def looks_like_cid_garble(text: str) -> bool:
     if not text:
         return False
@@ -138,6 +153,50 @@ def extract_text_with_pdfium(page, top_margin_ratio: float, bottom_margin_ratio:
         textpage.close()
 
 
+def get_ocr_engine():
+    global OCR_ENGINE
+    if OCR_ENGINE is not None:
+        return OCR_ENGINE
+
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as exc:
+        raise RuntimeError("rapidocr-onnxruntime 未安装，无法识别扫描版 PDF") from exc
+
+    OCR_ENGINE = RapidOCR()
+    return OCR_ENGINE
+
+
+def extract_text_with_ocr(page, top_margin_ratio: float, bottom_margin_ratio: float) -> str:
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("numpy 未安装，无法识别扫描版 PDF") from exc
+
+    rendered = page.render(scale=OCR_RENDER_SCALE)
+    image = rendered.to_pil().convert("RGB")
+    width, height = image.size
+    crop_top = int(height * top_margin_ratio)
+    crop_bottom = int(height * (1 - bottom_margin_ratio))
+    if crop_top > 0 or crop_bottom < height:
+        image = image.crop((0, crop_top, width, crop_bottom))
+
+    result, _ = get_ocr_engine()(np.array(image))
+    lines: list[str] = []
+    for item in result or []:
+        if len(item) < 3:
+            continue
+        text = str(item[1]).strip()
+        try:
+            score = float(item[2])
+        except (TypeError, ValueError):
+            score = 0.0
+        if text and score >= OCR_MIN_CONFIDENCE:
+            lines.append(text)
+
+    return normalize_extracted_text("\n".join(lines))
+
+
 def get_extractor_backends():
     try:
         import pdfplumber
@@ -154,22 +213,37 @@ def get_extractor_backends():
 
 def extract_page_text(plumber_page, pdfium_page, top_margin_ratio: float, bottom_margin_ratio: float) -> tuple[str, str]:
     plumber_text = extract_text_with_pdfplumber(plumber_page, top_margin_ratio, bottom_margin_ratio)
-    if not looks_like_cid_garble(plumber_text):
-        return plumber_text, "pdfplumber"
+    text = plumber_text
+    engine = "pdfplumber"
 
-    if pdfium_page is not None:
+    if looks_like_cid_garble(plumber_text) and pdfium_page is not None:
         try:
             pdfium_text = extract_text_with_pdfium(pdfium_page, top_margin_ratio, bottom_margin_ratio)
             if pdfium_text and not looks_like_cid_garble(pdfium_text):
                 logger.info("CID-like text detected, fallback to pypdfium2 succeeded")
-                return pdfium_text, "pypdfium2"
-            if pdfium_text and len(pdfium_text) > len(plumber_text):
+                text = pdfium_text
+                engine = "pypdfium2"
+            elif pdfium_text and len(pdfium_text) > len(plumber_text):
                 logger.info("CID-like text detected, fallback to longer pypdfium2 result")
-                return pdfium_text, "pypdfium2"
+                text = pdfium_text
+                engine = "pypdfium2"
         except Exception as exc:
             logger.warning("pypdfium2 fallback failed: {}", exc)
 
-    return plumber_text, "pdfplumber"
+    if has_sparse_text(text) and pdfium_page is not None:
+        try:
+            ocr_text = extract_text_with_ocr(pdfium_page, top_margin_ratio, bottom_margin_ratio)
+            if count_meaningful_chars(ocr_text) > count_meaningful_chars(text):
+                logger.info(
+                    "Sparse PDF text detected ({} chars), fallback to OCR produced {} chars",
+                    count_meaningful_chars(text),
+                    count_meaningful_chars(ocr_text),
+                )
+                return ocr_text, "rapidocr"
+        except Exception as exc:
+            logger.warning("OCR fallback failed: {}", exc)
+
+    return text, engine
 
 
 def parse_pdf_pages(
@@ -215,7 +289,7 @@ def parse_pdf_pages(
                         pdfium_page.close()
 
                 engines_used.add(engine)
-                if len(text) < 50:
+                if has_sparse_text(text):
                     logger.debug("Page {} has sparse text ({} chars), skipping chunking", page_num, len(text))
                     continue
                 all_chunks.extend(chunk_text(text, page_num, doc_id))

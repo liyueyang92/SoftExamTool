@@ -20,7 +20,7 @@ a = Analysis(
         # Add static assets as they are introduced in later phases.
         # Format: (src_glob, dest_folder_inside_bundle)
         # Example: (str(ROOT / 'modules/ai/scoring_rubrics'), 'modules/ai/scoring_rubrics'),
-    ] + collect_data_files('playwright'),
+    ] + collect_data_files('playwright') + collect_data_files('rapidocr_onnxruntime'),
     hiddenimports=[
         # uvicorn lazy-imports its I/O loops and protocol implementations.
         'uvicorn.logging',
@@ -42,6 +42,10 @@ a = Analysis(
         # Application modules
         'middleware.auth',
         'modules.progress',
+        'rapidocr_onnxruntime',
+        'onnxruntime',
+        'cv2',
+        'numpy',
         # starlette background tasks used by BaseHTTPMiddleware
         'anyio',
         'anyio._backends._asyncio',
