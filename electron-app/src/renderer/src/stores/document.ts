@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { PdfImportOptions, PdfImportSelection, PdfPreviewResult } from '../../../preload/shared-types'
+import type { PdfImportOptions, PdfImportResult, PdfImportSelection, PdfPreviewResult } from '../../../preload/shared-types'
 import { toIpcPayload } from '../utils/ipc'
 
 export interface Doc {
@@ -52,17 +52,22 @@ export const useDocumentStore = defineStore('document', () => {
     return res.data as PdfPreviewResult
   }
 
-  async function importPdf(args?: PdfImportOptions): Promise<{ taskId?: string; duplicate?: boolean } | null> {
+  async function importPdf(args?: PdfImportOptions): Promise<{ taskId?: string; duplicate?: boolean; reparsing?: boolean } | null> {
     const res = await window.electronAPI.importDocument(args ? toIpcPayload(args) : undefined)
     if (!res.success) throw new Error((res.error as { message: string }).message)
-    const data = res.data as { document: Doc; taskId?: string; duplicate?: boolean } | null
+    const data = res.data as (PdfImportResult & { document: Doc }) | null
     if (!data) return null
     if (data.duplicate) {
       return { duplicate: true }
     }
-    documents.value.unshift(data.document)
+    const index = documents.value.findIndex((doc) => doc.id === data.document.id)
+    if (index >= 0) {
+      documents.value[index] = data.document
+    } else {
+      documents.value.unshift(data.document)
+    }
     if (data.taskId) importingTaskId.value = data.taskId
-    return { taskId: data.taskId }
+    return { taskId: data.taskId, reparsing: data.reparsing }
   }
 
   async function remove(id: string) {

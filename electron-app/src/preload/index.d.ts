@@ -6,6 +6,7 @@ import type {
   CalendarDay,
   IpcResponse,
   PdfImportOptions,
+  PdfImportResult,
   PdfImportSelection,
   PdfPreviewResult,
   PlanStats,
@@ -25,6 +26,7 @@ export type {
   CalendarDay,
   IpcResponse,
   PdfImportOptions,
+  PdfImportResult,
   PdfImportSelection,
   PdfPreviewResult,
   PlanStats,
@@ -84,7 +86,7 @@ declare global {
         topMarginRatio?: number
         bottomMarginRatio?: number
       }) => Promise<IpcResponse<PdfPreviewResult>>
-      importDocument: (args?: PdfImportOptions) => Promise<IpcResponse<{ document: unknown; taskId?: string; duplicate?: boolean } | null>>
+      importDocument: (args?: PdfImportOptions) => Promise<IpcResponse<PdfImportResult | null>>
       deleteDocument: (id: string) => Promise<IpcResponse<void>>
       getDocChunks: (docId: string) => Promise<IpcResponse<unknown[]>>
 

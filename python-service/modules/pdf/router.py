@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,9 @@ CID_PATTERN = re.compile(r"\(cid:\d+\)")
 SPARSE_TEXT_MIN_CHARS = 50
 OCR_RENDER_SCALE = 2.5
 OCR_MIN_CONFIDENCE = 0.4
+OCR_LINE_Y_TOLERANCE_RATIO = 0.65
 OCR_ENGINE = None
+OCR_NUMBER_TOKEN_PATTERN = re.compile(r"^\d{1,4}$")
 
 KNOWLEDGE_TAG_KEYWORDS: dict[str, list[str]] = {
     "软件架构设计": ["架构", "分层", "mvc", "soa", "微服务", "架构风格", "架构模式"],
@@ -167,6 +170,49 @@ def get_ocr_engine():
     return OCR_ENGINE
 
 
+def get_row_leading_number(row: list[dict[str, float | str]]) -> int | None:
+    if len(row) < 2:
+        return None
+
+    row_words = sorted(row, key=lambda entry: float(entry["x0"]))
+    first_text = str(row_words[0]["text"]).strip()
+    if not OCR_NUMBER_TOKEN_PATTERN.fullmatch(first_text):
+        return None
+
+    return int(first_text)
+
+
+def infer_missing_number_prefixes(rows: list[list[dict[str, float | str]]]) -> dict[int, int]:
+    anchors: list[tuple[int, int]] = []
+    for row_index, row in enumerate(rows):
+        leading_number = get_row_leading_number(row)
+        if leading_number is not None:
+            anchors.append((row_index, leading_number))
+
+    if len(anchors) < 3:
+        return {}
+
+    start_candidates = [row_index - number + 1 for row_index, number in anchors]
+    start_index, support = Counter(start_candidates).most_common(1)[0]
+    if support < max(3, len(anchors) // 2):
+        return {}
+
+    first_anchor_index = min(row_index for row_index, _ in anchors)
+    last_anchor_index = max(row_index for row_index, _ in anchors)
+    if start_index < 0 or start_index > first_anchor_index:
+        return {}
+
+    prefixes: dict[int, int] = {}
+    for row_index in range(start_index, last_anchor_index + 1):
+        expected_number = row_index - start_index + 1
+        if expected_number < 1:
+            continue
+        if get_row_leading_number(rows[row_index]) is None:
+            prefixes[row_index] = expected_number
+
+    return prefixes
+
+
 def extract_text_with_ocr(page, top_margin_ratio: float, bottom_margin_ratio: float) -> str:
     try:
         import numpy as np
@@ -182,7 +228,7 @@ def extract_text_with_ocr(page, top_margin_ratio: float, bottom_margin_ratio: fl
         image = image.crop((0, crop_top, width, crop_bottom))
 
     result, _ = get_ocr_engine()(np.array(image))
-    lines: list[str] = []
+    words: list[dict[str, float | str]] = []
     for item in result or []:
         if len(item) < 3:
             continue
@@ -192,7 +238,50 @@ def extract_text_with_ocr(page, top_margin_ratio: float, bottom_margin_ratio: fl
         except (TypeError, ValueError):
             score = 0.0
         if text and score >= OCR_MIN_CONFIDENCE:
-            lines.append(text)
+            try:
+                points = item[0]
+                xs = [float(point[0]) for point in points]
+                ys = [float(point[1]) for point in points]
+            except (TypeError, ValueError, IndexError):
+                continue
+
+            words.append(
+                {
+                    "text": text,
+                    "x0": min(xs),
+                    "x1": max(xs),
+                    "y_mid": sum(ys) / len(ys),
+                    "height": max(ys) - min(ys),
+                }
+            )
+
+    if not words:
+        return ""
+
+    rows: list[list[dict[str, float | str]]] = []
+    for word in sorted(words, key=lambda entry: (float(entry["y_mid"]), float(entry["x0"]))):
+        if not rows:
+            rows.append([word])
+            continue
+
+        current_row = rows[-1]
+        row_y_mid = sum(float(entry["y_mid"]) for entry in current_row) / len(current_row)
+        row_height = max(float(entry["height"]) for entry in current_row)
+        tolerance = max(row_height, float(word["height"]), 1.0) * OCR_LINE_Y_TOLERANCE_RATIO
+        if abs(float(word["y_mid"]) - row_y_mid) <= tolerance:
+            current_row.append(word)
+        else:
+            rows.append([word])
+
+    inferred_number_prefixes = infer_missing_number_prefixes(rows)
+    lines = []
+    for row_index, row in enumerate(rows):
+        row_words = sorted(row, key=lambda entry: float(entry["x0"]))
+        parts = [str(entry["text"]) for entry in row_words]
+        if row_index in inferred_number_prefixes:
+            parts.insert(0, str(inferred_number_prefixes[row_index]))
+        line = " ".join(parts)
+        lines.append(re.sub(r"\s+", " ", line).strip())
 
     return normalize_extracted_text("\n".join(lines))
 

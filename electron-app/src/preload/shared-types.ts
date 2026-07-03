@@ -108,6 +108,13 @@ export interface PdfImportOptions {
   endPage?: number | null
 }
 
+export interface PdfImportResult {
+  document: unknown
+  taskId?: string
+  duplicate?: boolean
+  reparsing?: boolean
+}
+
 export interface PdfPreviewResult {
   page_count: number
   preview_page: number

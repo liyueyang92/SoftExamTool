@@ -110,7 +110,7 @@ const customAPI = {
     startPage?: number
     endPage?: number | null
   }) =>
-    invokeWithTimeout<{ document: unknown; taskId?: string; duplicate?: boolean } | null>('doc:import', args, 60_000),
+    invokeWithTimeout<{ document: unknown; taskId?: string; duplicate?: boolean; reparsing?: boolean } | null>('doc:import', args, 60_000),
   deleteDocument: (id: string) => invokeWithTimeout<void>('doc:delete', id),
   getDocChunks: (docId: string) => invokeWithTimeout<unknown[]>('doc:getChunks', docId),
 

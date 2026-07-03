@@ -95,6 +95,15 @@ export function insertChunks(
   return chunks.length
 }
 
+export function deleteDocChunks(db: Database.Database, docId: string): void {
+  db.prepare('DELETE FROM doc_chunks WHERE doc_id = ?').run(docId)
+}
+
+export function getDocChunkCount(db: Database.Database, docId: string): number {
+  const row = db.prepare('SELECT COUNT(*) as count FROM doc_chunks WHERE doc_id = ?').get(docId) as { count: number }
+  return row.count
+}
+
 export function getChunks(db: Database.Database, docId: string): DocChunk[] {
   const rows = db.prepare('SELECT * FROM doc_chunks WHERE doc_id = ? ORDER BY page_num').all(docId) as Array<Record<string, unknown>>
   return rows.map((r) => ({

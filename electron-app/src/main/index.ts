@@ -22,7 +22,8 @@ import {
 import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
-  deleteDocument, getDocumentById, insertChunks, getChunks, remapManagedDocumentPaths
+  deleteDocument, getDocumentById, insertChunks, deleteDocChunks, getDocChunkCount,
+  getChunks, remapManagedDocumentPaths
 } from './db/documents'
 import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
@@ -916,6 +917,52 @@ function registerIpcHandlers(): void {
     const fileName = filePath.split(/[\\/]/).pop() ?? filePath
     const title = fileName.replace(/\.pdf$/i, '')
 
+    const startPdfParse = (doc: { id: string; file_path: string }, parseFilePath: string): string => {
+      const taskId = taskManager!.createTask('pdf_import', {
+        docId: doc.id,
+        filePath: parseFilePath,
+        topMarginRatio,
+        bottomMarginRatio,
+        startPage,
+        endPage,
+      })
+      wsClient.connect(taskId)
+
+      wsClient.onComplete(taskId, (_, result) => {
+        const { page_count, chunks } = result as {
+          page_count: number
+          chunks: Array<{ doc_id: string; page_num: number; content: string; knowledge_tags: string[] }>
+        }
+        try {
+          updateDocumentPageCount(db, doc.id, page_count)
+          deleteDocChunks(db, doc.id)
+          insertChunks(db, chunks)
+          taskManager!.updateTask(taskId, 'completed', { chunkCount: chunks.length })
+        } catch (e) {
+          console.error('[DocImport] Failed to store chunks:', e)
+        }
+      })
+      wsClient.onError(taskId, (_, error) => {
+        taskManager!.updateTask(taskId, 'failed', { error })
+      })
+
+      fetch(`http://127.0.0.1:${pythonManager.port}/pdf/parse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+        body: JSON.stringify({
+          file_path: parseFilePath,
+          doc_id: doc.id,
+          task_id: taskId,
+          top_margin_ratio: topMarginRatio,
+          bottom_margin_ratio: bottomMarginRatio,
+          start_page: startPage,
+          end_page: endPage,
+        }),
+      }).catch((e) => console.error('[DocImport] Python parse request failed:', e))
+
+      return taskId
+    }
+
     const md5Res = await fetch(`http://127.0.0.1:${pythonManager.port}/pdf/md5`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
@@ -924,7 +971,16 @@ function registerIpcHandlers(): void {
     const { md5 } = await md5Res.json() as { md5: string }
 
     const existing = getDocumentByMd5(db, md5)
-    if (existing) return { duplicate: true, document: existing }
+    if (existing) {
+      const chunkCount = getDocChunkCount(db, existing.id)
+      if (existing.page_count > 0 && chunkCount > 0) {
+        return { duplicate: true, document: existing }
+      }
+
+      const parseFilePath = existsSync(existing.file_path) ? existing.file_path : filePath
+      const taskId = startPdfParse(existing, parseFilePath)
+      return { document: existing, taskId, reparsing: true }
+    }
 
     const managedFilePath = buildManagedDocumentPath(filePath, md5)
     if (normalize(resolve(filePath)) !== normalize(resolve(managedFilePath))) {
@@ -934,46 +990,7 @@ function registerIpcHandlers(): void {
 
     const doc = insertDocument(db, { title, file_path: managedFilePath, page_count: 0, md5 })
 
-    const taskId = taskManager!.createTask('pdf_import', {
-      docId: doc.id,
-      filePath: managedFilePath,
-      topMarginRatio,
-      bottomMarginRatio,
-      startPage,
-      endPage,
-    })
-    wsClient.connect(taskId)
-
-    wsClient.onComplete(taskId, (_, result) => {
-      const { page_count, chunks } = result as {
-        page_count: number
-        chunks: Array<{ doc_id: string; page_num: number; content: string; knowledge_tags: string[] }>
-      }
-      try {
-        updateDocumentPageCount(db, doc.id, page_count)
-        insertChunks(db, chunks)
-        taskManager!.updateTask(taskId, 'completed', { chunkCount: chunks.length })
-      } catch (e) {
-        console.error('[DocImport] Failed to store chunks:', e)
-      }
-    })
-    wsClient.onError(taskId, (_, error) => {
-      taskManager!.updateTask(taskId, 'failed', { error })
-    })
-
-    fetch(`http://127.0.0.1:${pythonManager.port}/pdf/parse`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({
-        file_path: managedFilePath,
-        doc_id: doc.id,
-        task_id: taskId,
-        top_margin_ratio: topMarginRatio,
-        bottom_margin_ratio: bottomMarginRatio,
-        start_page: startPage,
-        end_page: endPage,
-      }),
-    }).catch((e) => console.error('[DocImport] Python parse request failed:', e))
+    const taskId = startPdfParse(doc, managedFilePath)
 
     return { document: doc, taskId }
   })
