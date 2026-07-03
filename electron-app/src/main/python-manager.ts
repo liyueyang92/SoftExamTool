@@ -1,5 +1,5 @@
-import { spawn, ChildProcess } from 'child_process'
-import { join } from 'path'
+import { spawn, spawnSync, ChildProcess } from 'child_process'
+import { join, resolve } from 'path'
 import { createServer } from 'net'
 import crypto from 'crypto'
 import { BrowserWindow } from 'electron'
@@ -19,6 +19,8 @@ function findFreePort(): Promise<number> {
 
 export class PythonManager {
   private process: ChildProcess | null = null
+  private externalMode = false
+  private projectRoot = ''
   port = 0
   token = ''
   private ready = false
@@ -26,12 +28,15 @@ export class PythonManager {
   private pollTimer: ReturnType<typeof setTimeout> | null = null
 
   async start(mainWindow: BrowserWindow): Promise<void> {
+    this.projectRoot = resolve(join(__dirname, '../../..'))
+
     // If INTERNAL_PORT + INTERNAL_TOKEN are pre-set (e.g. by dev-start.ps1),
     // skip spawning and connect to the already-running external process.
     const externalPort = parseInt(process.env.INTERNAL_PORT ?? '', 10)
     const externalToken = process.env.INTERNAL_TOKEN ?? ''
     if (externalPort && externalToken) {
-      console.log(`[Python] External mode — connecting to pre-started service on port ${externalPort}`)
+      console.log(`[Python] External mode: connecting to pre-started service on port ${externalPort}`)
+      this.externalMode = true
       this.port = externalPort
       this.token = externalToken
       this.startPolling(mainWindow)
@@ -42,8 +47,8 @@ export class PythonManager {
     this.token = crypto.randomBytes(32).toString('hex')
 
     // __dirname = electron-app/out/main/ (both dev and prod builds)
-    // project root (containing python-service/) = electron-app/../../.. → soft/
-    const projectRoot = join(__dirname, '../../..')
+    // project root (containing python-service/) = electron-app/../../..
+    const projectRoot = this.projectRoot
     const useSourcePython = is.dev || process.env.E2E_TEST === '1'
     const pythonExe = useSourcePython
       ? join(projectRoot, 'python-service/.venv/Scripts/python.exe')
@@ -113,9 +118,95 @@ export class PythonManager {
     return data.message
   }
 
+  private killProcessTree(pid: number): void {
+    if (!pid || pid <= 0) return
+
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      return
+    }
+
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // Process may have already exited.
+    }
+  }
+
+  private findListeningPid(port: number): number | null {
+    if (process.platform !== 'win32') return null
+
+    const command = [
+      '$conn = Get-NetTCPConnection',
+      `-LocalAddress 127.0.0.1 -LocalPort ${port} -State Listen`,
+      '-ErrorAction SilentlyContinue | Select-Object -First 1;',
+      'if ($conn) { $conn.OwningProcess }',
+    ].join(' ')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', command], { encoding: 'utf8' })
+    const pid = Number.parseInt(result.stdout.trim(), 10)
+    return Number.isFinite(pid) && pid > 0 ? pid : null
+  }
+
+  private findOwnedProjectProcessInChain(pid: number): number | null {
+    if (process.platform !== 'win32') return null
+
+    const command = `
+      $targetPid = ${pid};
+      $items = @();
+      while ($targetPid -and $targetPid -gt 0) {
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$targetPid" -ErrorAction SilentlyContinue;
+        if (-not $p) { break }
+        $items += [pscustomobject]@{
+          ProcessId = $p.ProcessId;
+          ParentProcessId = $p.ParentProcessId;
+          ExecutablePath = $p.ExecutablePath;
+          CommandLine = $p.CommandLine
+        };
+        $targetPid = $p.ParentProcessId;
+      }
+      $items | ConvertTo-Json -Depth 3
+    `
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', command], { encoding: 'utf8' })
+    if (!result.stdout.trim()) return null
+
+    let chain: Array<{ ProcessId: number; ExecutablePath?: string; CommandLine?: string }>
+    try {
+      const parsed = JSON.parse(result.stdout) as unknown
+      chain = Array.isArray(parsed) ? parsed as typeof chain : [parsed as typeof chain[number]]
+    } catch {
+      return null
+    }
+
+    const normalizedProjectRoot = this.projectRoot.toLowerCase()
+    const owned = chain.find((entry) => {
+      const haystack = `${entry.ExecutablePath ?? ''}\n${entry.CommandLine ?? ''}`.toLowerCase()
+      return haystack.includes(normalizedProjectRoot) || haystack.includes('python-service')
+    })
+    return owned?.ProcessId ?? null
+  }
+
+  private stopExternalServiceIfOwned(): void {
+    const listeningPid = this.findListeningPid(this.port)
+    if (!listeningPid) return
+
+    const ownedPid = this.findOwnedProjectProcessInChain(listeningPid)
+    if (!ownedPid) {
+      console.warn(`[Python] External service on port ${this.port} is not owned by this app; leaving it running`)
+      return
+    }
+
+    console.log(`[Python] Stopping external service tree at PID ${ownedPid}`)
+    this.killProcessTree(ownedPid)
+  }
+
   stop(): void {
     this.stopPolling()
-    this.process?.kill()
+    if (this.process?.pid) {
+      this.killProcessTree(this.process.pid)
+    } else if (this.externalMode) {
+      this.stopExternalServiceIfOwned()
+    }
     this.process = null
+    this.ready = false
   }
 }

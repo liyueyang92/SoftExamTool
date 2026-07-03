@@ -85,6 +85,7 @@ const pythonManager = new PythonManager()
 const wsClient = new WsProgressClient()
 let taskManager: TaskManager | null = null
 let mainWindow: BrowserWindow | null = null
+let resourcesCleanedUp = false
 
 // AI config (persisted under the configured data root; API key via safeStorage)
 let aiConfig: Record<string, unknown> = {
@@ -358,6 +359,14 @@ function createWindow(): BrowserWindow {
   }
 
   return win
+}
+
+function cleanupAppResources(): void {
+  if (resourcesCleanedUp) return
+  resourcesCleanedUp = true
+  wsClient.disconnectAll()
+  pythonManager.stop()
+  closeDatabase()
 }
 
 function checkAndNotify(): void {
@@ -1691,8 +1700,14 @@ app.whenReady().then(async () => {
   }
 
   mainWindow = createWindow()
+  mainWindow.on('closed', () => {
+    mainWindow = null
+    cleanupAppResources()
+    if (process.platform !== 'darwin') app.quit()
+  })
 
   pythonManager.start(mainWindow).then(() => {
+    if (!mainWindow || resourcesCleanedUp) return
     wsClient.init(pythonManager.port, pythonManager.token, mainWindow!)
     console.log('[App] Python ready, WS client initialized')
   }).catch((e) => {
@@ -1708,10 +1723,12 @@ app.whenReady().then(async () => {
   })
 })
 
+app.on('before-quit', () => {
+  cleanupAppResources()
+})
+
 app.on('window-all-closed', () => {
-  wsClient.disconnectAll()
-  pythonManager.stop()
-  closeDatabase()
+  cleanupAppResources()
   if (process.platform !== 'darwin') app.quit()
 })
 
