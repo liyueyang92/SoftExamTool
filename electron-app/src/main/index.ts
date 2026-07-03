@@ -1256,6 +1256,22 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
+  registerHandler(IPC.CRAWLER_RUNTIME_STATUS, async () => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/crawler/runtime/status`, {
+      method: 'GET',
+      headers: { 'X-Internal-Token': pythonManager.token },
+    })
+    if (!res.ok) {
+      const err = await res.json() as { detail?: string | { code?: string; message?: string } }
+      const detail = typeof err.detail === 'object' ? err.detail : null
+      throw Object.assign(
+        new Error(detail?.message ?? String(err.detail ?? 'Runtime status failed')),
+        { code: detail?.code ?? 'CRAWLER_RUNTIME_STATUS_FAILED' }
+      )
+    }
+    return res.json()
+  })
+
   registerHandler(IPC.CRAWLER_INSPECT_PREVIEW, async (args) => {
     const { rule, html = null, url = null, account_alias = null } = args as {
       rule: CrawlerRule

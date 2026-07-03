@@ -108,6 +108,7 @@ export interface CrawlerSelectorCandidate {
   match_count: number
   text_sample: string
   stability: 'high' | 'medium' | 'low'
+  kind?: 'css' | 'xpath'
 }
 
 export interface CrawlerInspectPreviewResult {
@@ -121,6 +122,12 @@ export interface CrawlerSessionValidationResult {
   status?: number
   message?: string
   checks?: Array<{ name: string; valid: boolean; message: string }>
+}
+
+export interface CrawlerRuntimeStatus {
+  playwright_available: boolean
+  chromium_ready: boolean
+  message: string
 }
 
 export const useCrawlerStore = defineStore('crawler', () => {
@@ -258,6 +265,12 @@ export const useCrawlerStore = defineStore('crawler', () => {
     return res.data as CrawlerInspectPreviewResult
   }
 
+  async function getRuntimeStatus() {
+    const res = await window.electronAPI.getCrawlerRuntimeStatus()
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    return res.data as CrawlerRuntimeStatus
+  }
+
   return {
     rules,
     loading,
@@ -281,5 +294,6 @@ export const useCrawlerStore = defineStore('crawler', () => {
     inspectLoad,
     suggestSelector,
     inspectPreview,
+    getRuntimeStatus,
   }
 })

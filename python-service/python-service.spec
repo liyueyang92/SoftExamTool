@@ -4,6 +4,7 @@
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH)          # python-service/
 DIST = ROOT / 'dist'
@@ -19,7 +20,7 @@ a = Analysis(
         # Add static assets as they are introduced in later phases.
         # Format: (src_glob, dest_folder_inside_bundle)
         # Example: (str(ROOT / 'modules/ai/scoring_rubrics'), 'modules/ai/scoring_rubrics'),
-    ],
+    ] + collect_data_files('playwright'),
     hiddenimports=[
         # uvicorn lazy-imports its I/O loops and protocol implementations.
         'uvicorn.logging',
@@ -46,6 +47,9 @@ a = Analysis(
         'anyio._backends._asyncio',
         'anyio._backends._trio',
         'sniffio',
+        'playwright',
+        'playwright.async_api',
+        'playwright._impl._driver',
     ],
     hookspath=[],
     hooksconfig={},

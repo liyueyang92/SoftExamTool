@@ -114,6 +114,7 @@ class RunCrawlRequest(BaseModel):
     account_alias: Optional[str] = None
     session_state: dict[str, Any] | None = None
     manual_input: dict[str, Any] | None = None
+    retry_limit: int = Field(default=1, ge=0, le=3)
 
 
 class InspectLoadRequest(BaseModel):
@@ -153,6 +154,7 @@ class SelectorCandidate(BaseModel):
     match_count: int
     text_sample: str = ''
     stability: Literal['high', 'medium', 'low'] = 'medium'
+    kind: Literal['css', 'xpath'] = 'css'
 
 
 class SuggestSelectorResponse(BaseModel):
@@ -171,3 +173,20 @@ class InspectPreviewResponse(BaseModel):
     count: int
     samples: list[RawItem]
     selector_matches: dict[str, int] = Field(default_factory=dict)
+
+
+class CrawlerRuntimeStatus(BaseModel):
+    playwright_available: bool
+    chromium_ready: bool
+    message: str = ''
+
+
+class AuthStartRequest(BaseModel):
+    site_id: Optional[str] = None
+    login_url: Optional[str] = None
+    account_alias: Optional[str] = 'default'
+
+
+class AuthValidateRequest(BaseModel):
+    rule: CrawlRuleModel
+    session_state: dict[str, Any] | None = None

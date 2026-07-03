@@ -63,6 +63,7 @@ export const IPC = {
   CRAWLER_INSPECT_LOAD: 'crawler:inspectLoad',
   CRAWLER_INSPECT_PREVIEW: 'crawler:inspectPreview',
   CRAWLER_SUGGEST_SELECTOR: 'crawler:suggestSelector',
+  CRAWLER_RUNTIME_STATUS: 'crawler:runtimeStatus',
 
   GRAPH_BUILD: 'graph:build',
 

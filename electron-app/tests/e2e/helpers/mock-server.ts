@@ -84,6 +84,74 @@ export function startMockAIServer(): Promise<{ port: number; close: () => void }
         res.setHeader('Content-Type', 'application/json')
         res.statusCode = 200
 
+        if (req.url?.startsWith('/crawler/static')) {
+          res.setHeader('Content-Type', 'text/html; charset=utf-8')
+          res.end(`
+            <!doctype html>
+            <html>
+              <head><title>Crawler fixture</title><script>window.__should_not_run = true</script></head>
+              <body>
+                <main>
+                  <article class="question-item">
+                    <a class="detail-link" href="/crawler/detail/1">detail</a>
+                    <h2 class="question-title">架构风格题</h2>
+                    <p class="question-content">以下哪种架构风格适合高并发系统？</p>
+                    <ul>
+                      <li class="option">A. 单体架构</li>
+                      <li class="option">B. 微服务架构</li>
+                    </ul>
+                    <strong class="answer">B</strong>
+                    <div class="explanation">微服务可独立扩展。</div>
+                  </article>
+                </main>
+              </body>
+            </html>
+          `)
+          return
+        }
+
+        if (req.url?.startsWith('/crawler/detail/1')) {
+          res.setHeader('Content-Type', 'text/html; charset=utf-8')
+          res.end(`
+            <article class="question-detail">
+              <p class="question-content">详情页题干：微服务的主要优势是什么？</p>
+              <span class="option">A. 独立部署</span>
+              <span class="option">B. 必须单库</span>
+              <strong class="answer">A</strong>
+              <div class="explanation">服务可以独立部署和扩展。</div>
+            </article>
+          `)
+          return
+        }
+
+        if (req.url?.startsWith('/crawler/api')) {
+          res.end(JSON.stringify({
+            items: [{
+              title: 'API 题',
+              content: 'CAP 定理最多同时满足几个属性？',
+              options: ['A. 1', 'B. 2'],
+              answer: 'B',
+              explanation: '最多两个。',
+              url: `http://127.0.0.1:${(server.address() as { port: number }).port}/crawler/api`,
+            }],
+          }))
+          return
+        }
+
+        if (req.url?.startsWith('/crawler/feed')) {
+          res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8')
+          res.end(`<?xml version="1.0" encoding="UTF-8" ?>
+            <rss version="2.0"><channel><title>Fixture Feed</title>
+              <item><title>Feed 题</title><link>http://example.test/feed-q</link><description>Feed 导入内容</description></item>
+            </channel></rss>`)
+          return
+        }
+
+        if (req.url?.startsWith('/crawler/validate')) {
+          res.end(JSON.stringify({ ok: true, user: 'fixture' }))
+          return
+        }
+
         // Handle /v1/models (connection test)
         if (req.url === '/v1/models') {
           res.end(

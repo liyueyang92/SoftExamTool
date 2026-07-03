@@ -152,6 +152,8 @@ const customAPI = {
     invokeWithTimeout<unknown>('crawler:inspectPreview', args, 60_000),
   suggestCrawlerSelector: (args: unknown) =>
     invokeWithTimeout<unknown>('crawler:suggestSelector', args, 30_000),
+  getCrawlerRuntimeStatus: () =>
+    invokeWithTimeout<unknown>('crawler:runtimeStatus', undefined, 60_000),
 
   // Phase 5 — Knowledge Graph
   buildGraph: () => invokeWithTimeout<{ nodes: unknown[]; edges: unknown[] }>('graph:build'),

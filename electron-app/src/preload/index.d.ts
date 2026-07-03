@@ -110,6 +110,7 @@ declare global {
       inspectCrawlerLoad: (args: unknown) => Promise<IpcResponse<unknown>>
       inspectCrawlerPreview: (args: unknown) => Promise<IpcResponse<unknown>>
       suggestCrawlerSelector: (args: unknown) => Promise<IpcResponse<unknown>>
+      getCrawlerRuntimeStatus: () => Promise<IpcResponse<unknown>>
 
       buildGraph: () => Promise<IpcResponse<{ nodes: unknown[]; edges: unknown[] }>>
 

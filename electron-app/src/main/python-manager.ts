@@ -44,11 +44,12 @@ export class PythonManager {
     // __dirname = electron-app/out/main/ (both dev and prod builds)
     // project root (containing python-service/) = electron-app/../../.. → soft/
     const projectRoot = join(__dirname, '../../..')
-    const pythonExe = is.dev
+    const useSourcePython = is.dev || process.env.E2E_TEST === '1'
+    const pythonExe = useSourcePython
       ? join(projectRoot, 'python-service/.venv/Scripts/python.exe')
       : join(process.resourcesPath, 'python-service/python-service.exe')
 
-    const args = is.dev ? [join(projectRoot, 'python-service/main.py')] : []
+    const args = useSourcePython ? [join(projectRoot, 'python-service/main.py')] : []
 
     this.process = spawn(pythonExe, args, {
       env: {

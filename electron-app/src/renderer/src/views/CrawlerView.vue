@@ -6,6 +6,7 @@ import {
   type CrawlerInspectNode,
   type CrawlerInspectPreviewResult,
   type CrawlerRule,
+  type CrawlerRuntimeStatus,
   type CrawlerSelectorCandidate,
   type CrawlerSessionValidationResult,
   type NewCrawlerTargetGroup,
@@ -58,6 +59,8 @@ const accountAlias = ref('default')
 const sessionMessage = ref('')
 const sessionBusy = ref(false)
 const sessionValidation = ref<CrawlerSessionValidationResult | null>(null)
+const runtimeStatus = ref<CrawlerRuntimeStatus | null>(null)
+const runtimeMessage = ref('')
 
 const selectedRule = computed(() => store.rules.find((r) => r.id === selectedRuleId.value) ?? null)
 const selectedSessions = computed(() => {
@@ -85,6 +88,7 @@ onMounted(async () => {
     store.fetchSessions(),
     questionStore.fetchGroups(),
   ])
+  checkRuntimeStatus()
   window.electronAPI.onTaskProgress((msg) => {
     if (activeRun.value && msg.taskId === activeRun.value.taskId) {
       runProgress.value = msg.progress
@@ -92,6 +96,15 @@ onMounted(async () => {
     }
   })
 })
+
+async function checkRuntimeStatus() {
+  runtimeMessage.value = ''
+  try {
+    runtimeStatus.value = await store.getRuntimeStatus()
+  } catch (e) {
+    runtimeMessage.value = String(e)
+  }
+}
 
 function defaultRule(): Partial<CrawlerRule> {
   return {
@@ -451,8 +464,14 @@ function formatDate(iso?: string | null) {
         <h2>爬虫工作台</h2>
         <p>规则测试、运行任务、待确认入库</p>
       </div>
-      <button class="btn-primary" @click="openNew">新建规则</button>
+      <div class="header-actions">
+        <button class="runtime-pill" :class="{ ok: runtimeStatus?.chromium_ready, warn: runtimeStatus && !runtimeStatus.chromium_ready }" @click="checkRuntimeStatus">
+          {{ runtimeStatus?.chromium_ready ? 'Chromium ready' : '检查 Chromium' }}
+        </button>
+        <button class="btn-primary" @click="openNew">新建规则</button>
+      </div>
     </div>
+    <p v-if="runtimeMessage || runtimeStatus?.message" class="runtime-message">{{ runtimeMessage || runtimeStatus?.message }}</p>
 
     <div class="workspace">
       <aside class="rule-list">
@@ -684,7 +703,8 @@ function formatDate(iso?: string | null) {
                     v-for="candidate in selectorCandidates"
                     :key="candidate.selector"
                     class="candidate-row"
-                    @click="setNestedSelector(selectorTarget, candidate.selector)"
+                    :disabled="candidate.kind === 'xpath'"
+                    @click="candidate.kind === 'xpath' ? null : setNestedSelector(selectorTarget, candidate.selector)"
                   >
                     <code>{{ candidate.selector }}</code>
                     <span>{{ candidate.match_count }} 个匹配 · {{ candidate.stability }}</span>
@@ -724,6 +744,11 @@ function formatDate(iso?: string | null) {
 .view-header, .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .view-header h2, .panel-head h3 { font-size: 20px; font-weight: 700; color: var(--c-text); }
 .view-header p, .panel-head p { font-size: 12px; color: var(--c-text-2); margin-top: 2px; }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.runtime-pill { border: 1px solid var(--c-border); border-radius: 999px; height: 30px; padding: 0 11px; background: var(--c-panel); color: var(--c-text-2); cursor: pointer; font-size: 12px; }
+.runtime-pill.ok { border-color: var(--c-ok-text); color: var(--c-ok-text); background: var(--c-ok-bg); }
+.runtime-pill.warn { border-color: var(--c-warn-text); color: var(--c-warn-text); background: var(--c-warn-bg); }
+.runtime-message { margin-top: -8px; color: var(--c-text-2); font-size: 12px; }
 .workspace { min-height: 0; flex: 1; display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 12px; }
 .rule-list, .panel, .review-panel { border: 1px solid var(--c-border); background: var(--c-panel); border-radius: 8px; }
 .rule-list { padding: 8px; overflow: auto; }

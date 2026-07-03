@@ -39,9 +39,24 @@ if (-not $SkipClean) {
 }
 
 # ── PyInstaller build ────────────────────────────────────────────────────────
+if ($env:SKIP_PLAYWRIGHT_INSTALL -ne '1') {
+    Write-Host "[build-python] Ensuring Playwright Chromium is installed..." -ForegroundColor Cyan
+    $_savedBrowsersPath = $env:PLAYWRIGHT_BROWSERS_PATH
+    $env:PLAYWRIGHT_BROWSERS_PATH = '0'
+    & $PyExe -m playwright install chromium
+    $env:PLAYWRIGHT_BROWSERS_PATH = $_savedBrowsersPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "playwright install chromium exited with code $LASTEXITCODE"
+    }
+} else {
+    Write-Warning "[build-python] SKIP_PLAYWRIGHT_INSTALL=1, Chromium runtime will not be verified."
+}
+
 Write-Host "[build-python] Running PyInstaller..." -ForegroundColor Cyan
 Push-Location $SvcDir
 try {
+    $_savedBrowsersPathForBuild = $env:PLAYWRIGHT_BROWSERS_PATH
+    $env:PLAYWRIGHT_BROWSERS_PATH = '0'
     $extra = $env:PYINSTALLER_EXTRA_ARGS -split ' ' | Where-Object { $_ }
     & $PyInstaller $SpecFile `
         --distpath dist `
@@ -50,6 +65,7 @@ try {
         @extra
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller exited with code $LASTEXITCODE" }
 } finally {
+    $env:PLAYWRIGHT_BROWSERS_PATH = $_savedBrowsersPathForBuild
     Pop-Location
 }
 

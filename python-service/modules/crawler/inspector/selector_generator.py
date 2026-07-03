@@ -31,46 +31,52 @@ def suggest_selectors(
     if node is None:
         raise CrawlerParseError('Selected node was not found', code='CRAWLER_SELECTOR_NODE_NOT_FOUND')
 
-    candidates: list[str] = []
+    candidates: list[tuple[str, str]] = []
     node_id = node.get('id')
     if node_id:
-        candidates.append(f'#{_css_escape(str(node_id))}')
+        candidates.append(('css', f'#{_css_escape(str(node_id))}'))
 
     classes = [str(item) for item in (node.get('class') or []) if item]
     stable_classes = [item for item in classes if not item.startswith(('css-', 'sc-', 'jsx-'))]
     if stable_classes:
-        candidates.append(f'{node.name}.{_css_escape(stable_classes[0])}')
-        candidates.append(f'{node.name}' + ''.join(f'.{_css_escape(item)}' for item in stable_classes[:3]))
-        candidates.append('.' + '.'.join(_css_escape(item) for item in stable_classes[:2]))
+        candidates.append(('css', f'{node.name}.{_css_escape(stable_classes[0])}'))
+        candidates.append(('css', f'{node.name}' + ''.join(f'.{_css_escape(item)}' for item in stable_classes[:3])))
+        candidates.append(('css', '.' + '.'.join(_css_escape(item) for item in stable_classes[:2])))
 
     text = node.get_text(' ', strip=True)
     if text and node.name in {'a', 'button', 'span', 'strong', 'h1', 'h2', 'h3', 'p'}:
-        candidates.append(_selector_with_position(node, shallow=True))
+        candidates.append(('css', _selector_with_position(node, shallow=True)))
 
-    candidates.append(_selector_with_position(node, shallow=True))
-    candidates.append(_selector_with_position(node, shallow=False))
+    candidates.append(('css', _selector_with_position(node, shallow=True)))
+    candidates.append(('css', _selector_with_position(node, shallow=False)))
+    candidates.append(('xpath', _xpath_for(node, shallow=True)))
+    candidates.append(('xpath', _xpath_for(node, shallow=False)))
 
     if scope_selector:
         candidates = [
-            f'{scope_selector} {item}' if not item.startswith(scope_selector) else item
-            for item in candidates
+            (kind, f'{scope_selector} {item}' if kind == 'css' and not item.startswith(scope_selector) else item)
+            for kind, item in candidates
         ]
 
     result: list[SelectorCandidate] = []
     seen: set[str] = set()
-    for item in candidates:
+    for kind, item in candidates:
         if not item or item in seen:
             continue
         seen.add(item)
-        try:
-            matches = soup.select(item)
-        except Exception:
-            continue
+        if kind == 'xpath':
+            matches = [node]
+        else:
+            try:
+                matches = soup.select(item)
+            except Exception:
+                continue
         result.append(SelectorCandidate(
             selector=item,
             match_count=len(matches),
             text_sample=(matches[0].get_text(' ', strip=True) if matches else '')[:140],
             stability=_stability(item, len(matches)),
+            kind=kind,
         ))
 
     return SuggestSelectorResponse(candidates=result[:8])
@@ -114,6 +120,23 @@ def _selector_with_position(node, *, shallow: bool) -> str:
             parts.append('body')
             break
     return ' > '.join(reversed(parts))
+
+
+def _xpath_for(node, *, shallow: bool) -> str:
+    parts: list[str] = []
+    current = node
+    while current and getattr(current, 'name', None) and current.name != '[document]':
+        parent = current.parent
+        if parent and getattr(parent, 'find_all', None):
+            siblings = [s for s in parent.find_all(current.name, recursive=False)]
+            index = siblings.index(current) + 1 if current in siblings else 1
+        else:
+            index = 1
+        parts.append(f'{current.name}[{index}]')
+        if shallow and len(parts) >= 2:
+            break
+        current = parent
+    return '//' + '/'.join(reversed(parts)) if shallow else '/' + '/'.join(reversed(parts))
 
 
 def _stability(selector: str, match_count: int) -> str:
