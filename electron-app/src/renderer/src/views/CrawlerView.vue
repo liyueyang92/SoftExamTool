@@ -61,6 +61,7 @@ const sessionBusy = ref(false)
 const sessionValidation = ref<CrawlerSessionValidationResult | null>(null)
 const runtimeStatus = ref<CrawlerRuntimeStatus | null>(null)
 const runtimeMessage = ref('')
+const runtimeChecking = ref(false)
 
 const selectedRule = computed(() => store.rules.find((r) => r.id === selectedRuleId.value) ?? null)
 const selectedSessions = computed(() => {
@@ -98,11 +99,18 @@ onMounted(async () => {
 })
 
 async function checkRuntimeStatus() {
-  runtimeMessage.value = ''
+  if (runtimeChecking.value) return
+  runtimeChecking.value = true
+  runtimeMessage.value = '正在检查 Chromium...'
   try {
-    runtimeStatus.value = await store.getRuntimeStatus()
+    const status = await store.getRuntimeStatus()
+    runtimeStatus.value = status
+    runtimeMessage.value = status.message || (status.chromium_ready ? 'Chromium 可用' : 'Chromium 未就绪')
   } catch (e) {
-    runtimeMessage.value = String(e)
+    const message = e instanceof Error ? e.message : String(e)
+    runtimeMessage.value = message ? `检查 Chromium 失败：${message}` : '检查 Chromium 失败'
+  } finally {
+    runtimeChecking.value = false
   }
 }
 
@@ -465,8 +473,16 @@ function formatDate(iso?: string | null) {
         <p>规则测试、运行任务、待确认入库</p>
       </div>
       <div class="header-actions">
-        <button class="runtime-pill" :class="{ ok: runtimeStatus?.chromium_ready, warn: runtimeStatus && !runtimeStatus.chromium_ready }" @click="checkRuntimeStatus">
+        <button
+          class="runtime-pill"
+          :class="{ checking: runtimeChecking, ok: !runtimeChecking && runtimeStatus?.chromium_ready, warn: !runtimeChecking && runtimeStatus && !runtimeStatus.chromium_ready }"
+          :disabled="runtimeChecking"
+          @click="checkRuntimeStatus"
+        >
+          <span v-if="runtimeChecking">检查中...</span>
+          <template v-else>
           {{ runtimeStatus?.chromium_ready ? 'Chromium ready' : '检查 Chromium' }}
+          </template>
         </button>
         <button class="btn-primary" @click="openNew">新建规则</button>
       </div>
@@ -746,6 +762,8 @@ function formatDate(iso?: string | null) {
 .view-header p, .panel-head p { font-size: 12px; color: var(--c-text-2); margin-top: 2px; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .runtime-pill { border: 1px solid var(--c-border); border-radius: 999px; height: 30px; padding: 0 11px; background: var(--c-panel); color: var(--c-text-2); cursor: pointer; font-size: 12px; }
+.runtime-pill:disabled { opacity: .72; cursor: wait; }
+.runtime-pill.checking { border-color: #1d4ed8; color: #1d4ed8; background: #dbeafe; }
 .runtime-pill.ok { border-color: var(--c-ok-text); color: var(--c-ok-text); background: var(--c-ok-bg); }
 .runtime-pill.warn { border-color: var(--c-warn-text); color: var(--c-warn-text); background: var(--c-warn-bg); }
 .runtime-message { margin-top: -8px; color: var(--c-text-2); font-size: 12px; }

@@ -68,6 +68,11 @@ test.describe('crawler module', () => {
 
       await handle.page.locator('.nav-item[href="#/crawler"]').click()
       await expect(handle.page.locator('.crawler-view')).toBeVisible()
+      const runtimeButton = handle.page.locator('.runtime-pill')
+      await expect(runtimeButton).toBeEnabled({ timeout: 65_000 })
+      await runtimeButton.click()
+      await expect(handle.page.locator('.runtime-message')).toBeVisible()
+      await expect(handle.page.locator('.runtime-message')).not.toHaveText('')
 
       const runtime = await api<{ playwright_available: boolean; chromium_ready: boolean; message: string }>(
         handle.page,
