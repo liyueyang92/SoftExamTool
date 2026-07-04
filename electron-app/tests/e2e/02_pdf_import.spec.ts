@@ -82,6 +82,10 @@ test.describe('PDF 导入', () => {
       await expect.poll(async () => await items.count(), { timeout: 15_000 }).toBeGreaterThanOrEqual(1)
       const countAfterFirst = await items.count()
 
+      // Wait for async PDF parsing to complete (doc-meta switches from "解析中…" to "N 页")
+      // so the MD5 duplicate check finds page_count > 0 and chunks exist.
+      await expect(page.locator('.doc-meta').first()).not.toContainText('解析中…', { timeout: 30_000 })
+
       await handle.app.evaluate(
         ({ dialog }, pdfPath) => {
           dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [pdfPath] })
