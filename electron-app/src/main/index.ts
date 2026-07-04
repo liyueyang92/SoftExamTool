@@ -497,7 +497,12 @@ async function collectCrawlerWebState(win: BrowserWindow): Promise<{
 }> {
   const cookies = await win.webContents.session.cookies.get({})
   const url = win.webContents.getURL()
-  const origin = new URL(url).origin
+  let origin = ''
+  try {
+    origin = new URL(url).origin
+  } catch {
+    origin = ''
+  }
   const localStorage = await win.webContents.executeJavaScript(`
     (() => {
       const data = {};
@@ -511,12 +516,27 @@ async function collectCrawlerWebState(win: BrowserWindow): Promise<{
   return { cookies, localStorage, origin, url }
 }
 
+function resolveCrawlerLoginUrl(rule: CrawlerRule): string {
+  const ruleJson = parseCrawlerRuleJson(rule)
+  const authCfg = getNestedRecord(ruleJson, ['auth'])
+  const loginCfg = getNestedRecord(ruleJson, ['auth', 'login'])
+  const successCfg = getNestedRecord(ruleJson, ['auth', 'success'])
+  return firstString(
+    rule.login_url,
+    authCfg.login_url,
+    loginCfg.url,
+    loginCfg.login_url,
+    successCfg.login_url,
+  )
+}
+
 async function openCrawlerAuthWindow(args: {
   rule: CrawlerRule
   accountAlias: string
 }): Promise<ReturnType<typeof upsertCrawlerSiteSession>> {
-  if (!args.rule.login_url) {
-    throw Object.assign(new Error('Login URL is required'), { code: 'CRAWLER_LOGIN_URL_REQUIRED' })
+  const loginUrl = resolveCrawlerLoginUrl(args.rule)
+  if (!loginUrl) {
+    throw Object.assign(new Error('Login URL is required. Set 登录 URL or rule_json.auth.login_url.'), { code: 'CRAWLER_LOGIN_URL_REQUIRED' })
   }
 
   const authWindow = new BrowserWindow({
@@ -529,22 +549,70 @@ async function openCrawlerAuthWindow(args: {
     autoHideMenuBar: true,
     webPreferences: {
       sandbox: false,
+      partition: `crawler-auth-${args.rule.id}-${Date.now()}`,
     },
   })
 
   const finishPromise = new Promise<ReturnType<typeof upsertCrawlerSiteSession>>((resolvePromise, rejectPromise) => {
     let settled = false
+    let autoCaptureRunning = false
+    let timeout: NodeJS.Timeout | null = null
+    let interval: NodeJS.Timeout | null = null
     const settle = (fn: () => void) => {
       if (settled) return
       settled = true
+      if (timeout) clearTimeout(timeout)
+      if (interval) clearInterval(interval)
       fn()
       if (!authWindow.isDestroyed()) authWindow.close()
+    }
+
+    const captureAndSave = async (
+      captureMode: 'auto' | 'manual',
+      matchedChecks: CrawlerSessionValidationCheck[] = [],
+    ) => {
+      const state = await collectCrawlerWebState(authWindow)
+      return upsertCrawlerSiteSession(getDatabase(), {
+        site_id: getCrawlerSiteId(args.rule),
+        site_name: args.rule.site_name,
+        account_alias: args.accountAlias,
+        encrypted_state: encryptCrawlerState(state),
+        storage_meta: {
+          cookie_count: state.cookies.length,
+          local_storage_keys: Object.keys(state.localStorage).length,
+          captured_origin: state.origin,
+          captured_url: state.url,
+          capture_mode: captureMode,
+          matched_checks: matchedChecks.filter((check) => check.valid).map((check) => check.name),
+          account_alias: args.accountAlias,
+        },
+      })
+    }
+
+    const tryAutoCapture = async () => {
+      if (settled || autoCaptureRunning || authWindow.isDestroyed()) return
+      autoCaptureRunning = true
+      try {
+        const detection = await detectCrawlerAuthSuccess(authWindow, args.rule)
+        if (!detection.success) return
+        await setCrawlerAuthWindowStatus(authWindow, 'Login detected. Capturing session...')
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, detection.captureDelayMs))
+        if (settled || authWindow.isDestroyed()) return
+        const saved = await captureAndSave('auto', detection.checks)
+        settle(() => resolvePromise(saved))
+      } catch {
+        // Keep the window open so the user can finish manually.
+      } finally {
+        autoCaptureRunning = false
+      }
     }
 
     authWindow.once('ready-to-show', () => authWindow.show())
     authWindow.on('closed', () => {
       if (!settled) {
         settled = true
+        if (timeout) clearTimeout(timeout)
+        if (interval) clearInterval(interval)
         rejectPromise(Object.assign(new Error('Authorization window closed'), { code: 'CRAWLER_AUTH_CANCELLED' }))
       }
     })
@@ -569,9 +637,28 @@ async function openCrawlerAuthWindow(args: {
             box-shadow: 0 10px 30px rgba(15, 23, 42, .28);
             cursor: pointer;
           }
+          #crawler-auth-status {
+            position: fixed;
+            right: 18px;
+            bottom: 66px;
+            z-index: 2147483647;
+            max-width: min(360px, calc(100vw - 36px));
+            border-radius: 6px;
+            background: rgba(15, 23, 42, .9);
+            color: #fff;
+            padding: 9px 12px;
+            font: 500 13px system-ui, sans-serif;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, .22);
+          }
         `)
         await authWindow.webContents.executeJavaScript(`
           (() => {
+            if (!document.getElementById('crawler-auth-status')) {
+              const status = document.createElement('div');
+              status.id = 'crawler-auth-status';
+              status.textContent = 'Waiting for login success...';
+              document.body.appendChild(status);
+            }
             if (document.getElementById('crawler-auth-finish')) return;
             const btn = document.createElement('button');
             btn.id = 'crawler-auth-finish';
@@ -585,32 +672,33 @@ async function openCrawlerAuthWindow(args: {
       } catch {
         // Page CSP may block injection; the menu fallback still works via close rejection.
       }
+      setTimeout(() => void tryAutoCapture(), 250)
     })
     authWindow.webContents.on('will-navigate', async (event, url) => {
       if (url !== 'crawler-auth://finish') return
       event.preventDefault()
       try {
-        const state = await collectCrawlerWebState(authWindow)
-        const saved = upsertCrawlerSiteSession(getDatabase(), {
-          site_id: getCrawlerSiteId(args.rule),
-          site_name: args.rule.site_name,
-          account_alias: args.accountAlias,
-          encrypted_state: encryptCrawlerState(state),
-          storage_meta: {
-            cookie_count: state.cookies.length,
-            local_storage_keys: Object.keys(state.localStorage).length,
-            captured_origin: state.origin,
-            captured_url: state.url,
-          },
-        })
+        const saved = await captureAndSave('manual')
         settle(() => resolvePromise(saved))
       } catch (e) {
         settle(() => rejectPromise(e))
       }
     })
+    authWindow.webContents.on('did-navigate', () => {
+      setTimeout(() => void tryAutoCapture(), 250)
+    })
+    authWindow.webContents.on('did-navigate-in-page', () => {
+      setTimeout(() => void tryAutoCapture(), 250)
+    })
+    timeout = setTimeout(() => {
+      if (!settled) {
+        void setCrawlerAuthWindowStatus(authWindow, 'Login success was not detected. You can complete authorization manually.')
+      }
+    }, 120_000)
+    interval = setInterval(() => void tryAutoCapture(), 1_500)
   })
 
-  await authWindow.loadURL(args.rule.login_url)
+  await authWindow.loadURL(loginUrl)
   return finishPromise
 }
 
@@ -636,6 +724,35 @@ type CrawlerSessionValidationResult = {
   status?: number
   message?: string
   checks?: CrawlerSessionValidationCheck[]
+}
+
+type CrawlerAuthCheckConfig = Record<string, unknown>
+
+type CrawlerAuthDetectionResult = {
+  success: boolean
+  checks: CrawlerSessionValidationCheck[]
+  captureDelayMs: number
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function toPositiveInt(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback
+}
+
+function matchCrawlerPattern(value: string, pattern: string): boolean {
+  if (!pattern) return false
+  try {
+    return new RegExp(pattern).test(value)
+  } catch {
+    return value.includes(pattern)
+  }
 }
 
 function parseCrawlerRuleJson(rule: CrawlerRule): Record<string, unknown> {
@@ -671,19 +788,188 @@ function toNumberArray(value: unknown): number[] {
   return typeof value === 'number' ? [value] : []
 }
 
+function getCrawlerAuthCheckConfig(rule: CrawlerRule, preferred: 'success' | 'validate'): CrawlerAuthCheckConfig {
+  const ruleJson = parseCrawlerRuleJson(rule)
+  const successCfg = getNestedRecord(ruleJson, ['auth', 'success'])
+  const validateCfg = getNestedRecord(ruleJson, ['auth', 'validate'])
+  const primary = preferred === 'success' ? successCfg : validateCfg
+  const secondary = preferred === 'success' ? validateCfg : successCfg
+  return {
+    ...secondary,
+    ...primary,
+    validate_url: firstString(primary.validate_url, primary.url, secondary.validate_url, secondary.url, rule.validate_url),
+  }
+}
+
+function cookieHeaderFromCookies(cookies: Array<{ name?: string; value?: string }>): string {
+  return cookies
+    .filter((cookie) => cookie.name && cookie.value)
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join('; ')
+}
+
+async function checkCrawlerValidateUrl(
+  cfg: CrawlerAuthCheckConfig,
+  cookies: Array<{ name?: string; value?: string }>,
+): Promise<{ body: string; check?: CrawlerSessionValidationCheck }> {
+  const validateUrl = firstString(cfg.validate_url, cfg.url)
+  if (!validateUrl) return { body: '' }
+
+  const method = typeof cfg.method === 'string' ? cfg.method.toUpperCase() : 'GET'
+  const cookieHeader = cookieHeaderFromCookies(cookies)
+  const res = await fetch(validateUrl, {
+    method,
+    headers: cookieHeader ? { Cookie: cookieHeader } : {},
+  })
+  const body = await res.text()
+  const successStatuses = toNumberArray(cfg.success_statuses)
+  const statusOk = successStatuses.length ? successStatuses.includes(res.status) : res.ok
+  return {
+    body,
+    check: {
+      name: 'validate_url',
+      valid: statusOk,
+      message: `HTTP ${res.status} ${res.statusText}`,
+    },
+  }
+}
+
+async function detectCrawlerAuthSuccess(
+  win: BrowserWindow,
+  rule: CrawlerRule,
+): Promise<CrawlerAuthDetectionResult> {
+  const cfg = getCrawlerAuthCheckConfig(rule, 'success')
+  const checks: CrawlerSessionValidationCheck[] = []
+  const url = win.webContents.getURL()
+  const cookies = await win.webContents.session.cookies.get({})
+  let strongSuccessMatched = false
+
+  const requiredCookies = toStringArray(cfg.required_cookies)
+  if (requiredCookies.length) {
+    const cookieNames = new Set(cookies.map((cookie) => cookie.name))
+    const missing = requiredCookies.filter((name) => !cookieNames.has(name))
+    const valid = missing.length === 0
+    checks.push({
+      name: 'required_cookies',
+      valid,
+      message: valid ? 'Required cookies are present' : `Missing cookies: ${missing.join(', ')}`,
+    })
+  }
+
+  const urlPattern = firstString(cfg.url_pattern)
+  if (urlPattern) {
+    const valid = matchCrawlerPattern(url, urlPattern)
+    if (valid) strongSuccessMatched = true
+    checks.push({
+      name: 'url_pattern',
+      valid,
+      message: valid ? 'Current URL matched' : `Current URL did not match ${urlPattern}`,
+    })
+  }
+
+  const successSelector = firstString(cfg.success_selector)
+  if (successSelector) {
+    let valid = false
+    try {
+      valid = await win.webContents.executeJavaScript(
+        `Boolean(document.querySelector(${JSON.stringify(successSelector)}))`,
+        true,
+      ) as boolean
+    } catch {
+      valid = false
+    }
+    if (valid) strongSuccessMatched = true
+    checks.push({
+      name: 'success_selector',
+      valid,
+      message: valid ? 'Success selector matched' : 'Success selector not found',
+    })
+  }
+
+  const successTexts = toStringArray(cfg.success_text)
+  const failureTexts = toStringArray(cfg.failure_text)
+  let pageText = ''
+  if (successTexts.length || failureTexts.length) {
+    try {
+      pageText = await win.webContents.executeJavaScript('document.body ? document.body.innerText : ""', true) as string
+    } catch {
+      pageText = ''
+    }
+  }
+
+  if (successTexts.length) {
+    const valid = successTexts.some((text) => pageText.includes(text))
+    if (valid) strongSuccessMatched = true
+    checks.push({
+      name: 'success_text',
+      valid,
+      message: valid ? 'Success text matched' : 'Success text not found',
+    })
+  }
+
+  if (failureTexts.length) {
+    const matched = failureTexts.some((text) => pageText.includes(text))
+    checks.push({
+      name: 'failure_text',
+      valid: !matched,
+      message: matched ? 'Failure text was found' : 'Failure text not found',
+    })
+  }
+
+  try {
+    const validation = await checkCrawlerValidateUrl(cfg, cookies)
+    if (validation.check) {
+      if (validation.check.valid) strongSuccessMatched = true
+      checks.push(validation.check)
+    }
+  } catch (e) {
+    checks.push({
+      name: 'validate_url',
+      valid: false,
+      message: e instanceof Error ? e.message : String(e),
+    })
+  }
+
+  const requiredCookieCheck = checks.find((check) => check.name === 'required_cookies')
+  const failureCheck = checks.find((check) => check.name === 'failure_text')
+  const validateChecks = checks.filter((check) => check.name === 'validate_url')
+  const hasStrongConditions = Boolean(urlPattern || successSelector || successTexts.length || firstString(cfg.validate_url, cfg.url))
+  const success = checks.length > 0
+    && (hasStrongConditions ? strongSuccessMatched : Boolean(requiredCookieCheck?.valid))
+    && (!requiredCookieCheck || requiredCookieCheck.valid)
+    && (!failureCheck || failureCheck.valid)
+    && validateChecks.every((check) => check.valid)
+
+  return {
+    success,
+    checks,
+    captureDelayMs: toPositiveInt(cfg.capture_delay_ms, 1000),
+  }
+}
+
+async function setCrawlerAuthWindowStatus(win: BrowserWindow, text: string): Promise<void> {
+  if (win.isDestroyed()) return
+  try {
+    await win.webContents.executeJavaScript(`
+      (() => {
+        const el = document.getElementById('crawler-auth-status');
+        if (el) el.textContent = ${JSON.stringify(text)};
+      })()
+    `, true)
+  } catch {
+    // Non-critical while the page is navigating or blocking script execution.
+  }
+}
+
 async function validateCrawlerSession(
   rule: CrawlerRule,
   state: unknown,
 ): Promise<CrawlerSessionValidationResult> {
-  const ruleJson = parseCrawlerRuleJson(rule)
-  const validateCfg = getNestedRecord(ruleJson, ['auth', 'validate'])
-  const validateUrl = String(validateCfg.url || rule.validate_url || '')
+  const validateCfg = getCrawlerAuthCheckConfig(rule, 'validate')
+  const validateUrl = firstString(validateCfg.validate_url, validateCfg.url, rule.validate_url)
   const typed = state as { cookies?: Array<{ name: string; value: string }>; url?: string }
   const cookies = typed.cookies ?? []
-  const cookieHeader = cookies
-    .filter((cookie) => cookie.name && cookie.value)
-    .map((cookie) => `${cookie.name}=${cookie.value}`)
-    .join('; ')
+  const cookieHeader = cookieHeaderFromCookies(cookies)
   const checks: CrawlerSessionValidationCheck[] = []
 
   const requiredCookies = toStringArray(validateCfg.required_cookies)
@@ -699,7 +985,7 @@ async function validateCrawlerSession(
 
   const urlPattern = typeof validateCfg.url_pattern === 'string' ? validateCfg.url_pattern : ''
   if (urlPattern && typed.url) {
-    const matched = new RegExp(urlPattern).test(typed.url)
+    const matched = matchCrawlerPattern(typed.url, urlPattern)
     checks.push({
       name: 'url_pattern',
       valid: matched,

@@ -174,6 +174,15 @@ function buildRuleJson(rule: Partial<CrawlerRule>) {
   }
   return JSON.stringify({
     auth: {
+      login_url: rule.login_url || '',
+      success: {
+        url_pattern: '',
+        success_selector: '',
+        success_text: [],
+        failure_text: [],
+        required_cookies: [],
+        capture_delay_ms: 1000,
+      },
       validate: {
         url: rule.validate_url || '',
         success_statuses: [200],
@@ -201,6 +210,23 @@ function buildRuleJson(rule: Partial<CrawlerRule>) {
     },
     request: { delay_ms: rule.delay_ms },
   }, null, 2)
+}
+
+function getRecordValue(source: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = source[key]
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function extractLoginUrlFromRuleJson(cfg: Record<string, unknown>): string {
+  const auth = getRecordValue(cfg, 'auth')
+  const login = getRecordValue(auth, 'login')
+  const success = getRecordValue(auth, 'success')
+  for (const value of [auth.login_url, login.url, login.login_url, success.login_url]) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
 }
 
 function syncRuleJsonTemplate() {
@@ -314,12 +340,14 @@ async function save() {
   if (!editTarget.value.site_name?.trim()) return
   saving.value = true
   try {
-    JSON.parse(ruleJsonText.value || '{}')
+    const parsedRuleJson = JSON.parse(ruleJsonText.value || '{}') as Record<string, unknown>
     const authRequired = editTarget.value.auth_required ? 1 : 0
+    const loginUrl = String(editTarget.value.login_url || '').trim() || extractLoginUrlFromRuleJson(parsedRuleJson)
     const saved = await store.upsert({
       ...editTarget.value,
       auth_required: authRequired,
       auth_mode: authRequired ? 'manual_session' : 'none',
+      login_url: loginUrl,
       rule_json: ruleJsonText.value || '{}',
     })
     selectedRuleId.value = saved.id
@@ -413,8 +441,10 @@ async function startAuth() {
   sessionMessage.value = ''
   sessionValidation.value = null
   try {
-    await store.startAuth(selectedRule.value.id, accountAlias.value || 'default')
-    sessionMessage.value = '授权已保存'
+    const saved = await store.startAuth(selectedRule.value.id, accountAlias.value || 'default')
+    const mode = saved.storage_meta?.capture_mode === 'auto' ? '自动采集' : '手动采集'
+    const url = typeof saved.storage_meta?.captured_url === 'string' ? saved.storage_meta.captured_url : ''
+    sessionMessage.value = `授权已保存（${mode}${url ? `：${url}` : ''}）`
   } catch (e) {
     sessionMessage.value = String(e)
   } finally {

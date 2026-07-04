@@ -147,6 +147,39 @@ export function startMockAIServer(): Promise<{ port: number; close: () => void }
           return
         }
 
+        if (req.url?.startsWith('/crawler/auth-login')) {
+          res.setHeader('Content-Type', 'text/html; charset=utf-8')
+          res.end(`
+            <!doctype html>
+            <html>
+              <body>
+                <p>Logging in fixture account...</p>
+                <script>
+                  document.cookie = 'fixture_session=ok; path=/';
+                  setTimeout(() => { window.location.href = '/crawler/auth-dashboard'; }, 50);
+                </script>
+              </body>
+            </html>
+          `)
+          return
+        }
+
+        if (req.url?.startsWith('/crawler/auth-dashboard')) {
+          res.setHeader('Content-Type', 'text/html; charset=utf-8')
+          res.end(`
+            <!doctype html>
+            <html>
+              <body>
+                <main class="fixture-dashboard">
+                  <span class="user-avatar">fixture</span>
+                  <a href="/crawler/static?page=1">question bank</a>
+                </main>
+              </body>
+            </html>
+          `)
+          return
+        }
+
         if (req.url?.startsWith('/crawler/validate')) {
           res.end(JSON.stringify({ ok: true, user: 'fixture' }))
           return

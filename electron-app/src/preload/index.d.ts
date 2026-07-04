@@ -102,7 +102,18 @@ declare global {
       testCrawl: (args: unknown) => Promise<IpcResponse<{ count: number; samples: unknown[] }>>
       runCrawl: (args: { ruleId: string; target_group_id?: string | null; new_group?: unknown | null; account_alias?: string | null }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
       listCrawlerRuns: (ruleId: string) => Promise<IpcResponse<unknown[]>>
-      startCrawlerAuth: (args: { ruleId: string; account_alias?: string }) => Promise<IpcResponse<unknown>>
+      startCrawlerAuth: (args: { ruleId: string; account_alias?: string }) => Promise<IpcResponse<{
+        id: string
+        site_id: string
+        site_name: string
+        account_alias: string
+        auth_mode: string
+        storage_meta: Record<string, unknown>
+        last_validated_at: string | null
+        expires_at: string | null
+        created_at: string
+        updated_at: string
+      }>>
       listCrawlerSessions: (args?: { ruleId?: string }) => Promise<IpcResponse<unknown[]>>
       validateCrawlerSession: (args: { ruleId: string; account_alias: string }) => Promise<IpcResponse<{ valid: boolean; status?: number; message?: string; checks?: Array<{ name: string; valid: boolean; message: string }> }>>
       deleteCrawlerSession: (args: { ruleId: string; account_alias: string }) => Promise<IpcResponse<void>>

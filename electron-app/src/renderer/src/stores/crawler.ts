@@ -77,6 +77,19 @@ export interface CrawlerSession {
   updated_at: string
 }
 
+export interface CrawlerAuthStartResult extends CrawlerSession {
+  storage_meta: {
+    cookie_count?: number
+    local_storage_keys?: number
+    captured_origin?: string
+    captured_url?: string
+    capture_mode?: 'auto' | 'manual'
+    matched_checks?: string[]
+    account_alias?: string
+    [key: string]: unknown
+  }
+}
+
 export interface NewCrawlerTargetGroup {
   name: string
   group_type?: 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
@@ -194,7 +207,7 @@ export const useCrawlerStore = defineStore('crawler', () => {
     const res = await window.electronAPI.startCrawlerAuth(toIpcPayload({ ruleId, account_alias: accountAlias }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
     await fetchSessions(ruleId)
-    return res.data
+    return res.data as CrawlerAuthStartResult
   }
 
   async function fetchSessions(ruleId?: string) {

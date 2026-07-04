@@ -183,4 +183,71 @@ test.describe('crawler module', () => {
       await closeApp(handle)
     }
   })
+
+  test('auth window detects login success and captures session automatically', async () => {
+    const handle = await launchApp()
+    try {
+      await waitForPythonReady(handle.page)
+      const port = process.env.MOCK_AI_PORT
+      expect(port).toBeTruthy()
+
+      const rule = await api<Record<string, unknown>>(handle.page, 'upsertCrawlerRule', {
+        ...staticRule(port!),
+        site_name: 'Auth Fixture',
+        auth_required: 1,
+        auth_mode: 'manual_session',
+        login_url: '',
+        validate_url: '',
+        rule_json: JSON.stringify({
+          auth: {
+            login_url: `http://127.0.0.1:${port}/crawler/auth-login`,
+            success: {
+              url_pattern: '/crawler/auth-dashboard',
+              success_selector: '.user-avatar',
+              required_cookies: ['fixture_session'],
+              capture_delay_ms: 50,
+            },
+            validate: {
+              url_pattern: '/crawler/auth-dashboard',
+              required_cookies: ['fixture_session'],
+            },
+          },
+          list: {
+            url_template: `http://127.0.0.1:${port}/crawler/static?page={page}`,
+            item_selector: '.question-item',
+            fields: { content: '.question-content' },
+          },
+          pagination: { type: 'page_param', max_pages: 1 },
+          request: { delay_ms: 0 },
+        }),
+      })
+
+      const saved = await api<{ storage_meta: Record<string, unknown>; account_alias: string }>(
+        handle.page,
+        'startCrawlerAuth',
+        { ruleId: rule.id as string, account_alias: 'fixture' },
+      )
+      expect(saved.account_alias).toBe('fixture')
+      expect(saved.storage_meta.capture_mode).toBe('auto')
+      expect(saved.storage_meta.captured_url).toContain('/crawler/auth-dashboard')
+      expect(saved.storage_meta.matched_checks).toEqual(
+        expect.arrayContaining(['url_pattern', 'success_selector', 'required_cookies']),
+      )
+
+      const validation = await api<{ valid: boolean; checks?: Array<{ name: string; valid: boolean }> }>(
+        handle.page,
+        'validateCrawlerSession',
+        { ruleId: rule.id as string, account_alias: 'fixture' },
+      )
+      expect(validation.valid).toBe(true)
+      expect(validation.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'required_cookies', valid: true }),
+          expect.objectContaining({ name: 'url_pattern', valid: true }),
+        ]),
+      )
+    } finally {
+      await closeApp(handle)
+    }
+  })
 })
