@@ -86,6 +86,8 @@ export interface CrawlerAuthStartResult extends CrawlerSession {
     capture_mode?: 'auto' | 'manual'
     matched_checks?: string[]
     account_alias?: string
+    visual_rule_fields?: string[]
+    visual_rule_saved?: boolean
     [key: string]: unknown
   }
 }
@@ -189,8 +191,6 @@ export const useCrawlerStore = defineStore('crawler', () => {
 
   async function run(args: {
     ruleId: string
-    target_group_id?: string | null
-    new_group?: NewCrawlerTargetGroup | null
     account_alias?: string | null
   }) {
     const res = await window.electronAPI.runCrawl(toIpcPayload(args))
@@ -203,11 +203,25 @@ export const useCrawlerStore = defineStore('crawler', () => {
     if (res.success) runs.value = res.data as CrawlerRun[]
   }
 
+  async function removeRun(id: string) {
+    const res = await window.electronAPI.deleteCrawlerRun(id)
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    runs.value = runs.value.filter((run) => run.id !== id)
+    reviewItems.value = reviewItems.value.filter((item) => item.run_id !== id)
+  }
+
   async function startAuth(ruleId: string, accountAlias: string) {
     const res = await window.electronAPI.startCrawlerAuth(toIpcPayload({ ruleId, account_alias: accountAlias }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
-    await fetchSessions(ruleId)
+    await Promise.all([fetchSessions(ruleId), fetchRules()])
     return res.data as CrawlerAuthStartResult
+  }
+
+  async function openVisualConfig(ruleId: string, accountAlias: string) {
+    const res = await window.electronAPI.openCrawlerVisualConfig(toIpcPayload({ ruleId, account_alias: accountAlias }))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    await Promise.all([fetchSessions(ruleId), fetchRules()])
+    return res.data as CrawlerRule
   }
 
   async function fetchSessions(ruleId?: string) {
@@ -297,7 +311,9 @@ export const useCrawlerStore = defineStore('crawler', () => {
     testCrawl,
     run,
     fetchRuns,
+    removeRun,
     startAuth,
+    openVisualConfig,
     fetchSessions,
     validateSession,
     deleteSession,

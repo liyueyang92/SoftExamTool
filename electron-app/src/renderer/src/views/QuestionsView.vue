@@ -37,6 +37,14 @@ const recentExamYears = computed(() => {
   const year = new Date().getFullYear()
   return Array.from({ length: 5 }, (_, i) => year - i)
 })
+const setCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const question of displayList.value) {
+    if (!question.question_set_id) continue
+    counts.set(question.question_set_id, (counts.get(question.question_set_id) ?? 0) + 1)
+  }
+  return counts
+})
 
 onMounted(async () => {
   await Promise.all([store.fetchPage(), store.loadStats(), store.fetchGroups()])
@@ -181,6 +189,12 @@ const totalQuestions = computed(() => (store.stats.total as number) ?? 0)
 const todayAnswered = computed(() => (store.stats.todayAnswered as number) ?? 0)
 const todayCorrect = computed(() => (store.stats.todayCorrect as number) ?? 0)
 const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.value / todayAnswered.value * 100) : 0)
+
+function setLabel(q: Question): string {
+  if (!q.question_set_id) return ''
+  const total = setCounts.value.get(q.question_set_id) ?? 0
+  return total > 1 ? `关联 ${q.question_set_order || 1}/${total}` : '关联题'
+}
 </script>
 
 <template>
@@ -269,7 +283,10 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
         <tbody>
           <tr v-for="q in displayList" :key="q.id">
             <td><span class="type-badge" :class="q.type">{{ typeLabels[q.type] }}</span></td>
-            <td class="content-cell">{{ q.content.slice(0, 80) }}{{ q.content.length > 80 ? '…' : '' }}</td>
+            <td class="content-cell">
+              <span v-if="setLabel(q)" class="set-badge">{{ setLabel(q) }}</span>
+              {{ q.content.slice(0, 80) }}{{ q.content.length > 80 ? '…' : '' }}
+            </td>
             <td>
               <div>{{ q.group_name || '未分组' }}</div>
               <div v-if="q.exam_year" class="mini-meta">{{ q.exam_year }} {{ q.exam_period === 'H1' ? '上半年' : '下半年' }}</div>
@@ -491,6 +508,7 @@ const todayRate = computed(() => todayAnswered.value ? Math.round(todayCorrect.v
 .mini-meta { font-size: 11px; color: var(--c-text-2); margin-top: 2px; }
 
 .type-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.set-badge { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-size: 11px; font-weight: 700; vertical-align: 1px; }
 .type-badge.single { background: #1e3a5f; color: var(--c-brand); }
 .type-badge.multiple { background: var(--c-ok-bg); color: #4ade80; }
 .type-badge.case { background: var(--c-warn-bg); color: #fb923c; }

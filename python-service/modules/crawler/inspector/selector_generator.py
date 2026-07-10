@@ -32,16 +32,22 @@ def suggest_selectors(
         raise CrawlerParseError('Selected node was not found', code='CRAWLER_SELECTOR_NODE_NOT_FOUND')
 
     candidates: list[tuple[str, str]] = []
-    node_id = node.get('id')
-    if node_id:
-        candidates.append(('css', f'#{_css_escape(str(node_id))}'))
+    for stable_node in _stable_nodes(node):
+        node_id = stable_node.get('id')
+        if node_id:
+            candidates.append(('css', f'#{_css_escape(str(node_id))}'))
 
-    classes = [str(item) for item in (node.get('class') or []) if item]
-    stable_classes = [item for item in classes if not item.startswith(('css-', 'sc-', 'jsx-'))]
-    if stable_classes:
-        candidates.append(('css', f'{node.name}.{_css_escape(stable_classes[0])}'))
-        candidates.append(('css', f'{node.name}' + ''.join(f'.{_css_escape(item)}' for item in stable_classes[:3])))
-        candidates.append(('css', '.' + '.'.join(_css_escape(item) for item in stable_classes[:2])))
+        classes = [str(item) for item in (stable_node.get('class') or []) if item]
+        stable_classes = _stable_classes(classes)
+        if stable_classes:
+            candidates.append(('css', '.' + _css_escape(stable_classes[0])))
+            candidates.append(('css', f'{stable_node.name}.{_css_escape(stable_classes[0])}'))
+            candidates.append(('css', '.' + '.'.join(_css_escape(item) for item in stable_classes[:2])))
+            candidates.append(('css', f'{stable_node.name}' + ''.join(f'.{_css_escape(item)}' for item in stable_classes[:3])))
+
+        attr_selector = _stable_attr_selector(stable_node)
+        if attr_selector:
+            candidates.append(('css', attr_selector))
 
     text = node.get_text(' ', strip=True)
     if text and node.name in {'a', 'button', 'span', 'strong', 'h1', 'h2', 'h3', 'p'}:
@@ -53,9 +59,14 @@ def suggest_selectors(
     candidates.append(('xpath', _xpath_for(node, shallow=False)))
 
     if scope_selector:
-        candidates = [
-            (kind, f'{scope_selector} {item}' if kind == 'css' and not item.startswith(scope_selector) else item)
+        scoped_candidates = [
+            (kind, f'{scope_selector} {item}')
             for kind, item in candidates
+            if kind == 'css' and not item.startswith(scope_selector)
+        ]
+        candidates = [
+            *candidates,
+            *scoped_candidates,
         ]
 
     result: list[SelectorCandidate] = []
@@ -79,7 +90,35 @@ def suggest_selectors(
             kind=kind,
         ))
 
+    result.sort(key=lambda item: _candidate_rank(item.selector, item.match_count))
     return SuggestSelectorResponse(candidates=result[:8])
+
+
+def _stable_nodes(node):
+    current = node
+    depth = 0
+    while current and getattr(current, 'name', None) and current.name not in {'[document]', 'body', 'html'} and depth < 5:
+        if current.get('id') or _stable_classes(current.get('class') or []) or _stable_attr_selector(current):
+            yield current
+        current = current.parent
+        depth += 1
+
+
+def _stable_classes(classes) -> list[str]:
+    return [
+        str(item)
+        for item in classes
+        if item and not str(item).startswith(('css-', 'sc-', 'jsx-', 'crawler-capture-picked'))
+        and str(item) not in {'active', 'selected', 'disabled', 'hover', 'focus'}
+    ]
+
+
+def _stable_attr_selector(node) -> str:
+    for attr in ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label', 'title']:
+        value = node.get(attr)
+        if value:
+            return f'{node.name}[{attr}="{_css_escape(str(value))}"]'
+    return ''
 
 
 def _node_by_path(soup, path: str):
@@ -140,11 +179,27 @@ def _xpath_for(node, *, shallow: bool) -> str:
 
 
 def _stability(selector: str, match_count: int) -> str:
-    if selector.startswith('#') or (match_count == 1 and ':nth-of-type' not in selector):
+    if selector.startswith('//') or selector.startswith('/'):
+        return 'low'
+    if selector.startswith('#') or (match_count == 1 and ':nth-of-type' not in selector and '>' not in selector):
         return 'high'
     if ':nth-of-type' in selector:
         return 'low'
     return 'medium'
+
+
+def _candidate_rank(selector: str, match_count: int) -> tuple[int, int, int]:
+    if selector.startswith('//') or selector.startswith('/'):
+        quality = 5
+    elif selector.startswith('#'):
+        quality = 0
+    elif ':nth-of-type' not in selector and '>' not in selector and match_count > 0:
+        quality = 1
+    elif ':nth-of-type' not in selector and match_count > 0:
+        quality = 2
+    else:
+        quality = 4
+    return (quality, len(selector), -match_count)
 
 
 def _css_escape(value: str) -> str:

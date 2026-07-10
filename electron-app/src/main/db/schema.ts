@@ -384,4 +384,47 @@ CREATE INDEX IF NOT EXISTS idx_crawler_review_rule_hash
   ON crawler_review_items(rule_id, content_hash);
 `,
   },
+  {
+    version: 10,
+    sql: `
+ALTER TABLE questions ADD COLUMN question_set_id TEXT;
+ALTER TABLE questions ADD COLUMN question_set_order INTEGER NOT NULL DEFAULT 0;
+
+CREATE TEMP TABLE question_set_backfill (
+  content TEXT PRIMARY KEY,
+  set_id TEXT NOT NULL
+);
+
+INSERT INTO question_set_backfill (content, set_id)
+SELECT content, lower(hex(randomblob(16)))
+FROM questions
+WHERE options IS NOT NULL AND trim(options) <> ''
+GROUP BY content
+HAVING COUNT(*) > 1 AND COUNT(DISTINCT options) > 1;
+
+CREATE TEMP TABLE question_set_order_backfill AS
+SELECT
+  q.id,
+  b.set_id,
+  ROW_NUMBER() OVER (PARTITION BY q.content ORDER BY q.created_at, q.id) AS order_no
+FROM questions q
+JOIN question_set_backfill b ON b.content = q.content;
+
+UPDATE questions
+SET
+  question_set_id = (
+    SELECT set_id FROM question_set_order_backfill item WHERE item.id = questions.id
+  ),
+  question_set_order = (
+    SELECT order_no FROM question_set_order_backfill item WHERE item.id = questions.id
+  )
+WHERE id IN (SELECT id FROM question_set_order_backfill);
+
+DROP TABLE question_set_order_backfill;
+DROP TABLE question_set_backfill;
+
+CREATE INDEX IF NOT EXISTS idx_questions_set
+  ON questions(question_set_id, question_set_order);
+`,
+  },
 ]

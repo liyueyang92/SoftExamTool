@@ -89,7 +89,7 @@ export class WsProgressClient {
         if (type === 'error') {
           this.mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
             taskId: msg.taskId,
-            progress: -1,
+            progress: 0,
             message: errorMessage(msg.error),
           })
           const cb = this.errorCallbacks.get(taskId)

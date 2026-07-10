@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   useCrawlerStore,
   type CrawlerInspectLoadResult,
   type CrawlerInspectNode,
   type CrawlerInspectPreviewResult,
+  type CrawlerReviewItem,
   type CrawlerRule,
   type CrawlerRuntimeStatus,
   type CrawlerSelectorCandidate,
@@ -34,6 +35,7 @@ const testResult = ref<{ count: number; samples: unknown[] } | null>(null)
 const testError = ref('')
 
 type SelectorTarget = 'item' | 'content' | 'options' | 'answer' | 'explanation' | 'detail_link'
+type QuestionTypeConfig = '' | 'single' | 'multiple' | 'case' | 'essay'
 
 const inspectUrl = ref('')
 const inspectLoading = ref(false)
@@ -45,8 +47,9 @@ const selectorTarget = ref<SelectorTarget>('item')
 const selectorBusy = ref(false)
 const previewBusy = ref(false)
 const inspectPreviewResult = ref<CrawlerInspectPreviewResult | null>(null)
+const questionTypeConfig = ref<QuestionTypeConfig>('')
 
-const groupMode = ref<'none' | 'existing' | 'new'>('none')
+const groupMode = ref<'existing' | 'new'>('existing')
 const targetGroupId = ref('')
 const newGroupName = ref('')
 const newGroupType = ref<'crawled' | 'past_exam' | 'custom'>('crawled')
@@ -55,6 +58,7 @@ const newGroupPeriod = ref<'H1' | 'H2'>('H1')
 
 const selectedReviewIds = ref<string[]>([])
 const reviewMessage = ref('')
+const reviewError = ref('')
 const accountAlias = ref('default')
 const sessionMessage = ref('')
 const sessionBusy = ref(false)
@@ -69,6 +73,9 @@ const selectedSessions = computed(() => {
   return ruleId ? store.sessions.filter((item) => item.site_id === ruleId) : []
 })
 const pendingCount = computed(() => store.reviewItems.length)
+const existingImportGroups = computed(() =>
+  questionStore.groups.filter((group) => group.group_type !== 'past_exam')
+)
 const filteredRuns = computed(() => {
   if (runStageFilter.value === 'all') return store.runs
   return store.runs.filter((run) => (run.error_stage || run.status) === runStageFilter.value)
@@ -80,6 +87,18 @@ const runStageOptions = computed(() => {
     else if (run.status) values.add(run.status)
   }
   return Array.from(values)
+})
+const importGroupReady = computed(() => {
+  if (groupMode.value === 'existing') return Boolean(targetGroupId.value)
+  if (!newGroupName.value.trim()) return false
+  if (newGroupType.value === 'past_exam') return Boolean(newGroupYear.value && newGroupPeriod.value)
+  return true
+})
+
+watch(existingImportGroups, (groups) => {
+  if (targetGroupId.value && !groups.some((group) => group.id === targetGroupId.value)) {
+    targetGroupId.value = ''
+  }
 })
 
 onMounted(async () => {
@@ -138,6 +157,7 @@ function defaultRule(): Partial<CrawlerRule> {
 
 function openNew() {
   editTarget.value = defaultRule()
+  questionTypeConfig.value = ''
   ruleJsonText.value = buildRuleJson(editTarget.value)
   testUrl.value = String(editTarget.value.url_template ?? '').replace('{page}', '1')
   resetInspector()
@@ -148,9 +168,11 @@ function openNew() {
 
 function openEdit(rule: CrawlerRule) {
   editTarget.value = { ...rule }
+  questionTypeConfig.value = ''
   ruleJsonText.value = rule.rule_json && rule.rule_json !== '{}'
     ? JSON.stringify(JSON.parse(rule.rule_json), null, 2)
     : buildRuleJson(rule)
+  questionTypeConfig.value = extractQuestionTypeConfig(ruleJsonText.value)
   testUrl.value = rule.url_template.replace('{page}', '1')
   resetInspector()
   testResult.value = null
@@ -195,6 +217,7 @@ function buildRuleJson(rule: Partial<CrawlerRule>) {
     list: {
       url_template: rule.url_template,
       item_selector: rule.item_selector,
+      ...(questionTypeConfig.value ? { question_type: questionTypeConfig.value } : {}),
       fields: {
         content: rule.question_field,
         options: rule.options_field,
@@ -229,6 +252,21 @@ function extractLoginUrlFromRuleJson(cfg: Record<string, unknown>): string {
   return ''
 }
 
+function extractQuestionTypeConfig(text: string): QuestionTypeConfig {
+  try {
+    const cfg = JSON.parse(text || '{}') as Record<string, unknown>
+    const list = getRecordValue(cfg, 'list')
+    const value = list.question_type ?? cfg.question_type
+    return isQuestionTypeConfig(value) ? value : ''
+  } catch {
+    return ''
+  }
+}
+
+function isQuestionTypeConfig(value: unknown): value is Exclude<QuestionTypeConfig, ''> {
+  return value === 'single' || value === 'multiple' || value === 'case' || value === 'essay'
+}
+
 function syncRuleJsonTemplate() {
   ruleJsonText.value = buildRuleJson(editTarget.value)
 }
@@ -258,6 +296,15 @@ function patchRuleJson(mutator: (cfg: Record<string, unknown>) => void) {
   }
   mutator(cfg)
   ruleJsonText.value = JSON.stringify(cfg, null, 2)
+}
+
+function syncQuestionTypeConfig() {
+  patchRuleJson((cfg) => {
+    const list = (cfg.list && typeof cfg.list === 'object' ? cfg.list : {}) as Record<string, unknown>
+    if (questionTypeConfig.value) list.question_type = questionTypeConfig.value
+    else delete list.question_type
+    cfg.list = list
+  })
 }
 
 function setNestedSelector(target: SelectorTarget, selector: string) {
@@ -377,7 +424,7 @@ async function doTest() {
   }
 }
 
-function currentGroupPayload(): { target_group_id?: string | null; new_group?: NewCrawlerTargetGroup | null } {
+function importGroupPayload(): { target_group_id?: string | null; new_group?: NewCrawlerTargetGroup | null } {
   if (groupMode.value === 'existing') return { target_group_id: targetGroupId.value || null, new_group: null }
   if (groupMode.value === 'new' && newGroupName.value.trim()) {
     return {
@@ -398,13 +445,27 @@ async function runCrawl(ruleId: string) {
   runMessage.value = '准备启动'
   runError.value = ''
   activeRun.value = null
-  const result = await store.run({ ruleId, ...currentGroupPayload(), account_alias: accountAlias.value || null })
+  const result = await store.run({ ruleId, account_alias: accountAlias.value || null })
   activeRun.value = { ...result, ruleId }
   await store.fetchRuns(ruleId)
 }
 
 async function retryRun(ruleId: string) {
   await runCrawl(ruleId)
+}
+
+async function deleteRun(runId: string) {
+  if (!window.confirm('删除这条运行历史？相关待确认结果也会一并删除。')) return
+  reviewMessage.value = ''
+  reviewError.value = ''
+  try {
+    await store.removeRun(runId)
+    if (activeRun.value?.runId === runId) activeRun.value = null
+    selectedReviewIds.value = []
+    await store.fetchReviewItems({ status: 'pending', limit: 100 })
+  } catch (e) {
+    reviewError.value = e instanceof Error ? e.message : String(e)
+  }
 }
 
 async function selectRule(ruleId: string) {
@@ -419,17 +480,35 @@ function toggleReview(id: string, checked: boolean) {
   if (!checked) selectedReviewIds.value = selectedReviewIds.value.filter((x) => x !== id)
 }
 
+function toggleReviewSelection(id: string) {
+  toggleReview(id, !selectedReviewIds.value.includes(id))
+}
+
 async function importSelected() {
   if (!selectedReviewIds.value.length) return
-  const res = await store.importReviewItems({ ids: selectedReviewIds.value, ...currentGroupPayload() })
-  reviewMessage.value = `已入库 ${res.count} 条`
-  selectedReviewIds.value = []
-  await questionStore.fetchGroups()
-  if (selectedRuleId.value) await store.fetchRuns(selectedRuleId.value)
+  reviewMessage.value = ''
+  reviewError.value = ''
+  if (!importGroupReady.value) {
+    reviewError.value = groupMode.value === 'existing'
+      ? '请先选择入库分组'
+      : '请填写新分组名称；历年真题还需要年份和上/下半年'
+    return
+  }
+  try {
+    const res = await store.importReviewItems({ ids: selectedReviewIds.value, ...importGroupPayload() })
+    reviewMessage.value = `已入库 ${res.count} 条`
+    selectedReviewIds.value = []
+    await questionStore.fetchGroups()
+    if (selectedRuleId.value) await store.fetchRuns(selectedRuleId.value)
+  } catch (e) {
+    reviewError.value = e instanceof Error ? e.message : String(e)
+  }
 }
 
 async function rejectSelected() {
   if (!selectedReviewIds.value.length) return
+  reviewMessage.value = ''
+  reviewError.value = ''
   await store.rejectReviewItems(selectedReviewIds.value, 'Rejected by user')
   reviewMessage.value = `已丢弃 ${selectedReviewIds.value.length} 条`
   selectedReviewIds.value = []
@@ -445,6 +524,21 @@ async function startAuth() {
     const mode = saved.storage_meta?.capture_mode === 'auto' ? '自动采集' : '手动采集'
     const url = typeof saved.storage_meta?.captured_url === 'string' ? saved.storage_meta.captured_url : ''
     sessionMessage.value = `授权已保存（${mode}${url ? `：${url}` : ''}）`
+  } catch (e) {
+    sessionMessage.value = String(e)
+  } finally {
+    sessionBusy.value = false
+  }
+}
+
+async function openVisualConfig() {
+  if (!selectedRule.value) return
+  sessionBusy.value = true
+  sessionMessage.value = ''
+  sessionValidation.value = null
+  try {
+    await store.openVisualConfig(selectedRule.value.id, accountAlias.value || 'default')
+    sessionMessage.value = '可视化采集配置已保存'
   } catch (e) {
     sessionMessage.value = String(e)
   } finally {
@@ -493,6 +587,25 @@ function formatDate(iso?: string | null) {
   if (!iso) return '-'
   return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
+
+type ReviewPayload = CrawlerReviewItem['normalized_payload']
+
+const questionTypeLabels: Record<ReviewPayload['type'], string> = {
+  single: '单选题',
+  multiple: '多选题',
+  case: '案例题',
+  essay: '论文题',
+}
+
+function questionTypeLabel(type: ReviewPayload['type']) {
+  return questionTypeLabels[type] ?? type
+}
+
+function reviewOptionsSummary(payload: ReviewPayload) {
+  const options = payload.options?.filter((item) => item && item.trim()) ?? []
+  if (!options.length) return ''
+  return options.slice(0, 4).join('  ')
+}
 </script>
 
 <template>
@@ -537,12 +650,12 @@ function formatDate(iso?: string | null) {
       <main class="panel">
         <div v-if="!selectedRule" class="empty fill">选择一个规则查看运行记录</div>
         <template v-else>
-          <div class="panel-head">
-            <div>
+          <div class="panel-head rule-detail-head">
+            <div class="rule-detail-title">
               <h3>{{ selectedRule.site_name }}</h3>
               <p>{{ selectedRule.url_template }}</p>
             </div>
-            <div class="actions">
+            <div class="actions rule-actions">
               <button class="btn" @click="openEdit(selectedRule)">编辑</button>
               <button class="btn-primary" @click="runCrawl(selectedRule.id)">运行</button>
             </div>
@@ -557,30 +670,10 @@ function formatDate(iso?: string | null) {
             <p v-if="runError" class="error">{{ runError }}</p>
           </div>
 
-          <section class="target-box">
-            <label>入库分组</label>
-            <div class="segmented">
-              <button :class="{ active: groupMode === 'none' }" @click="groupMode = 'none'">不指定</button>
-              <button :class="{ active: groupMode === 'existing' }" @click="groupMode = 'existing'">现有分组</button>
-              <button :class="{ active: groupMode === 'new' }" @click="groupMode = 'new'">新建分组</button>
-            </div>
-            <select v-if="groupMode === 'existing'" v-model="targetGroupId" class="input">
-              <option value="">选择分组</option>
-              <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
-            </select>
-            <div v-if="groupMode === 'new'" class="group-grid">
-              <input v-model="newGroupName" class="input" placeholder="分组名称" />
-              <select v-model="newGroupType" class="input">
-                <option value="crawled">爬虫导入</option>
-                <option value="past_exam">历年真题</option>
-                <option value="custom">自定义</option>
-              </select>
-              <input v-if="newGroupType === 'past_exam'" v-model.number="newGroupYear" class="input" type="number" placeholder="年份" />
-              <select v-if="newGroupType === 'past_exam'" v-model="newGroupPeriod" class="input">
-                <option value="H1">上半年</option>
-                <option value="H2">下半年</option>
-              </select>
-            </div>
+          <section class="target-box review-destination">
+            <label>抓取结果</label>
+            <strong>待确认结果</strong>
+            <span>运行后先进入待确认区，确认入库时再选择题库分组。</span>
           </section>
 
           <section v-if="selectedRule.auth_required" class="target-box">
@@ -588,6 +681,7 @@ function formatDate(iso?: string | null) {
             <div class="session-row">
               <input v-model="accountAlias" class="input" placeholder="账号别名" />
               <button class="btn" :disabled="sessionBusy" @click="startAuth">登录并授权</button>
+              <button class="btn" :disabled="sessionBusy" @click="openVisualConfig">可视化配置</button>
               <button class="btn" :disabled="sessionBusy" @click="validateSession">检查会话</button>
               <button class="btn" :disabled="sessionBusy" @click="deleteSession">清除会话</button>
             </div>
@@ -630,10 +724,13 @@ function formatDate(iso?: string | null) {
               <div v-for="run in filteredRuns" :key="run.id" class="run-row">
                 <span class="badge" :class="statusClass(run.status)">{{ run.status }}</span>
                 <span>抓取 {{ run.total_found }}</span>
-                <span>待确认/入库 {{ run.total_saved }}</span>
+                <span>已入库 {{ run.total_saved }}</span>
                 <span>{{ formatDate(run.started_at) }}</span>
                 <small v-if="run.error_msg">{{ run.error_stage || 'unknown' }} · {{ run.error_code || 'CRAWLER_ERROR' }} · {{ run.error_msg }}</small>
-                <button v-if="run.status === 'failed'" class="btn mini-btn" @click="retryRun(selectedRule.id)">重试</button>
+                <div class="run-actions">
+                  <button v-if="run.status === 'failed'" class="btn mini-btn" @click="retryRun(selectedRule.id)">重试</button>
+                  <button class="btn mini-btn danger" :disabled="run.status === 'running'" @click="deleteRun(run.id)">删除</button>
+                </div>
               </div>
               <div v-if="store.runs.length && !filteredRuns.length" class="empty">当前阶段没有运行记录</div>
             </div>
@@ -651,24 +748,70 @@ function formatDate(iso?: string | null) {
         <div class="actions">
           <button class="btn" @click="store.fetchReviewItems({ status: 'pending', limit: 100 })">刷新</button>
           <button class="btn" :disabled="!selectedReviewIds.length" @click="rejectSelected">丢弃</button>
-          <button class="btn-primary" :disabled="!selectedReviewIds.length" @click="importSelected">确认入库</button>
+          <button class="btn-primary" :disabled="!selectedReviewIds.length || !importGroupReady" @click="importSelected">确认入库</button>
         </div>
       </div>
+      <section class="target-box review-import-target">
+        <label>确认入库分组</label>
+        <div class="segmented">
+          <button :class="{ active: groupMode === 'existing' }" @click="groupMode = 'existing'">现有分组</button>
+          <button :class="{ active: groupMode === 'new' }" @click="groupMode = 'new'">新建分组</button>
+        </div>
+        <select v-if="groupMode === 'existing'" v-model="targetGroupId" class="input">
+          <option value="">选择分组</option>
+          <option v-for="g in existingImportGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
+        </select>
+        <div v-if="groupMode === 'new'" class="group-grid">
+          <input v-model="newGroupName" class="input" placeholder="分组名称" />
+          <select v-model="newGroupType" class="input">
+            <option value="crawled">爬虫导入</option>
+            <option value="past_exam">历年真题</option>
+            <option value="custom">自定义</option>
+          </select>
+          <input v-if="newGroupType === 'past_exam'" v-model.number="newGroupYear" class="input" type="number" placeholder="年份" />
+          <select v-if="newGroupType === 'past_exam'" v-model="newGroupPeriod" class="input">
+            <option value="H1">上半年</option>
+            <option value="H2">下半年</option>
+          </select>
+        </div>
+      </section>
       <p v-if="reviewMessage" class="success">{{ reviewMessage }}</p>
+      <p v-if="reviewError" class="error">{{ reviewError }}</p>
       <div v-if="!store.reviewItems.length" class="empty">暂无待确认结果</div>
       <div v-else class="review-list">
-        <label v-for="item in store.reviewItems" :key="item.id" class="review-item">
+        <div
+          v-for="item in store.reviewItems"
+          :key="item.id"
+          class="review-item"
+          :class="{ selected: selectedReviewIds.includes(item.id) }"
+          role="checkbox"
+          tabindex="0"
+          :aria-checked="selectedReviewIds.includes(item.id)"
+          @click="toggleReviewSelection(item.id)"
+          @keydown.enter.prevent="toggleReviewSelection(item.id)"
+          @keydown.space.prevent="toggleReviewSelection(item.id)"
+        >
           <input
             type="checkbox"
             :checked="selectedReviewIds.includes(item.id)"
+            @click.stop
             @change="toggleReview(item.id, ($event.target as HTMLInputElement).checked)"
           />
           <div>
-            <strong>{{ item.normalized_payload.title || item.normalized_payload.content.slice(0, 42) }}</strong>
+            <div class="review-title-row">
+              <span class="type-pill">{{ questionTypeLabel(item.normalized_payload.type) }}</span>
+              <strong>{{ item.normalized_payload.title || item.normalized_payload.content.slice(0, 42) }}</strong>
+            </div>
             <p>{{ item.normalized_payload.content }}</p>
-            <small>{{ item.normalized_payload.type }} · {{ item.normalized_payload.source_url || 'no url' }}</small>
+            <p v-if="reviewOptionsSummary(item.normalized_payload)" class="review-extra">
+              {{ reviewOptionsSummary(item.normalized_payload) }}
+            </p>
+            <p v-if="item.normalized_payload.answer" class="review-extra">
+              答案：{{ item.normalized_payload.answer }}
+            </p>
+            <small>{{ item.normalized_payload.source_url || 'no url' }}</small>
           </div>
-        </label>
+        </div>
       </div>
     </section>
 
@@ -694,6 +837,16 @@ function formatDate(iso?: string | null) {
             <label>最大页数<input v-model.number="editTarget.max_pages" class="input" type="number" min="1" /></label>
             <label>延迟 ms<input v-model.number="editTarget.delay_ms" class="input" type="number" min="0" /></label>
             <label>条目选择器<input v-model="editTarget.item_selector" class="input" /></label>
+            <label>
+              题型配置
+              <select v-model="questionTypeConfig" class="input" @change="syncQuestionTypeConfig">
+                <option value="">自动判断</option>
+                <option value="single">单选题</option>
+                <option value="multiple">多选题</option>
+                <option value="case">案例题</option>
+                <option value="essay">论文题</option>
+              </select>
+            </label>
             <label>题干选择器<input v-model="editTarget.question_field" class="input" /></label>
             <label>选项选择器<input v-model="editTarget.options_field" class="input" /></label>
             <label>答案选择器<input v-model="editTarget.answer_field" class="input" /></label>
@@ -805,6 +958,11 @@ function formatDate(iso?: string | null) {
 .rule-title { display: block; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rule-meta { display: block; margin-top: 2px; color: var(--c-text-2); font-size: 12px; }
 .panel { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+.rule-detail-head { align-items: flex-start; min-width: 0; }
+.rule-detail-title { min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.rule-detail-title h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-detail-title p { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-actions { flex: 0 0 auto; flex-wrap: nowrap; justify-content: flex-end; }
 .compact h3 { font-size: 16px; }
 .actions { display: flex; gap: 8px; align-items: center; }
 .btn, .btn-primary { border: 1px solid var(--c-border); border-radius: 6px; height: 32px; padding: 0 12px; cursor: pointer; color: var(--c-text); background: var(--c-panel); }
@@ -817,9 +975,14 @@ function formatDate(iso?: string | null) {
 .progress-bar { height: 100%; background: #2563eb; transition: width .2s; }
 .target-box { display: flex; flex-direction: column; gap: 8px; }
 .target-box > label, .section-title { font-size: 12px; color: var(--c-text-2); font-weight: 700; }
-.section-headline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.stage-filter { width: 150px; min-height: 30px; padding-block: 4px; font-size: 12px; }
-.session-row { display: grid; grid-template-columns: minmax(140px, 1fr) auto auto auto; gap: 8px; align-items: center; }
+.review-destination strong { color: var(--c-text); font-size: 15px; }
+.review-destination span { color: var(--c-text-2); font-size: 12px; }
+.review-import-target { margin: 10px 0; }
+.section-headline { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.section-headline .section-title { white-space: nowrap; }
+.stage-filter { flex: 0 0 108px; width: 108px; min-height: 30px; padding-block: 4px; font-size: 12px; }
+.session-row { display: grid; grid-template-columns: minmax(140px, 1fr) repeat(4, max-content); gap: 8px; align-items: center; }
+.session-row .btn { white-space: nowrap; }
 .sessions { display: flex; flex-wrap: wrap; gap: 6px; }
 .session-pill { border: 1px solid var(--c-border); background: var(--c-panel); color: var(--c-text-2); border-radius: 999px; padding: 4px 9px; font-size: 12px; cursor: pointer; }
 .session-pill.active { border-color: #1d4ed8; color: #1d4ed8; background: #dbeafe; }
@@ -838,16 +1001,25 @@ function formatDate(iso?: string | null) {
 .group-grid, .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .input { width: 100%; border: 1px solid var(--c-input-border); background: var(--c-input); color: var(--c-text); border-radius: 6px; padding: 7px 9px; min-height: 34px; }
 .runs, .review-list { display: flex; flex-direction: column; gap: 8px; }
-.run-row { display: grid; grid-template-columns: 92px 100px 130px 120px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.run-row { display: grid; grid-template-columns: 72px 72px 86px 112px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.run-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-actions { display: flex; justify-content: flex-end; gap: 6px; white-space: nowrap; }
 .mini-btn { height: 26px; padding: 0 8px; font-size: 12px; }
+.mini-btn.danger { color: #dc2626; border-color: #fecaca; }
+.mini-btn.danger:hover:not(:disabled) { background: #fee2e2; }
 .badge { border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; width: fit-content; }
 .badge.ok { background: var(--c-ok-bg); color: var(--c-ok-text); }
 .badge.warn { background: var(--c-warn-bg); color: var(--c-warn-text); }
 .badge.err { background: #fee2e2; color: #dc2626; }
-.review-panel { max-height: 34%; min-height: 190px; padding: 14px; overflow: auto; }
+.review-panel { max-height: 42%; min-height: 240px; padding: 14px; overflow: auto; }
 .review-item { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; padding: 10px; border: 1px solid var(--c-border); border-radius: 6px; cursor: pointer; }
+.review-item.selected { border-color: #1d4ed8; background: #dbeafe; }
+.review-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.review-title-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.type-pill { flex: 0 0 auto; border: 1px solid #1d4ed8; background: #dbeafe; color: #1d4ed8; border-radius: 999px; padding: 1px 7px; font-size: 11px; font-weight: 700; }
 .review-item strong { font-weight: 700; color: var(--c-text); }
 .review-item p { color: var(--c-text-2); font-size: 12px; max-height: 38px; overflow: hidden; }
+.review-item .review-extra { color: var(--c-text-3); max-height: 34px; }
 .review-item small, .run-row small { color: var(--c-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty { color: var(--c-text-3); text-align: center; padding: 24px; }
 .fill { margin: auto; }

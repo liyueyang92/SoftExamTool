@@ -129,7 +129,10 @@ test.describe('crawler module', () => {
       }, { timeout: 20_000 }).toBe(1)
 
       const reviewItems = await api<Array<{ id: string }>>(handle.page, 'listCrawlerReviewItems', { status: 'pending', runId: run.runId, limit: 10 })
-      const imported = await api<{ count: number }>(handle.page, 'importCrawlerReviewItems', { ids: reviewItems.map((item) => item.id) })
+      const imported = await api<{ count: number }>(handle.page, 'importCrawlerReviewItems', {
+        ids: reviewItems.map((item) => item.id),
+        new_group: { name: 'Crawler E2E', group_type: 'crawled' },
+      })
       expect(imported.count).toBe(1)
     } finally {
       await closeApp(handle)

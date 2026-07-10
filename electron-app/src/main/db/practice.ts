@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import { randomUUID } from 'crypto'
-import { Question, queryQuestions, getWrongQuestions } from './questions'
+import { Question, queryQuestions, getWrongQuestions, expandQuestionSets } from './questions'
 
 export interface PracticeConfig {
   mode: 'random' | 'sequential' | 'wrong' | 'favorites'
@@ -57,7 +57,7 @@ export function startPractice(db: Database.Database, config: PracticeConfig): { 
   if (config.mode === 'random' || config.mode === 'wrong' || config.mode === 'favorites') {
     questions = [...questions].sort(() => Math.random() - 0.5)
   }
-  questions = questions.slice(0, config.count)
+  questions = expandQuestionSets(db, questions.slice(0, config.count))
 
   const sessionId = randomUUID()
   const session: PracticeSession = {

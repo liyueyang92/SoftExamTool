@@ -5,6 +5,8 @@ import type { ExamPeriod, QuestionGroupType } from './question-groups'
 export interface Question {
   id: string
   group_id: string | null
+  question_set_id: string | null
+  question_set_order: number
   type: 'single' | 'multiple' | 'case' | 'essay'
   content: string
   options: string[] | null
@@ -24,6 +26,8 @@ export interface Question {
 
 export interface QuestionInput {
   group_id?: string | null
+  question_set_id?: string | null
+  question_set_order?: number | null
   type: Question['type']
   content: string
   options?: string[] | null
@@ -52,9 +56,118 @@ export interface QueryFilter {
 function parseQuestion(row: Record<string, unknown>): Question {
   return {
     ...row,
-    options: row.options ? JSON.parse(row.options as string) : null,
+    options: row.options ? normalizeOptions(JSON.parse(row.options as string) as string[]) : null,
     knowledge_tags: JSON.parse((row.knowledge_tags as string) || '[]'),
   } as Question
+}
+
+function normalizeContentKey(content: string): string {
+  return content.replace(/\s+/g, ' ').trim()
+}
+
+function normalizeQuestionInput(input: QuestionInput): QuestionInput {
+  return {
+    ...input,
+    options: normalizeOptions(input.options),
+  }
+}
+
+function normalizeOptions(options?: string[] | null): string[] | null {
+  const values = (options ?? []).map((item) => item.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  const normalized: string[] = []
+  for (const value of values) {
+    const split = splitCombinedOptions(value)
+    if (split.length > 1) normalized.push(...split)
+    else normalized.push(value)
+  }
+  const seen = new Set<string>()
+  const result = normalized.filter((item) => {
+    if (seen.has(item)) return false
+    seen.add(item)
+    return true
+  })
+  return result.length ? result : null
+}
+
+function normalizeOptionsKey(options?: string[] | null): string {
+  return (normalizeOptions(options) ?? []).join('|')
+}
+
+function splitCombinedOptions(text: string): string[] {
+  const patterns = [
+    /(?<![A-Za-z0-9])([A-H])\s*[.．、:：)）]/g,
+    /(?<![A-Za-z0-9])([A-H])(?=\s+\S)/g,
+    /(?<![A-Za-z0-9])([A-H])(?=[\u4e00-\u9fff])/g,
+  ]
+  for (const pattern of patterns) {
+    const matches = Array.from(text.matchAll(pattern))
+    if (!looksLikeOptionSequence(matches)) continue
+    return matches.map((match, index) => {
+      const start = match.index ?? 0
+      const end = index + 1 < matches.length ? matches[index + 1].index ?? text.length : text.length
+      return text.slice(start, end).trim()
+    }).filter(Boolean)
+  }
+  return []
+}
+
+function looksLikeOptionSequence(matches: RegExpMatchArray[]): boolean {
+  if (matches.length < 2) return false
+  const indexes = matches.map((match) => String(match[1]).charCodeAt(0) - 'A'.charCodeAt(0))
+  return indexes[0] === 0 && indexes.every((value, index) => index === 0 || value > indexes[index - 1])
+}
+
+function attachQuestionSets(db: Database.Database, inputs: QuestionInput[]): QuestionInput[] {
+  const prepared = inputs.map(normalizeQuestionInput)
+  const groups = new Map<string, Array<{ input: QuestionInput; index: number; optionsKey: string }>>()
+
+  prepared.forEach((input, index) => {
+    if (input.question_set_id) return
+    const contentKey = normalizeContentKey(input.content)
+    if (!contentKey) return
+    const optionsKey = normalizeOptionsKey(input.options)
+    if (!optionsKey) return
+    const list = groups.get(contentKey) ?? []
+    list.push({ input, index, optionsKey })
+    groups.set(contentKey, list)
+  })
+
+  for (const [contentKey, items] of groups.entries()) {
+    const existing = db.prepare(`
+      SELECT id, options, question_set_id, question_set_order, created_at
+      FROM questions
+      WHERE content = ? AND options IS NOT NULL AND trim(options) <> ''
+      ORDER BY question_set_order ASC, created_at ASC, id ASC
+    `).all(contentKey) as Array<{
+      id: string
+      options: string
+      question_set_id: string | null
+      question_set_order: number
+      created_at: string
+    }>
+    const existingOptions = existing.map((item) => normalizeOptionsKey(JSON.parse(item.options) as string[]))
+    const distinctOptions = new Set([...items.map((item) => item.optionsKey), ...existingOptions])
+    if ((items.length + existing.length) <= 1 || distinctOptions.size <= 1) continue
+
+    const existingSetId = existing.find((item) => item.question_set_id)?.question_set_id
+    const setId = existingSetId || randomUUID()
+    if (!existingSetId && existing.length) {
+      const updateExisting = db.prepare('UPDATE questions SET question_set_id = ?, question_set_order = ? WHERE id = ?')
+      existing.forEach((item, order) => updateExisting.run(setId, order + 1, item.id))
+    } else if (existingSetId) {
+      const updateExisting = db.prepare('UPDATE questions SET question_set_id = ? WHERE id = ? AND question_set_id IS NULL')
+      existing.forEach((item) => updateExisting.run(existingSetId, item.id))
+    }
+    const startOrder = existing.length
+    items
+      .sort((a, b) => a.index - b.index)
+      .forEach((item, order) => {
+        item.input.question_set_id = setId
+        item.input.question_set_order = startOrder + order + 1
+      })
+  }
+
+  return prepared
 }
 
 export function queryQuestions(db: Database.Database, filter: QueryFilter = {}): { items: Question[]; total: number } {
@@ -103,11 +216,18 @@ export function queryQuestions(db: Database.Database, filter: QueryFilter = {}):
     FROM questions q
     LEFT JOIN question_groups g ON q.group_id = g.id
     ${where}
-    ORDER BY q.created_at DESC
+    ORDER BY
+      COALESCE(
+        (SELECT MIN(qs.created_at) FROM questions qs WHERE qs.question_set_id = q.question_set_id),
+        q.created_at
+      ) DESC,
+      COALESCE(q.question_set_id, q.id) DESC,
+      CASE WHEN q.question_set_id IS NULL THEN 0 ELSE q.question_set_order END ASC,
+      q.created_at DESC
     LIMIT ? OFFSET ?
   `).all(...params, pageSize, offset) as Record<string, unknown>[]
 
-  return { items: rows.map(parseQuestion), total }
+  return { items: expandQuestionSets(db, rows.map(parseQuestion)), total }
 }
 
 export function searchQuestions(db: Database.Database, q: string, limit = 30): Question[] {
@@ -124,28 +244,71 @@ export function searchQuestions(db: Database.Database, q: string, limit = 30): Q
     WHERE questions_fts MATCH ?
     ORDER BY rank LIMIT ?
   `).all(q + '*', limit) as Record<string, unknown>[]
+  return expandQuestionSets(db, rows.map(parseQuestion))
+}
+
+export function getQuestionSetMembers(db: Database.Database, questionSetId: string): Question[] {
+  const rows = db.prepare(`
+    SELECT
+      q.*,
+      g.name AS group_name,
+      g.group_type AS group_type,
+      g.exam_year AS exam_year,
+      g.exam_period AS exam_period
+    FROM questions q
+    LEFT JOIN question_groups g ON q.group_id = g.id
+    WHERE q.question_set_id = ?
+    ORDER BY q.question_set_order ASC, q.created_at ASC
+  `).all(questionSetId) as Record<string, unknown>[]
   return rows.map(parseQuestion)
+}
+
+export function expandQuestionSets(db: Database.Database, questions: Question[]): Question[] {
+  const result: Question[] = []
+  const seen = new Set<string>()
+  const expandedSets = new Set<string>()
+  for (const question of questions) {
+    const setId = question.question_set_id
+    if (!setId) {
+      if (!seen.has(question.id)) {
+        result.push(question)
+        seen.add(question.id)
+      }
+      continue
+    }
+    if (expandedSets.has(setId)) continue
+    expandedSets.add(setId)
+    for (const member of getQuestionSetMembers(db, setId)) {
+      if (seen.has(member.id)) continue
+      result.push(member)
+      seen.add(member.id)
+    }
+  }
+  return result
 }
 
 export function insertQuestion(db: Database.Database, input: QuestionInput): Question {
   const id = randomUUID()
   const now = new Date().toISOString()
+  const prepared = attachQuestionSets(db, [input])[0]
   db.prepare(`
     INSERT INTO questions
-      (id, group_id, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
-    input.group_id ?? null,
-    input.type,
-    input.content,
-    input.options ? JSON.stringify(input.options) : null,
-    input.answer ?? null,
-    input.explanation ?? null,
-    JSON.stringify(input.knowledge_tags ?? []),
-    input.difficulty ?? 3,
-    input.source_type ?? 'manual',
-    input.source_url ?? null,
+    prepared.group_id ?? null,
+    prepared.question_set_id ?? null,
+    prepared.question_set_order ?? 0,
+    prepared.type,
+    prepared.content,
+    prepared.options ? JSON.stringify(prepared.options) : null,
+    prepared.answer ?? null,
+    prepared.explanation ?? null,
+    JSON.stringify(prepared.knowledge_tags ?? []),
+    prepared.difficulty ?? 3,
+    prepared.source_type ?? 'manual',
+    prepared.source_url ?? null,
     now
   )
   return db.prepare(`
@@ -164,14 +327,16 @@ export function insertQuestion(db: Database.Database, input: QuestionInput): Que
 export function batchInsertQuestions(db: Database.Database, inputs: QuestionInput[]): number {
   const stmt = db.prepare(`
     INSERT INTO questions
-      (id, group_id, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insert = db.transaction((items: QuestionInput[]) => {
-    for (const input of items) {
+    for (const input of attachQuestionSets(db, items)) {
       stmt.run(
         randomUUID(),
         input.group_id ?? null,
+        input.question_set_id ?? null,
+        input.question_set_order ?? 0,
         input.type,
         input.content,
         input.options ? JSON.stringify(input.options) : null,
@@ -193,6 +358,8 @@ export function updateQuestion(db: Database.Database, id: string, changes: Parti
   const fields: string[] = []
   const vals: unknown[] = []
   if (changes.group_id !== undefined) { fields.push('group_id = ?'); vals.push(changes.group_id) }
+  if (changes.question_set_id !== undefined) { fields.push('question_set_id = ?'); vals.push(changes.question_set_id) }
+  if (changes.question_set_order !== undefined) { fields.push('question_set_order = ?'); vals.push(changes.question_set_order ?? 0) }
   if (changes.type !== undefined) { fields.push('type = ?'); vals.push(changes.type) }
   if (changes.content !== undefined) { fields.push('content = ?'); vals.push(changes.content) }
   if (changes.options !== undefined) { fields.push('options = ?'); vals.push(changes.options ? JSON.stringify(changes.options) : null) }

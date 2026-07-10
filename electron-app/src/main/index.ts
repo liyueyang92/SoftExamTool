@@ -27,7 +27,7 @@ import {
 } from './db/documents'
 import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
-  createCrawlerRun, updateCrawlerRun, listCrawlerRuns, addCrawledCount,
+  createCrawlerRun, updateCrawlerRun, listCrawlerRuns, deleteCrawlerRun, addCrawledCount,
   saveCrawlerReviewItems, listCrawlerReviewItems, updateCrawlerReviewStatus,
   getCrawlerReviewItemsByIds,
   upsertCrawlerSiteSession, listCrawlerSiteSessions, getCrawlerSiteSession,
@@ -489,11 +489,126 @@ function decryptCrawlerState(encrypted: Buffer): unknown {
   return JSON.parse(safeStorage.decryptString(Buffer.from(encrypted)))
 }
 
+type CrawlerVisualRule = {
+  start_url?: string
+  item_selector?: string
+  question_selector?: string
+  options_selector?: string
+  answer_selector?: string
+  explanation_selector?: string
+  next_selector?: string
+}
+
+const NEXT_CLICK_DEFAULT_MAX_PAGES = 100
+const LEGACY_NEXT_CLICK_DEFAULT_MAX_PAGES = 60
+
+function cleanCrawlerVisualRule(value: unknown): CrawlerVisualRule | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = value as Record<string, unknown>
+  const result: CrawlerVisualRule = {}
+  for (const key of [
+    'start_url',
+    'item_selector',
+    'question_selector',
+    'options_selector',
+    'answer_selector',
+    'explanation_selector',
+    'next_selector',
+  ] as const) {
+    const raw = source[key]
+    if (typeof raw === 'string' && raw.trim()) {
+      const selector = key === 'start_url' ? raw.trim() : sanitizeCrawlerCaptureSelector(raw.trim())
+      if (selector) result[key] = selector
+    }
+  }
+  return Object.keys(result).length ? result : null
+}
+
+function sanitizeCrawlerCaptureSelector(selector: string): string {
+  return selector
+    .replace(/\.crawler-capture-picked(?:-[A-Za-z0-9_-]+)?/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function applyCrawlerVisualRule(db: Database.Database, rule: CrawlerRule, visualRule: CrawlerVisualRule | null): CrawlerRule | null {
+  if (!visualRule) return null
+  const ruleJson = parseCrawlerRuleJson(rule)
+  const list = getNestedRecord(ruleJson, ['list'])
+  const fields = getNestedRecord(list, ['fields'])
+  const pagination = getNestedRecord(ruleJson, ['pagination'])
+  const browser = getNestedRecord(ruleJson, ['browser'])
+  const request = getNestedRecord(ruleJson, ['request'])
+
+  const urlTemplate = visualRule.start_url || firstString(list.url_template, rule.url_template)
+  const itemSelector = visualRule.item_selector || firstString(list.item_selector, rule.item_selector) || 'body'
+  const nextSelector = visualRule.next_selector || firstString(list.next_selector, pagination.next_selector)
+  const paginationType = firstString(pagination.type)
+  const hasPaginationMaxPages = pagination.max_pages !== undefined && pagination.max_pages !== null
+  const configuredMaxPages = toPositiveInt(
+    pagination.max_pages,
+    hasPaginationMaxPages ? rule.max_pages : NEXT_CLICK_DEFAULT_MAX_PAGES,
+  )
+  const maxPages = nextSelector
+    ? (paginationType === 'next_click' && hasPaginationMaxPages && configuredMaxPages !== LEGACY_NEXT_CLICK_DEFAULT_MAX_PAGES
+      ? configuredMaxPages
+      : NEXT_CLICK_DEFAULT_MAX_PAGES)
+    : configuredMaxPages
+  const delayMs = toPositiveInt(request.delay_ms, rule.delay_ms || 1200)
+
+  ruleJson.list = {
+    ...list,
+    url_template: urlTemplate,
+    item_selector: itemSelector,
+    ...(nextSelector ? { next_selector: nextSelector } : {}),
+    fields: {
+      ...fields,
+      ...(visualRule.question_selector ? { content: visualRule.question_selector } : {}),
+      ...(visualRule.options_selector ? { options: visualRule.options_selector } : {}),
+      ...(visualRule.answer_selector ? { answer: visualRule.answer_selector } : {}),
+      ...(visualRule.explanation_selector ? { explanation: visualRule.explanation_selector } : {}),
+    },
+  }
+  ruleJson.pagination = {
+    ...pagination,
+    type: nextSelector ? 'next_click' : (pagination.type || 'current_page'),
+    max_pages: maxPages,
+    ...(nextSelector ? { next_selector: nextSelector } : {}),
+  }
+  ruleJson.browser = {
+    ...browser,
+    wait_until: firstString(browser.wait_until) || 'networkidle',
+    wait_selector: itemSelector,
+    timeout_ms: toPositiveInt(browser.timeout_ms, 30000),
+  }
+  ruleJson.request = {
+    ...request,
+    delay_ms: delayMs,
+  }
+
+  return upsertCrawlerRule(db, {
+    ...rule,
+    adapter: 'browser_rule',
+    url_template: urlTemplate,
+    item_selector: itemSelector,
+    question_field: visualRule.question_selector || rule.question_field,
+    options_field: visualRule.options_selector || rule.options_field,
+    answer_field: visualRule.answer_selector || rule.answer_field,
+    expl_field: visualRule.explanation_selector || rule.expl_field,
+    max_pages: maxPages,
+    delay_ms: delayMs,
+    rule_json: JSON.stringify(ruleJson, null, 2),
+    auth_required: 1,
+    auth_mode: 'manual_session',
+  })
+}
+
 async function collectCrawlerWebState(win: BrowserWindow): Promise<{
   cookies: Electron.Cookie[]
   localStorage: Record<string, string>
   origin: string
   url: string
+  visualRule: CrawlerVisualRule | null
 }> {
   const cookies = await win.webContents.session.cookies.get({})
   const url = win.webContents.getURL()
@@ -513,7 +628,19 @@ async function collectCrawlerWebState(win: BrowserWindow): Promise<{
       return data;
     })()
   `, true) as Record<string, string>
-  return { cookies, localStorage, origin, url }
+  let visualRule: CrawlerVisualRule | null = null
+  try {
+    const captured = await win.webContents.executeJavaScript(`
+      (() => {
+        const value = window.__crawlerVisualRule;
+        return value && typeof value === 'object' ? { ...value } : null;
+      })()
+    `, true)
+    visualRule = cleanCrawlerVisualRule(captured)
+  } catch {
+    visualRule = null
+  }
+  return { cookies, localStorage, origin, url, visualRule }
 }
 
 function resolveCrawlerLoginUrl(rule: CrawlerRule): string {
@@ -528,6 +655,122 @@ function resolveCrawlerLoginUrl(rule: CrawlerRule): string {
     loginCfg.login_url,
     successCfg.login_url,
   )
+}
+
+function resolveCrawlerVisualConfigUrl(rule: CrawlerRule, state: unknown): string {
+  const ruleJson = parseCrawlerRuleJson(rule)
+  const listCfg = getNestedRecord(ruleJson, ['list'])
+  const typed = state && typeof state === 'object' && !Array.isArray(state)
+    ? state as { url?: unknown }
+    : {}
+  const configuredUrl = firstString(listCfg.url_template, rule.url_template).replace('{page}', '1')
+  if (configuredUrl && !configuredUrl.includes('example.com')) return configuredUrl
+  return firstString(typed.url, resolveCrawlerLoginUrl(rule), configuredUrl)
+}
+
+function crawlerCookieUrl(cookie: Electron.Cookie, fallbackUrl: string): string {
+  const protocol = cookie.secure ? 'https' : 'http'
+  const domain = cookie.domain ? cookie.domain.replace(/^\./, '') : ''
+  if (domain) return `${protocol}://${domain}${cookie.path || '/'}`
+  try {
+    const parsed = new URL(fallbackUrl)
+    return `${parsed.protocol}//${parsed.host}${cookie.path || '/'}`
+  } catch {
+    return fallbackUrl
+  }
+}
+
+async function restoreCrawlerSessionToWindow(win: BrowserWindow, state: unknown, targetUrl: string): Promise<boolean> {
+  const typed = state && typeof state === 'object' && !Array.isArray(state)
+    ? state as { cookies?: Electron.Cookie[]; localStorage?: Record<string, string> }
+    : {}
+  for (const cookie of typed.cookies ?? []) {
+    if (!cookie.name || cookie.value === undefined) continue
+    const details: Electron.CookiesSetDetails = {
+      url: crawlerCookieUrl(cookie, targetUrl),
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path || '/',
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+    }
+    if (cookie.domain) details.domain = cookie.domain
+    if (cookie.expirationDate) details.expirationDate = cookie.expirationDate
+    if (cookie.sameSite && cookie.sameSite !== 'unspecified') details.sameSite = cookie.sameSite
+    try {
+      await win.webContents.session.cookies.set(details)
+    } catch (e) {
+      console.warn('[Crawler] Failed to restore cookie:', cookie.name, e)
+    }
+  }
+  return Boolean(typed.localStorage && Object.keys(typed.localStorage).length)
+}
+
+async function restoreCrawlerLocalStorage(win: BrowserWindow, state: unknown): Promise<void> {
+  const typed = state && typeof state === 'object' && !Array.isArray(state)
+    ? state as { localStorage?: Record<string, string> }
+    : {}
+  const localStorage = typed.localStorage ?? {}
+  if (!Object.keys(localStorage).length) return
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const data = ${JSON.stringify(localStorage)};
+      for (const [key, value] of Object.entries(data)) {
+        localStorage.setItem(key, String(value));
+      }
+    })()
+  `, true)
+}
+
+async function injectCrawlerAuthControls(win: BrowserWindow, statusText: string): Promise<void> {
+  await win.webContents.insertCSS(`
+    #crawler-auth-finish {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 2147483647;
+      border: 0;
+      border-radius: 6px;
+      background: #1d4ed8;
+      color: #fff;
+      padding: 10px 14px;
+      font: 600 14px system-ui, sans-serif;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, .28);
+      cursor: pointer;
+    }
+    #crawler-auth-status {
+      position: fixed;
+      right: 18px;
+      bottom: 66px;
+      z-index: 2147483647;
+      max-width: min(360px, calc(100vw - 36px));
+      border-radius: 6px;
+      background: rgba(15, 23, 42, .9);
+      color: #fff;
+      padding: 9px 12px;
+      font: 500 13px system-ui, sans-serif;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, .22);
+    }
+  `)
+  await win.webContents.executeJavaScript(`
+    (() => {
+      if (!document.getElementById('crawler-auth-status')) {
+        const status = document.createElement('div');
+        status.id = 'crawler-auth-status';
+        status.textContent = ${JSON.stringify(statusText)};
+        document.body.appendChild(status);
+      }
+      if (!document.getElementById('crawler-auth-finish')) {
+        const btn = document.createElement('button');
+        btn.id = 'crawler-auth-finish';
+        btn.textContent = '完成授权';
+        btn.addEventListener('click', () => {
+          window.location.href = 'crawler-auth://finish';
+        });
+        document.body.appendChild(btn);
+      }
+    })()
+  `, true)
 }
 
 async function openCrawlerAuthWindow(args: {
@@ -622,6 +865,13 @@ async function openCrawlerAuthWindow(args: {
     })
     authWindow.webContents.on('did-finish-load', async () => {
       try {
+        await injectCrawlerAuthControls(authWindow, '登录完成后点击“完成授权”。')
+      } catch {
+        // Page CSP may block injection; auto-capture can still work.
+      }
+      setTimeout(() => void tryAutoCapture(), 250)
+      return
+      try {
         await authWindow.webContents.insertCSS(`
           #crawler-auth-finish {
             position: fixed;
@@ -650,23 +900,324 @@ async function openCrawlerAuthWindow(args: {
             font: 500 13px system-ui, sans-serif;
             box-shadow: 0 10px 30px rgba(15, 23, 42, .22);
           }
+          #crawler-capture-panel {
+            position: fixed;
+            right: 18px;
+            top: 18px;
+            z-index: 2147483647;
+            width: 258px;
+            border: 1px solid rgba(148, 163, 184, .36);
+            border-radius: 8px;
+            background: rgba(15, 23, 42, .94);
+            color: #fff;
+            padding: 10px;
+            font: 13px system-ui, sans-serif;
+            box-shadow: 0 18px 44px rgba(15, 23, 42, .32);
+          }
+          #crawler-capture-panel strong {
+            display: block;
+            margin-bottom: 7px;
+            font-size: 13px;
+          }
+          #crawler-capture-panel .crawler-capture-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+          }
+          #crawler-capture-panel button {
+            border: 1px solid rgba(148, 163, 184, .38);
+            border-radius: 6px;
+            min-height: 30px;
+            background: rgba(30, 41, 59, .88);
+            color: #fff;
+            cursor: pointer;
+            font: 600 12px system-ui, sans-serif;
+          }
+          #crawler-capture-panel button:hover {
+            background: rgba(37, 99, 235, .82);
+          }
+          #crawler-capture-panel button[data-target] {
+            border-color: color-mix(in srgb, var(--crawler-field-color, #94a3b8) 58%, rgba(148, 163, 184, .25));
+            color: color-mix(in srgb, var(--crawler-field-color, #fff) 72%, #fff);
+          }
+          #crawler-capture-panel button[data-picked="true"] {
+            border-color: var(--crawler-field-color, #34d399);
+            background: linear-gradient(180deg, var(--crawler-field-bg, rgba(30, 41, 59, .88)), rgba(15, 23, 42, .9));
+            color: #fff;
+          }
+          #crawler-capture-panel button[data-active="true"] {
+            border-color: var(--crawler-field-color, #60a5fa);
+            background: var(--crawler-field-active-bg, rgba(37, 99, 235, .9));
+            color: #fff;
+          }
+          #crawler-capture-panel .crawler-capture-start,
+          #crawler-capture-panel .crawler-capture-finish {
+            grid-column: 1 / -1;
+          }
+          #crawler-capture-panel .crawler-capture-cancel {
+            border-color: rgba(251, 191, 36, .55);
+            color: #fde68a;
+          }
+          #crawler-capture-panel .crawler-capture-clear {
+            border-color: rgba(248, 113, 113, .55);
+            color: #fecaca;
+          }
+          #crawler-capture-help {
+            margin-top: 7px;
+            color: #cbd5e1;
+            font: 12px system-ui, sans-serif;
+            line-height: 1.45;
+          }
+          .crawler-capture-picked {
+            outline: 3px solid var(--crawler-capture-color, #34d399) !important;
+            outline-offset: 2px !important;
+            box-shadow: 0 0 0 6px var(--crawler-capture-glow, rgba(52, 211, 153, .2)) !important;
+          }
         `)
         await authWindow.webContents.executeJavaScript(`
           (() => {
+            const fieldLabels = {
+              item_selector: '题目容器',
+              question_selector: '题干',
+              options_selector: '选项',
+              answer_selector: '答案',
+              explanation_selector: '解析',
+              next_selector: '下一题'
+            };
+            const fieldStyles = {
+              item_selector: { color: '#38bdf8', bg: 'rgba(14, 116, 144, .36)', activeBg: 'rgba(8, 145, 178, .88)', glow: 'rgba(56, 189, 248, .22)' },
+              question_selector: { color: '#f59e0b', bg: 'rgba(146, 64, 14, .36)', activeBg: 'rgba(217, 119, 6, .88)', glow: 'rgba(245, 158, 11, .24)' },
+              options_selector: { color: '#22c55e', bg: 'rgba(21, 128, 61, .34)', activeBg: 'rgba(22, 163, 74, .88)', glow: 'rgba(34, 197, 94, .22)' },
+              answer_selector: { color: '#ef4444', bg: 'rgba(153, 27, 27, .34)', activeBg: 'rgba(220, 38, 38, .88)', glow: 'rgba(239, 68, 68, .22)' },
+              explanation_selector: { color: '#a855f7', bg: 'rgba(107, 33, 168, .34)', activeBg: 'rgba(147, 51, 234, .88)', glow: 'rgba(168, 85, 247, .22)' },
+              next_selector: { color: '#60a5fa', bg: 'rgba(30, 64, 175, .34)', activeBg: 'rgba(37, 99, 235, .88)', glow: 'rgba(96, 165, 250, .22)' }
+            };
+            const pickedClasses = Object.keys(fieldLabels).map((key) => 'crawler-capture-picked-' + key);
+            window.__crawlerVisualRule = window.__crawlerVisualRule || {};
+            window.__crawlerPickMode = null;
+            const escapeIdent = (value) => {
+              if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+              return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\\\$&');
+            };
+            const selectorFor = (element, mode) => {
+              if (!element || element.nodeType !== 1) return '';
+              const exactMode = mode === 'next_selector' || mode === 'answer_selector';
+              const attrs = ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label', 'title'];
+              const stableClasses = (el) => Array.from(el.classList || [])
+                .filter((name) => name && !/^(css-|sc-|jsx-|crawler-capture-picked|active$|selected$|disabled$|hover$|focus$)/.test(name))
+                .slice(0, 3);
+              const count = (selector) => {
+                try { return document.querySelectorAll(selector).length; } catch { return 0; }
+              };
+              const positionalSelector = (start) => {
+                const parts = [];
+                let current = start;
+                while (current && current.nodeType === 1 && parts.length < 5) {
+                  let part = current.tagName.toLowerCase();
+                  const classes = stableClasses(current);
+                  if (classes.length) part += classes.map((name) => '.' + escapeIdent(name)).join('');
+                  const parent = current.parentElement;
+                  if (parent) {
+                    const sameTag = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+                    if (sameTag.length > 1) part += ':nth-of-type(' + (sameTag.indexOf(current) + 1) + ')';
+                  }
+                  parts.unshift(part);
+                  if (parent && parent.id) {
+                    parts.unshift('#' + escapeIdent(parent.id));
+                    break;
+                  }
+                  current = parent;
+                }
+                return parts.join(' > ');
+              };
+              const candidates = [];
+              const add = (selector, quality, depth) => {
+                const matches = selector ? count(selector) : 0;
+                if (matches) candidates.push({ selector, quality, depth, matches });
+              };
+              let current = element;
+              let depth = 0;
+              while (current && current.nodeType === 1 && depth < 5 && current !== document.body && current !== document.documentElement) {
+                const tag = current.tagName.toLowerCase();
+                if (current.id) add('#' + escapeIdent(current.id), 0, depth);
+                for (const attr of attrs) {
+                  const value = current.getAttribute(attr);
+                  if (value) add(tag + '[' + attr + '=' + JSON.stringify(value) + ']', 1, depth);
+                }
+                const classes = stableClasses(current);
+                if (classes.length) {
+                  const classSelector = classes.map((name) => '.' + escapeIdent(name)).join('');
+                  add(classSelector, 2, depth);
+                  add(tag + classSelector, 2, depth);
+                  add('.' + escapeIdent(classes[0]), 3, depth);
+                  add(tag + '.' + escapeIdent(classes[0]), 3, depth);
+                  if (current.parentElement && current.parentElement.id) {
+                    add('#' + escapeIdent(current.parentElement.id) + ' ' + tag + classSelector, 4, depth);
+                  }
+                }
+                current = current.parentElement;
+                depth += 1;
+              }
+              if (exactMode) add(positionalSelector(element), 6, 0);
+              if (!candidates.length) {
+                return positionalSelector(element);
+              }
+              candidates.sort((a, b) => exactMode
+                ? (a.matches === 1 ? 0 : 1) - (b.matches === 1 ? 0 : 1) || a.depth - b.depth || a.quality - b.quality || a.selector.length - b.selector.length
+                : a.quality - b.quality || (a.matches === 1 ? 0 : 1) - (b.matches === 1 ? 0 : 1) || a.depth - b.depth || a.selector.length - b.selector.length);
+              return candidates[0].selector;
+            };
+            const setHelp = (text) => {
+              const help = document.getElementById('crawler-capture-help');
+              if (help) help.textContent = text;
+            };
+            const unmarkSelector = (selector) => {
+              if (!selector) return;
+              try {
+                const element = document.querySelector(selector);
+                if (element) {
+                  element.classList.remove('crawler-capture-picked', ...pickedClasses);
+                  element.style.removeProperty('--crawler-capture-color');
+                  element.style.removeProperty('--crawler-capture-glow');
+                }
+              } catch {}
+            };
+            const refreshCapturePanel = () => {
+              document.querySelectorAll('#crawler-capture-panel button[data-target]').forEach((button) => {
+                const target = button.getAttribute('data-target');
+                const style = fieldStyles[target] || {};
+                if (style.color) button.style.setProperty('--crawler-field-color', style.color);
+                if (style.bg) button.style.setProperty('--crawler-field-bg', style.bg);
+                if (style.activeBg) button.style.setProperty('--crawler-field-active-bg', style.activeBg);
+                const picked = Boolean(target && window.__crawlerVisualRule[target]);
+                const active = Boolean(target && window.__crawlerPickMode === target);
+                if (picked) button.setAttribute('data-picked', 'true');
+                else button.removeAttribute('data-picked');
+                if (active) button.setAttribute('data-active', 'true');
+                else button.removeAttribute('data-active');
+              });
+            };
+            const markPicked = (target, selector) => {
+              try {
+                const element = document.querySelector(selector);
+                const style = fieldStyles[target] || {};
+                if (element) {
+                  element.classList.remove(...pickedClasses);
+                  element.classList.add('crawler-capture-picked', 'crawler-capture-picked-' + target);
+                  if (style.color) element.style.setProperty('--crawler-capture-color', style.color);
+                  if (style.glow) element.style.setProperty('--crawler-capture-glow', style.glow);
+                }
+              } catch {}
+              refreshCapturePanel();
+            };
+            if (!window.__crawlerCaptureListenerInstalled) {
+              window.__crawlerCaptureListenerInstalled = true;
+              document.addEventListener('click', (event) => {
+                const panel = document.getElementById('crawler-capture-panel');
+                if (panel && panel.contains(event.target)) return;
+                const mode = window.__crawlerPickMode;
+                if (!mode) return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+                const selector = selectorFor(event.target, mode);
+                if (!selector) return;
+                unmarkSelector(window.__crawlerVisualRule[mode]);
+                window.__crawlerVisualRule[mode] = selector;
+                window.__crawlerPickMode = null;
+                window.__crawlerLastTarget = mode;
+                markPicked(mode, selector);
+                setHelp(fieldLabels[mode] + ' 已选择：' + selector + '。点同一字段可重新选择，或清除当前字段。');
+              }, true);
+            }
             if (!document.getElementById('crawler-auth-status')) {
               const status = document.createElement('div');
               status.id = 'crawler-auth-status';
-              status.textContent = 'Waiting for login success...';
+              status.textContent = '登录后可直接在页面中选择采集字段。';
               document.body.appendChild(status);
             }
-            if (document.getElementById('crawler-auth-finish')) return;
-            const btn = document.createElement('button');
-            btn.id = 'crawler-auth-finish';
-            btn.textContent = '完成授权';
-            btn.addEventListener('click', () => {
-              window.location.href = 'crawler-auth://finish';
-            });
-            document.body.appendChild(btn);
+            if (!document.getElementById('crawler-auth-finish')) {
+              const btn = document.createElement('button');
+              btn.id = 'crawler-auth-finish';
+              btn.textContent = '完成授权';
+              btn.addEventListener('click', () => {
+                window.location.href = 'crawler-auth://finish';
+              });
+              document.body.appendChild(btn);
+            }
+            return;
+            if (document.getElementById('crawler-capture-panel')) return;
+            const panel = document.createElement('div');
+            panel.id = 'crawler-capture-panel';
+            panel.innerHTML = [
+              '<strong>动态页采集配置</strong>',
+              '<div class="crawler-capture-grid">',
+              '<button class="crawler-capture-start" data-action="start">设当前页为题库入口</button>',
+              '<button data-target="item_selector">题目容器</button>',
+              '<button data-target="question_selector">题干</button>',
+              '<button data-target="options_selector">选项</button>',
+              '<button data-target="answer_selector">答案</button>',
+              '<button data-target="explanation_selector">解析</button>',
+              '<button data-target="next_selector">下一题</button>',
+              '<button class="crawler-capture-cancel" data-action="cancel">取消当前选择</button>',
+              '<button class="crawler-capture-clear" data-action="clear">清除当前字段</button>',
+              '<button class="crawler-capture-finish" data-action="finish">保存规则并完成授权</button>',
+              '</div>',
+              '<div id="crawler-capture-help">先进入题库页，再点按钮选择页面元素。</div>'
+            ].join('');
+            panel.addEventListener('click', (event) => {
+              const button = event.target.closest('button');
+              if (!button) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const action = button.getAttribute('data-action');
+              const target = button.getAttribute('data-target');
+              if (action === 'start') {
+                window.__crawlerVisualRule.start_url = window.location.href;
+                button.setAttribute('data-picked', 'true');
+                setHelp('题库入口已设为当前页面。');
+                return;
+              }
+              if (action === 'cancel') {
+                window.__crawlerPickMode = null;
+                refreshCapturePanel();
+                setHelp('已取消当前选择。');
+                return;
+              }
+              if (action === 'clear') {
+                const key = window.__crawlerPickMode || window.__crawlerLastTarget;
+                if (!key) {
+                  setHelp('请先点一个字段，或先完成一次字段选择。');
+                  return;
+                }
+                unmarkSelector(window.__crawlerVisualRule[key]);
+                delete window.__crawlerVisualRule[key];
+                window.__crawlerPickMode = null;
+                window.__crawlerLastTarget = key;
+                refreshCapturePanel();
+                setHelp(fieldLabels[key] + ' 已清除，可重新选择。');
+                return;
+              }
+              if (action === 'finish') {
+                window.__crawlerVisualRule.start_url = window.__crawlerVisualRule.start_url || window.location.href;
+                window.location.href = 'crawler-auth://finish';
+                return;
+              }
+              if (target) {
+                if (window.__crawlerPickMode === target) {
+                  window.__crawlerPickMode = null;
+                  refreshCapturePanel();
+                  setHelp('已取消“' + fieldLabels[target] + '”选择。');
+                  return;
+                }
+                window.__crawlerPickMode = target;
+                window.__crawlerLastTarget = target;
+                refreshCapturePanel();
+                setHelp('请在页面中点击“' + fieldLabels[target] + '”对应元素。已选过也会被新点击覆盖。');
+              }
+            }, true);
+            document.body.appendChild(panel);
+            refreshCapturePanel();
           })()
         `, true)
       } catch {
@@ -699,6 +1250,476 @@ async function openCrawlerAuthWindow(args: {
   })
 
   await authWindow.loadURL(loginUrl)
+  return finishPromise
+}
+
+async function injectCrawlerVisualConfigControls(win: BrowserWindow): Promise<void> {
+  await win.webContents.insertCSS(`
+    #crawler-capture-panel {
+      position: fixed;
+      right: 18px;
+      top: 18px;
+      z-index: 2147483647;
+      width: 258px;
+      border: 1px solid rgba(148, 163, 184, .36);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, .94);
+      color: #fff;
+      padding: 10px;
+      font: 13px system-ui, sans-serif;
+      box-shadow: 0 18px 44px rgba(15, 23, 42, .32);
+    }
+    #crawler-capture-panel.dragging {
+      user-select: none;
+      cursor: grabbing;
+    }
+    #crawler-capture-panel .crawler-capture-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: -2px -2px 8px;
+      padding: 3px 2px 7px;
+      border-bottom: 1px solid rgba(148, 163, 184, .18);
+      cursor: grab;
+    }
+    #crawler-capture-panel.dragging .crawler-capture-title {
+      cursor: grabbing;
+    }
+    #crawler-capture-panel strong { display: block; font-size: 13px; }
+    #crawler-capture-panel .crawler-capture-drag-hint {
+      color: #94a3b8;
+      font: 11px system-ui, sans-serif;
+      white-space: nowrap;
+    }
+    #crawler-capture-panel .crawler-capture-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    #crawler-capture-panel button {
+      border: 1px solid rgba(148, 163, 184, .38);
+      border-radius: 6px;
+      min-height: 30px;
+      background: rgba(30, 41, 59, .88);
+      color: #fff;
+      cursor: pointer;
+      font: 600 12px system-ui, sans-serif;
+    }
+    #crawler-capture-panel button:hover { background: rgba(37, 99, 235, .82); }
+    #crawler-capture-panel button[data-target] {
+      border-color: color-mix(in srgb, var(--crawler-field-color, #94a3b8) 58%, rgba(148, 163, 184, .25));
+      color: color-mix(in srgb, var(--crawler-field-color, #fff) 72%, #fff);
+    }
+    #crawler-capture-panel button[data-picked="true"] {
+      border-color: var(--crawler-field-color, #34d399);
+      background: linear-gradient(180deg, var(--crawler-field-bg, rgba(30, 41, 59, .88)), rgba(15, 23, 42, .9));
+      color: #fff;
+    }
+    #crawler-capture-panel button[data-active="true"] {
+      border-color: var(--crawler-field-color, #60a5fa);
+      background: var(--crawler-field-active-bg, rgba(37, 99, 235, .9));
+      color: #fff;
+    }
+    #crawler-capture-panel .crawler-capture-start,
+    #crawler-capture-panel .crawler-capture-finish { grid-column: 1 / -1; }
+    #crawler-capture-panel .crawler-capture-cancel { border-color: rgba(251, 191, 36, .55); color: #fde68a; }
+    #crawler-capture-panel .crawler-capture-clear { border-color: rgba(248, 113, 113, .55); color: #fecaca; }
+    #crawler-capture-help {
+      margin-top: 7px;
+      color: #cbd5e1;
+      font: 12px system-ui, sans-serif;
+      line-height: 1.45;
+    }
+    .crawler-capture-picked {
+      outline: 3px solid var(--crawler-capture-color, #34d399) !important;
+      outline-offset: 2px !important;
+      box-shadow: 0 0 0 6px var(--crawler-capture-glow, rgba(52, 211, 153, .2)) !important;
+    }
+  `)
+  await win.webContents.executeJavaScript(`
+    (() => {
+      const fieldLabels = {
+        item_selector: '题目容器',
+        question_selector: '题干',
+        options_selector: '选项',
+        answer_selector: '答案',
+        explanation_selector: '解析',
+        next_selector: '下一题'
+      };
+      const fieldStyles = {
+        item_selector: { color: '#38bdf8', bg: 'rgba(14, 116, 144, .36)', activeBg: 'rgba(8, 145, 178, .88)', glow: 'rgba(56, 189, 248, .22)' },
+        question_selector: { color: '#f59e0b', bg: 'rgba(146, 64, 14, .36)', activeBg: 'rgba(217, 119, 6, .88)', glow: 'rgba(245, 158, 11, .24)' },
+        options_selector: { color: '#22c55e', bg: 'rgba(21, 128, 61, .34)', activeBg: 'rgba(22, 163, 74, .88)', glow: 'rgba(34, 197, 94, .22)' },
+        answer_selector: { color: '#ef4444', bg: 'rgba(153, 27, 27, .34)', activeBg: 'rgba(220, 38, 38, .88)', glow: 'rgba(239, 68, 68, .22)' },
+        explanation_selector: { color: '#a855f7', bg: 'rgba(107, 33, 168, .34)', activeBg: 'rgba(147, 51, 234, .88)', glow: 'rgba(168, 85, 247, .22)' },
+        next_selector: { color: '#60a5fa', bg: 'rgba(30, 64, 175, .34)', activeBg: 'rgba(37, 99, 235, .88)', glow: 'rgba(96, 165, 250, .22)' }
+      };
+      const pickedClasses = Object.keys(fieldLabels).map((key) => 'crawler-capture-picked-' + key);
+      window.__crawlerVisualRule = window.__crawlerVisualRule || {};
+      window.__crawlerPickMode = null;
+      const escapeIdent = (value) => {
+        if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+        return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\\\$&');
+      };
+      const selectorFor = (element, mode) => {
+        if (!element || element.nodeType !== 1) return '';
+        const exactMode = mode === 'next_selector' || mode === 'answer_selector';
+        const attrs = ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label', 'title'];
+        const stableClasses = (el) => Array.from(el.classList || [])
+          .filter((name) => name && !/^(css-|sc-|jsx-|crawler-capture-picked|active$|selected$|disabled$|hover$|focus$)/.test(name))
+          .slice(0, 3);
+        const count = (selector) => {
+          try { return document.querySelectorAll(selector).length; } catch { return 0; }
+        };
+        const positionalSelector = (start) => {
+          const parts = [];
+          let current = start;
+          while (current && current.nodeType === 1 && parts.length < 5) {
+            let part = current.tagName.toLowerCase();
+            const classes = stableClasses(current);
+            if (classes.length) part += classes.map((name) => '.' + escapeIdent(name)).join('');
+            const parent = current.parentElement;
+            if (parent) {
+              const sameTag = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+              if (sameTag.length > 1) part += ':nth-of-type(' + (sameTag.indexOf(current) + 1) + ')';
+            }
+            parts.unshift(part);
+            if (parent && parent.id) {
+              parts.unshift('#' + escapeIdent(parent.id));
+              break;
+            }
+            current = parent;
+          }
+          return parts.join(' > ');
+        };
+        const candidates = [];
+        const add = (selector, quality, depth) => {
+          const matches = selector ? count(selector) : 0;
+          if (matches) candidates.push({ selector, quality, depth, matches });
+        };
+        let current = element;
+        let depth = 0;
+        while (current && current.nodeType === 1 && depth < 5 && current !== document.body && current !== document.documentElement) {
+          const tag = current.tagName.toLowerCase();
+          if (current.id) add('#' + escapeIdent(current.id), 0, depth);
+          for (const attr of attrs) {
+            const value = current.getAttribute(attr);
+            if (value) add(tag + '[' + attr + '=' + JSON.stringify(value) + ']', 1, depth);
+          }
+          const classes = stableClasses(current);
+          if (classes.length) {
+            const classSelector = classes.map((name) => '.' + escapeIdent(name)).join('');
+            add(classSelector, 2, depth);
+            add(tag + classSelector, 2, depth);
+            add('.' + escapeIdent(classes[0]), 3, depth);
+            add(tag + '.' + escapeIdent(classes[0]), 3, depth);
+            if (current.parentElement && current.parentElement.id) {
+              add('#' + escapeIdent(current.parentElement.id) + ' ' + tag + classSelector, 4, depth);
+            }
+          }
+          current = current.parentElement;
+          depth += 1;
+        }
+        if (exactMode) add(positionalSelector(element), 6, 0);
+        if (!candidates.length) {
+          return positionalSelector(element);
+        }
+        candidates.sort((a, b) => exactMode
+          ? (a.matches === 1 ? 0 : 1) - (b.matches === 1 ? 0 : 1) || a.depth - b.depth || a.quality - b.quality || a.selector.length - b.selector.length
+          : a.quality - b.quality || (a.matches === 1 ? 0 : 1) - (b.matches === 1 ? 0 : 1) || a.depth - b.depth || a.selector.length - b.selector.length);
+        return candidates[0].selector;
+      };
+      const setHelp = (text) => {
+        const help = document.getElementById('crawler-capture-help');
+        if (help) help.textContent = text;
+      };
+      const unmarkSelector = (selector) => {
+        if (!selector) return;
+        try {
+          const element = document.querySelector(selector);
+          if (element) {
+            element.classList.remove('crawler-capture-picked', ...pickedClasses);
+            element.style.removeProperty('--crawler-capture-color');
+            element.style.removeProperty('--crawler-capture-glow');
+          }
+        } catch {}
+      };
+      const refreshCapturePanel = () => {
+        document.querySelectorAll('#crawler-capture-panel button[data-target]').forEach((button) => {
+          const target = button.getAttribute('data-target');
+          const style = fieldStyles[target] || {};
+          if (style.color) button.style.setProperty('--crawler-field-color', style.color);
+          if (style.bg) button.style.setProperty('--crawler-field-bg', style.bg);
+          if (style.activeBg) button.style.setProperty('--crawler-field-active-bg', style.activeBg);
+          const picked = Boolean(target && window.__crawlerVisualRule[target]);
+          const active = Boolean(target && window.__crawlerPickMode === target);
+          if (picked) button.setAttribute('data-picked', 'true');
+          else button.removeAttribute('data-picked');
+          if (active) button.setAttribute('data-active', 'true');
+          else button.removeAttribute('data-active');
+        });
+      };
+      const markPicked = (target, selector) => {
+        try {
+          const element = document.querySelector(selector);
+          const style = fieldStyles[target] || {};
+          if (element) {
+            element.classList.remove(...pickedClasses);
+            element.classList.add('crawler-capture-picked', 'crawler-capture-picked-' + target);
+            if (style.color) element.style.setProperty('--crawler-capture-color', style.color);
+            if (style.glow) element.style.setProperty('--crawler-capture-glow', style.glow);
+          }
+        } catch {}
+        refreshCapturePanel();
+      };
+      if (!window.__crawlerCaptureListenerInstalled) {
+        window.__crawlerCaptureListenerInstalled = true;
+        document.addEventListener('click', (event) => {
+          const panel = document.getElementById('crawler-capture-panel');
+          if (panel && panel.contains(event.target)) return;
+          const mode = window.__crawlerPickMode;
+          if (!mode) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          const selector = selectorFor(event.target, mode);
+          if (!selector) return;
+          unmarkSelector(window.__crawlerVisualRule[mode]);
+          window.__crawlerVisualRule[mode] = selector;
+          window.__crawlerPickMode = null;
+          window.__crawlerLastTarget = mode;
+          markPicked(mode, selector);
+          setHelp(fieldLabels[mode] + ' 已选择：' + selector + '。点同一字段可重新选择，或清除当前字段。');
+        }, true);
+      }
+      if (document.getElementById('crawler-capture-panel')) return;
+      const panel = document.createElement('div');
+      panel.id = 'crawler-capture-panel';
+      panel.innerHTML = [
+        '<div class="crawler-capture-title" data-drag-handle="true"><strong>动态页采集配置</strong><span class="crawler-capture-drag-hint">拖动</span></div>',
+        '<div class="crawler-capture-grid">',
+        '<button class="crawler-capture-start" data-action="start">设当前页为题库入口</button>',
+        '<button data-target="item_selector">题目容器</button>',
+        '<button data-target="question_selector">题干</button>',
+        '<button data-target="options_selector">选项</button>',
+        '<button data-target="answer_selector">答案</button>',
+        '<button data-target="explanation_selector">解析</button>',
+        '<button data-target="next_selector">下一题</button>',
+        '<button class="crawler-capture-cancel" data-action="cancel">取消当前选择</button>',
+        '<button class="crawler-capture-clear" data-action="clear">清除当前字段</button>',
+        '<button class="crawler-capture-finish" data-action="finish">保存配置</button>',
+        '</div>',
+        '<div id="crawler-capture-help">使用已登录页面进入题库，再选择采集字段。</div>'
+      ].join('');
+      const keepPanelInViewport = (left, top) => {
+        const rect = panel.getBoundingClientRect();
+        const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+        const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+        return {
+          left: Math.min(Math.max(8, left), maxLeft),
+          top: Math.min(Math.max(8, top), maxTop)
+        };
+      };
+      const setPanelPosition = (left, top) => {
+        const next = keepPanelInViewport(left, top);
+        panel.style.left = next.left + 'px';
+        panel.style.top = next.top + 'px';
+        panel.style.right = 'auto';
+      };
+      const installDrag = () => {
+        const handle = panel.querySelector('[data-drag-handle="true"]');
+        if (!handle) return;
+        let dragging = false;
+        let offsetX = 0;
+        let offsetY = 0;
+        handle.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          const rect = panel.getBoundingClientRect();
+          dragging = true;
+          offsetX = event.clientX - rect.left;
+          offsetY = event.clientY - rect.top;
+          panel.classList.add('dragging');
+          handle.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        handle.addEventListener('pointermove', (event) => {
+          if (!dragging) return;
+          setPanelPosition(event.clientX - offsetX, event.clientY - offsetY);
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        const stopDrag = (event) => {
+          if (!dragging) return;
+          dragging = false;
+          panel.classList.remove('dragging');
+          try { handle.releasePointerCapture(event.pointerId); } catch {}
+          event.preventDefault();
+          event.stopPropagation();
+        };
+        handle.addEventListener('pointerup', stopDrag);
+        handle.addEventListener('pointercancel', stopDrag);
+        window.addEventListener('resize', () => {
+          const rect = panel.getBoundingClientRect();
+          setPanelPosition(rect.left, rect.top);
+        });
+      };
+      panel.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const action = button.getAttribute('data-action');
+        const target = button.getAttribute('data-target');
+        if (action === 'start') {
+          window.__crawlerVisualRule.start_url = window.location.href;
+          button.setAttribute('data-picked', 'true');
+          setHelp('题库入口已设为当前页面。');
+          return;
+        }
+        if (action === 'cancel') {
+          window.__crawlerPickMode = null;
+          refreshCapturePanel();
+          setHelp('已取消当前选择。');
+          return;
+        }
+        if (action === 'clear') {
+          const key = window.__crawlerPickMode || window.__crawlerLastTarget;
+          if (!key) {
+            setHelp('请先点一个字段，或先完成一次字段选择。');
+            return;
+          }
+          unmarkSelector(window.__crawlerVisualRule[key]);
+          delete window.__crawlerVisualRule[key];
+          window.__crawlerPickMode = null;
+          window.__crawlerLastTarget = key;
+          refreshCapturePanel();
+          setHelp(fieldLabels[key] + ' 已清除，可重新选择。');
+          return;
+        }
+        if (action === 'finish') {
+          window.__crawlerVisualRule.start_url = window.__crawlerVisualRule.start_url || window.location.href;
+          window.location.href = 'crawler-visual://finish';
+          return;
+        }
+        if (target) {
+          if (window.__crawlerPickMode === target) {
+            window.__crawlerPickMode = null;
+            refreshCapturePanel();
+            setHelp('已取消“' + fieldLabels[target] + '”选择。');
+            return;
+          }
+          window.__crawlerPickMode = target;
+          window.__crawlerLastTarget = target;
+          refreshCapturePanel();
+          setHelp('请在页面中点击“' + fieldLabels[target] + '”对应元素。已选过也会被新点击覆盖。');
+        }
+      }, true);
+      document.body.appendChild(panel);
+      installDrag();
+      refreshCapturePanel();
+    })()
+  `, true)
+}
+
+async function openCrawlerVisualConfigWindow(args: {
+  rule: CrawlerRule
+  accountAlias: string
+}): Promise<CrawlerRule> {
+  const session = getCrawlerSiteSession(getDatabase(), getCrawlerSiteId(args.rule), args.accountAlias)
+  if (!session) {
+    throw Object.assign(new Error('请先点击“登录并授权”，保存登录态后再进行可视化配置。'), { code: 'CRAWLER_AUTH_REQUIRED' })
+  }
+  const state = decryptCrawlerState(session.encrypted_state)
+  const targetUrl = resolveCrawlerVisualConfigUrl(args.rule, state)
+  if (!targetUrl) {
+    throw Object.assign(new Error('可视化配置 URL 不存在，请先设置 URL 模板或登录 URL。'), { code: 'CRAWLER_VISUAL_URL_REQUIRED' })
+  }
+
+  const visualWindow = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    title: `Visual config ${args.rule.site_name}`,
+    parent: mainWindow ?? undefined,
+    modal: false,
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      sandbox: false,
+      partition: `crawler-visual-${args.rule.id}-${args.accountAlias}-${Date.now()}`,
+    },
+  })
+
+  const finishPromise = new Promise<CrawlerRule>((resolvePromise, rejectPromise) => {
+    let settled = false
+    let localStorageRestored = false
+    const settle = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      fn()
+      if (!visualWindow.isDestroyed()) visualWindow.close()
+    }
+
+    visualWindow.once('ready-to-show', () => visualWindow.show())
+    visualWindow.on('closed', () => {
+      if (!settled) {
+        settled = true
+        rejectPromise(Object.assign(new Error('Visual config window closed'), { code: 'CRAWLER_VISUAL_CANCELLED' }))
+      }
+    })
+    visualWindow.webContents.setWindowOpenHandler((details) => {
+      visualWindow.loadURL(details.url)
+      return { action: 'deny' }
+    })
+    visualWindow.webContents.on('did-finish-load', async () => {
+      try {
+        if (!localStorageRestored) {
+          localStorageRestored = true
+          await restoreCrawlerLocalStorage(visualWindow, state)
+          const typed = state && typeof state === 'object' && !Array.isArray(state)
+            ? state as { localStorage?: Record<string, string> }
+            : {}
+          if (typed.localStorage && Object.keys(typed.localStorage).length) {
+            visualWindow.webContents.reload()
+            return
+          }
+        }
+        await injectCrawlerVisualConfigControls(visualWindow)
+      } catch (e) {
+        console.warn('[Crawler] Failed to inject visual config controls:', e)
+      }
+    })
+    visualWindow.webContents.on('will-navigate', async (event, url) => {
+      if (url !== 'crawler-visual://finish') return
+      event.preventDefault()
+      try {
+        const webState = await collectCrawlerWebState(visualWindow)
+        const updatedRule = applyCrawlerVisualRule(getDatabase(), args.rule, webState.visualRule)
+        if (!updatedRule) {
+          throw Object.assign(new Error('未选择任何可视化采集字段。'), { code: 'CRAWLER_VISUAL_RULE_EMPTY' })
+        }
+        upsertCrawlerSiteSession(getDatabase(), {
+          site_id: getCrawlerSiteId(updatedRule),
+          site_name: updatedRule.site_name,
+          account_alias: args.accountAlias,
+          encrypted_state: encryptCrawlerState(webState),
+          storage_meta: {
+            cookie_count: webState.cookies.length,
+            local_storage_keys: Object.keys(webState.localStorage).length,
+            captured_origin: webState.origin,
+            captured_url: webState.url,
+            capture_mode: 'manual',
+            account_alias: args.accountAlias,
+            visual_rule_fields: webState.visualRule ? Object.keys(webState.visualRule) : [],
+            visual_rule_saved: true,
+          },
+        })
+        settle(() => resolvePromise(updatedRule))
+      } catch (e) {
+        settle(() => rejectPromise(e))
+      }
+    })
+  })
+
+  await restoreCrawlerSessionToWindow(visualWindow, state, targetUrl)
+  await visualWindow.loadURL(targetUrl)
   return finishPromise
 }
 
@@ -1403,6 +2424,8 @@ function registerIpcHandlers(): void {
 
   registerHandler(IPC.CRAWLER_LIST_RUNS, async (ruleId) => listCrawlerRuns(db, ruleId as string))
 
+  registerHandler(IPC.CRAWLER_DELETE_RUN, async (id) => deleteCrawlerRun(db, id as string))
+
   registerHandler(IPC.CRAWLER_TEST, async (args) => {
     const { rule, test_url, account_alias = null } = args as {
       rule: CrawlerRule
@@ -1427,19 +2450,16 @@ function registerIpcHandlers(): void {
   })
 
   registerHandler(IPC.CRAWLER_RUN, async (args) => {
-    const { ruleId, target_group_id = null, new_group = null, account_alias = null } = args as {
+    const { ruleId, account_alias = null } = args as {
       ruleId: string
-      target_group_id?: string | null
-      new_group?: QuestionGroupInput | null
       account_alias?: string | null
     }
     const rules = listCrawlerRules(db)
     const rule = rules.find((r) => r.id === ruleId)
     if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
-    const resolvedGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
 
-    const run = createCrawlerRun(db, ruleId, resolvedGroupId)
-    const taskId = taskManager!.createTask('crawl', { ruleId, runId: run.id, target_group_id: resolvedGroupId })
+    const run = createCrawlerRun(db, ruleId, null)
+    const taskId = taskManager!.createTask('crawl', { ruleId, runId: run.id, target_group: '待确认结果' })
     wsClient.connect(taskId)
 
     wsClient.onComplete(taskId, (_, result) => {
@@ -1447,14 +2467,13 @@ function registerIpcHandlers(): void {
         questions: NormalizedCrawlerPayload[]
         total_found: number
         rule_id: string
-        target_group_id?: string | null
       }
       try {
         const saved = saveCrawlerReviewItems(db, {
           ruleId,
           runId: run.id,
           items: questions,
-          targetGroupId: resolvedGroupId ?? target_group_id ?? null,
+          targetGroupId: null,
         })
         updateCrawlerRun(db, run.id, {
           status: 'completed',
@@ -1490,8 +2509,8 @@ function registerIpcHandlers(): void {
         rule,
         task_id: taskId,
         rule_id: ruleId,
-        target_group_id: resolvedGroupId,
-        new_group,
+        target_group_id: null,
+        new_group: null,
         account_alias,
         session_state,
       }),
@@ -1505,6 +2524,13 @@ function registerIpcHandlers(): void {
     const rule = listCrawlerRules(db).find((item) => item.id === ruleId)
     if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
     return openCrawlerAuthWindow({ rule, accountAlias: account_alias || 'default' })
+  })
+
+  registerHandler(IPC.CRAWLER_VISUAL_CONFIG, async (args) => {
+    const { ruleId, account_alias = 'default' } = args as { ruleId: string; account_alias?: string }
+    const rule = listCrawlerRules(db).find((item) => item.id === ruleId)
+    if (!rule) throw Object.assign(new Error('Rule not found'), { code: 'NOT_FOUND' })
+    return openCrawlerVisualConfigWindow({ rule, accountAlias: account_alias || 'default' })
   })
 
   registerHandler(IPC.CRAWLER_LIST_SESSIONS, async (args) => {
@@ -1625,10 +2651,13 @@ function registerIpcHandlers(): void {
     const items = getCrawlerReviewItemsByIds(db, ids)
       .filter((item) => item.review_status === 'pending' || item.review_status === 'approved')
     const fallbackGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
+    if (!fallbackGroupId) {
+      throw Object.assign(new Error('请选择现有分组或新建分组后再确认入库'), { code: 'CRAWLER_IMPORT_GROUP_REQUIRED' })
+    }
     const questions = items.map((item) => ({
       ...item.normalized_payload,
       source_type: 'crawled',
-      group_id: fallbackGroupId ?? item.target_group_id ?? null,
+      group_id: fallbackGroupId,
     })) as Parameters<typeof batchInsertQuestions>[1]
     const saved = batchInsertQuestions(db, questions)
     updateCrawlerReviewStatus(db, items.map((item) => item.id), 'imported')

@@ -28,6 +28,8 @@ export interface QuestionGroupDraft {
 export interface Question {
   id: string
   group_id: string | null
+  question_set_id: string | null
+  question_set_order: number
   type: 'single' | 'multiple' | 'case' | 'essay'
   content: string
   options: string[] | null
@@ -47,6 +49,8 @@ export interface Question {
 
 export interface QuestionDraft {
   group_id?: string | null
+  question_set_id?: string | null
+  question_set_order?: number | null
   type: Question['type']
   content: string
   options?: string[] | null

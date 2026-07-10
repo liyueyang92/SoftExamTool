@@ -59,6 +59,11 @@ const recentExamYears = computed(() => {
   const year = new Date().getFullYear()
   return Array.from({ length: 5 }, (_, i) => year - i)
 })
+const currentQuestionSetTotal = computed(() => {
+  const setId = store.currentQuestion?.question_set_id
+  if (!setId) return 0
+  return store.questions.filter((question) => question.question_set_id === setId).length
+})
 
 function isMultipleSelected(letter: string): boolean {
   return chosenAnswer.value.split(',').map((s) => s.trim()).includes(letter)
@@ -153,6 +158,9 @@ function toggleMultiple(letter: string) {
         <div class="question-main">
           <div class="q-meta">
             <span class="type-badge" :class="store.currentQuestion.type">{{ { single:'单选', multiple:'多选', case:'案例', essay:'论文' }[store.currentQuestion.type] }}</span>
+            <span v-if="currentQuestionSetTotal > 1" class="set-badge">
+              关联 {{ store.currentQuestion.question_set_order || 1 }}/{{ currentQuestionSetTotal }}
+            </span>
             <span v-for="i in store.currentQuestion.difficulty" :key="i" class="diff-stars">★</span>
           </div>
           <div class="q-content">{{ store.currentQuestion.content }}</div>
@@ -270,6 +278,7 @@ function toggleMultiple(letter: string) {
 .type-badge.multiple { background: var(--c-ok-bg); color: #4ade80; }
 .type-badge.case { background: var(--c-warn-bg); color: #fb923c; }
 .type-badge.essay { background: #3b0764; color: #c084fc; }
+.set-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-size: 12px; font-weight: 700; }
 .diff-stars { color: #f59e0b; font-size: 12px; }
 .q-content { font-size: 16px; color: var(--c-text); line-height: 1.7; white-space: pre-wrap; }
 .options { display: flex; flex-direction: column; gap: 8px; }

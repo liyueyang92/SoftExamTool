@@ -231,6 +231,15 @@ export function listCrawlerRuns(db: Database, ruleId: string): CrawlerRun[] {
   ).all(ruleId) as CrawlerRun[]
 }
 
+export function deleteCrawlerRun(db: Database, id: string): void {
+  const run = db.prepare('SELECT id, status FROM crawler_runs WHERE id=?').get(id) as Pick<CrawlerRun, 'id' | 'status'> | undefined
+  if (!run) return
+  if (run.status === 'running') {
+    throw Object.assign(new Error('正在运行的爬虫记录不能删除'), { code: 'CRAWLER_RUN_RUNNING' })
+  }
+  db.prepare('DELETE FROM crawler_runs WHERE id=?').run(id)
+}
+
 export function addCrawledCount(db: Database, ruleId: string, count: number): void {
   db.prepare(
     'UPDATE crawler_rules SET total_crawled=total_crawled+?, last_run_at=? WHERE id=?'
@@ -326,7 +335,10 @@ export function getCrawlerReviewItemsByIds(db: Database, ids: string[]): ParsedC
     FROM crawler_review_items
     WHERE id IN (${placeholders})
   `).all(...ids) as CrawlerReviewItem[]
-  return rows.map(parseReviewItem)
+  const order = new Map(ids.map((id, index) => [id, index]))
+  return rows
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    .map(parseReviewItem)
 }
 
 export function upsertCrawlerSiteSession(
