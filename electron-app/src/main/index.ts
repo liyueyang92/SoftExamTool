@@ -87,6 +87,10 @@ let taskManager: TaskManager | null = null
 let mainWindow: BrowserWindow | null = null
 let resourcesCleanedUp = false
 
+if (is.dev) {
+  app.commandLine.appendSwitch('proxy-bypass-list', 'localhost;127.0.0.1;::1;<local>')
+}
+
 // AI config (persisted under the configured data root; API key via safeStorage)
 let aiConfig: Record<string, unknown> = {
   mode: 'openai',
@@ -332,6 +336,17 @@ function relaunchApplication(): void {
   app.exit(0)
 }
 
+function normalizeDevRendererUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname === 'localhost') {
+      parsed.hostname = '127.0.0.1'
+      return parsed.toString()
+    }
+  } catch { /* keep original url */ }
+  return url
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
@@ -353,7 +368,7 @@ function createWindow(): BrowserWindow {
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.loadURL(normalizeDevRendererUrl(process.env['ELECTRON_RENDERER_URL']))
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }

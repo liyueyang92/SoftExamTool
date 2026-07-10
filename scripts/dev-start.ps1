@@ -27,6 +27,25 @@ if (-not (Test-Path $PyExe)) {
 $env:INTERNAL_PORT  = '8765'
 $env:INTERNAL_TOKEN = 'dev-token-local'
 
+# Keep local dev traffic out of system/env proxies. Some proxy tools do not
+# bypass localhost for Electron, which can make the renderer fail with
+# ERR_PROXY_CONNECTION_FAILED even while Vite is running.
+$LocalNoProxy = 'localhost,127.0.0.1,::1'
+if ($env:NO_PROXY) {
+    if ($env:NO_PROXY -notmatch '(^|,)localhost(,|$)') {
+        $env:NO_PROXY = "$env:NO_PROXY,$LocalNoProxy"
+    }
+} else {
+    $env:NO_PROXY = $LocalNoProxy
+}
+if ($env:no_proxy) {
+    if ($env:no_proxy -notmatch '(^|,)localhost(,|$)') {
+        $env:no_proxy = "$env:no_proxy,$LocalNoProxy"
+    }
+} else {
+    $env:no_proxy = $LocalNoProxy
+}
+
 # ── Kill any process already holding the port ────────────────────────────────
 $oldPid = (netstat -ano 2>$null |
     Select-String "127\.0\.0\.1:$env:INTERNAL_PORT\s.*LISTENING" |

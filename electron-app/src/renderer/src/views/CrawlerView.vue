@@ -57,6 +57,7 @@ const newGroupYear = ref<number | null>(null)
 const newGroupPeriod = ref<'H1' | 'H2'>('H1')
 
 const selectedReviewIds = ref<string[]>([])
+const reviewSelectionMode = ref(false)
 const reviewMessage = ref('')
 const reviewError = ref('')
 const accountAlias = ref('default')
@@ -75,6 +76,10 @@ const selectedSessions = computed(() => {
 const pendingCount = computed(() => store.reviewItems.length)
 const existingImportGroups = computed(() =>
   questionStore.groups.filter((group) => group.group_type !== 'past_exam')
+)
+const selectedReviewCount = computed(() => selectedReviewIds.value.length)
+const allReviewsSelected = computed(() =>
+  Boolean(store.reviewItems.length) && selectedReviewIds.value.length === store.reviewItems.length
 )
 const filteredRuns = computed(() => {
   if (runStageFilter.value === 'all') return store.runs
@@ -99,6 +104,11 @@ watch(existingImportGroups, (groups) => {
   if (targetGroupId.value && !groups.some((group) => group.id === targetGroupId.value)) {
     targetGroupId.value = ''
   }
+})
+
+watch(() => store.reviewItems.map((item) => item.id), (ids) => {
+  selectedReviewIds.value = selectedReviewIds.value.filter((id) => ids.includes(id))
+  if (!selectedReviewIds.value.length) reviewSelectionMode.value = false
 })
 
 onMounted(async () => {
@@ -484,6 +494,20 @@ function toggleReviewSelection(id: string) {
   toggleReview(id, !selectedReviewIds.value.includes(id))
 }
 
+function toggleReviewSelectionMode() {
+  reviewSelectionMode.value = !reviewSelectionMode.value
+  if (!reviewSelectionMode.value) selectedReviewIds.value = []
+}
+
+function selectAllReviews() {
+  reviewSelectionMode.value = true
+  selectedReviewIds.value = store.reviewItems.map((item) => item.id)
+}
+
+function clearReviewSelection() {
+  selectedReviewIds.value = []
+}
+
 async function importSelected() {
   if (!selectedReviewIds.value.length) return
   reviewMessage.value = ''
@@ -747,8 +771,16 @@ function reviewOptionsSummary(payload: ReviewPayload) {
         </div>
         <div class="actions">
           <button class="btn" @click="store.fetchReviewItems({ status: 'pending', limit: 100 })">刷新</button>
-          <button class="btn" :disabled="!selectedReviewIds.length" @click="rejectSelected">丢弃</button>
-          <button class="btn-primary" :disabled="!selectedReviewIds.length || !importGroupReady" @click="importSelected">确认入库</button>
+          <button
+            class="btn"
+            :class="{ active: reviewSelectionMode }"
+            :disabled="!store.reviewItems.length"
+            @click="toggleReviewSelectionMode"
+          >
+            {{ reviewSelectionMode ? '退出多选' : '多选' }}
+          </button>
+          <button class="btn" :disabled="!selectedReviewCount" @click="rejectSelected">丢弃</button>
+          <button class="btn-primary" :disabled="!selectedReviewCount || !importGroupReady" @click="importSelected">确认入库</button>
         </div>
       </div>
       <section class="target-box review-import-target">
@@ -779,19 +811,27 @@ function reviewOptionsSummary(payload: ReviewPayload) {
       <p v-if="reviewError" class="error">{{ reviewError }}</p>
       <div v-if="!store.reviewItems.length" class="empty">暂无待确认结果</div>
       <div v-else class="review-list">
+        <div v-if="reviewSelectionMode" class="review-selection-bar">
+          <span>已选 {{ selectedReviewCount }} / {{ pendingCount }}</span>
+          <div class="actions">
+            <button class="btn mini-btn" :disabled="allReviewsSelected" @click="selectAllReviews">全选</button>
+            <button class="btn mini-btn" :disabled="!selectedReviewCount" @click="clearReviewSelection">清空</button>
+          </div>
+        </div>
         <div
           v-for="item in store.reviewItems"
           :key="item.id"
           class="review-item"
-          :class="{ selected: selectedReviewIds.includes(item.id) }"
+          :class="{ selected: selectedReviewIds.includes(item.id), selectable: reviewSelectionMode }"
           role="checkbox"
           tabindex="0"
           :aria-checked="selectedReviewIds.includes(item.id)"
-          @click="toggleReviewSelection(item.id)"
-          @keydown.enter.prevent="toggleReviewSelection(item.id)"
-          @keydown.space.prevent="toggleReviewSelection(item.id)"
+          @click="reviewSelectionMode && toggleReviewSelection(item.id)"
+          @keydown.enter.prevent="reviewSelectionMode && toggleReviewSelection(item.id)"
+          @keydown.space.prevent="reviewSelectionMode && toggleReviewSelection(item.id)"
         >
           <input
+            v-if="reviewSelectionMode"
             type="checkbox"
             :checked="selectedReviewIds.includes(item.id)"
             @click.stop
@@ -967,6 +1007,7 @@ function reviewOptionsSummary(payload: ReviewPayload) {
 .actions { display: flex; gap: 8px; align-items: center; }
 .btn, .btn-primary { border: 1px solid var(--c-border); border-radius: 6px; height: 32px; padding: 0 12px; cursor: pointer; color: var(--c-text); background: var(--c-panel); }
 .btn:hover:not(:disabled) { background: var(--c-hover); }
+.btn.active { border-color: #1d4ed8; background: #dbeafe; color: #1d4ed8; font-weight: 700; }
 .btn-primary { border-color: #1d4ed8; background: #1d4ed8; color: white; font-weight: 700; }
 .btn:disabled, .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
 .progress-box, .target-box { border: 1px solid var(--c-border); background: var(--c-bg); border-radius: 8px; padding: 12px; }
@@ -1012,7 +1053,9 @@ function reviewOptionsSummary(payload: ReviewPayload) {
 .badge.warn { background: var(--c-warn-bg); color: var(--c-warn-text); }
 .badge.err { background: #fee2e2; color: #dc2626; }
 .review-panel { max-height: 42%; min-height: 240px; padding: 14px; overflow: auto; }
-.review-item { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; padding: 10px; border: 1px solid var(--c-border); border-radius: 6px; cursor: pointer; }
+.review-selection-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--c-border); background: var(--c-bg); border-radius: 6px; padding: 8px 10px; font-size: 12px; color: var(--c-text-2); }
+.review-item { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; border: 1px solid var(--c-border); border-radius: 6px; cursor: default; }
+.review-item.selectable { grid-template-columns: 20px minmax(0, 1fr); cursor: pointer; }
 .review-item.selected { border-color: #1d4ed8; background: #dbeafe; }
 .review-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .review-title-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
