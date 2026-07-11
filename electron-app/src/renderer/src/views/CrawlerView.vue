@@ -488,6 +488,8 @@ async function selectRule(ruleId: string) {
 function toggleReview(id: string, checked: boolean) {
   if (checked && !selectedReviewIds.value.includes(id)) selectedReviewIds.value.push(id)
   if (!checked) selectedReviewIds.value = selectedReviewIds.value.filter((x) => x !== id)
+  // Auto-enter/exit selection mode based on whether any items are selected
+  reviewSelectionMode.value = selectedReviewIds.value.length > 0
 }
 
 function toggleReviewSelection(id: string) {
@@ -811,7 +813,7 @@ function reviewOptionsSummary(payload: ReviewPayload) {
       <p v-if="reviewError" class="error">{{ reviewError }}</p>
       <div v-if="!store.reviewItems.length" class="empty">暂无待确认结果</div>
       <div v-else class="review-list">
-        <div v-if="reviewSelectionMode" class="review-selection-bar">
+        <div v-if="reviewSelectionMode || selectedReviewCount" class="review-selection-bar">
           <span>已选 {{ selectedReviewCount }} / {{ pendingCount }}</span>
           <div class="actions">
             <button class="btn mini-btn" :disabled="allReviewsSelected" @click="selectAllReviews">全选</button>
@@ -822,16 +824,16 @@ function reviewOptionsSummary(payload: ReviewPayload) {
           v-for="item in store.reviewItems"
           :key="item.id"
           class="review-item"
-          :class="{ selected: selectedReviewIds.includes(item.id), selectable: reviewSelectionMode }"
+          :class="{ selected: selectedReviewIds.includes(item.id), selectable: reviewSelectionMode || selectedReviewCount > 0 }"
           role="checkbox"
           tabindex="0"
           :aria-checked="selectedReviewIds.includes(item.id)"
-          @click="reviewSelectionMode && toggleReviewSelection(item.id)"
-          @keydown.enter.prevent="reviewSelectionMode && toggleReviewSelection(item.id)"
-          @keydown.space.prevent="reviewSelectionMode && toggleReviewSelection(item.id)"
+          @click="toggleReviewSelection(item.id)"
+          @keydown.enter.prevent="toggleReviewSelection(item.id)"
+          @keydown.space.prevent="toggleReviewSelection(item.id)"
         >
           <input
-            v-if="reviewSelectionMode"
+            v-if="reviewSelectionMode || selectedReviewIds.includes(item.id)"
             type="checkbox"
             :checked="selectedReviewIds.includes(item.id)"
             @click.stop

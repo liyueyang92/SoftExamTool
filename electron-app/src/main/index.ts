@@ -512,6 +512,7 @@ type CrawlerVisualRule = {
   answer_selector?: string
   explanation_selector?: string
   next_selector?: string
+  question_type?: string
 }
 
 const NEXT_CLICK_DEFAULT_MAX_PAGES = 100
@@ -529,10 +530,12 @@ function cleanCrawlerVisualRule(value: unknown): CrawlerVisualRule | null {
     'answer_selector',
     'explanation_selector',
     'next_selector',
+    'question_type',
   ] as const) {
     const raw = source[key]
     if (typeof raw === 'string' && raw.trim()) {
-      const selector = key === 'start_url' ? raw.trim() : sanitizeCrawlerCaptureSelector(raw.trim())
+      const isSelector = key !== 'start_url' && key !== 'question_type'
+      const selector = isSelector ? sanitizeCrawlerCaptureSelector(raw.trim()) : raw.trim()
       if (selector) result[key] = selector
     }
   }
@@ -576,6 +579,7 @@ function applyCrawlerVisualRule(db: Database.Database, rule: CrawlerRule, visual
     url_template: urlTemplate,
     item_selector: itemSelector,
     ...(nextSelector ? { next_selector: nextSelector } : {}),
+    ...(visualRule.question_type ? { question_type: visualRule.question_type } : {}),
     fields: {
       ...fields,
       ...(visualRule.question_selector ? { content: visualRule.question_selector } : {}),
@@ -1336,6 +1340,32 @@ async function injectCrawlerVisualConfigControls(win: BrowserWindow): Promise<vo
     #crawler-capture-panel .crawler-capture-finish { grid-column: 1 / -1; }
     #crawler-capture-panel .crawler-capture-cancel { border-color: rgba(251, 191, 36, .55); color: #fde68a; }
     #crawler-capture-panel .crawler-capture-clear { border-color: rgba(248, 113, 113, .55); color: #fecaca; }
+    #crawler-capture-panel .crawler-capture-type-row {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    #crawler-capture-panel .crawler-capture-type-label {
+      font-size: 12px;
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+    #crawler-capture-panel select.crawler-capture-type-select {
+      flex: 1;
+      min-height: 30px;
+      border: 1px solid rgba(148, 163, 184, .38);
+      border-radius: 6px;
+      background: rgba(30, 41, 59, .88);
+      color: #fff;
+      font: 600 12px system-ui, sans-serif;
+      padding: 4px 6px;
+    }
+    #crawler-capture-panel select.crawler-capture-type-select option {
+      background: #1e293b;
+      color: #fff;
+    }
     #crawler-capture-help {
       margin-top: 7px;
       color: #cbd5e1;
@@ -1517,6 +1547,7 @@ async function injectCrawlerVisualConfigControls(win: BrowserWindow): Promise<vo
         '<button data-target="answer_selector">答案</button>',
         '<button data-target="explanation_selector">解析</button>',
         '<button data-target="next_selector">下一题</button>',
+        '<div class="crawler-capture-type-row"><span class="crawler-capture-type-label">题目类型</span><select class="crawler-capture-type-select" data-target="question_type"><option value="">自动判断</option><option value="single">综合知识</option><option value="multiple">多选题</option><option value="case">案例</option><option value="essay">论文</option></select></div>',
         '<button class="crawler-capture-cancel" data-action="cancel">取消当前选择</button>',
         '<button class="crawler-capture-clear" data-action="clear">清除当前字段</button>',
         '<button class="crawler-capture-finish" data-action="finish">保存配置</button>',
@@ -1625,6 +1656,20 @@ async function injectCrawlerVisualConfigControls(win: BrowserWindow): Promise<vo
           window.__crawlerLastTarget = target;
           refreshCapturePanel();
           setHelp('请在页面中点击“' + fieldLabels[target] + '”对应元素。已选过也会被新点击覆盖。');
+        }
+      }, true);
+      panel.addEventListener('change', (event) => {
+        const select = event.target.closest('select[data-target="question_type"]');
+        if (!select) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const value = select.value;
+        if (value) {
+          window.__crawlerVisualRule.question_type = value;
+          setHelp('题目类型已设为：' + select.options[select.selectedIndex].text);
+        } else {
+          delete window.__crawlerVisualRule.question_type;
+          setHelp('题目类型已设为自动判断。');
         }
       }, true);
       document.body.appendChild(panel);

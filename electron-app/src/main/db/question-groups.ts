@@ -49,7 +49,6 @@ export function upsertQuestionGroup(
   db: Database,
   input: QuestionGroupInput & { id?: string }
 ): QuestionGroup {
-  const id = input.id ?? randomUUID()
   const now = new Date().toISOString()
   const groupType = input.group_type ?? 'custom'
   const description = input.description ?? ''
@@ -60,18 +59,34 @@ export function upsertQuestionGroup(
     throw Object.assign(new Error('历年真题分组必须填写年份和上/下半年'), { code: 'QUESTION_GROUP_INVALID' })
   }
 
-  if (input.id) {
-    db.prepare(`
-      UPDATE question_groups
-      SET name = ?, group_type = ?, exam_year = ?, exam_period = ?, description = ?, updated_at = ?
-      WHERE id = ?
-    `).run(input.name, groupType, examYear, examPeriod, description, now, id)
-  } else {
+  // Name-based dedup: when no explicit id, reuse existing group with same name
+  let id = input.id ?? null
+  let isNew = !id
+  if (!id) {
+    const existing = db.prepare(
+      'SELECT id FROM question_groups WHERE name = ?'
+    ).get(input.name) as { id: string } | undefined
+    if (existing) {
+      id = existing.id
+      isNew = false
+    } else {
+      id = randomUUID()
+      isNew = true
+    }
+  }
+
+  if (isNew) {
     db.prepare(`
       INSERT INTO question_groups
         (id, name, group_type, exam_year, exam_period, description, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, input.name, groupType, examYear, examPeriod, description, now, now)
+  } else {
+    db.prepare(`
+      UPDATE question_groups
+      SET name = ?, group_type = ?, exam_year = ?, exam_period = ?, description = ?, updated_at = ?
+      WHERE id = ?
+    `).run(input.name, groupType, examYear, examPeriod, description, now, id)
   }
 
   return db.prepare('SELECT * FROM question_groups WHERE id = ?').get(id) as QuestionGroup
