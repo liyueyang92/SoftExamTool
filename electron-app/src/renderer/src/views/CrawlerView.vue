@@ -84,7 +84,15 @@ const selectedSessions = computed(() => {
   return ruleId ? store.sessions.filter((item) => item.site_id === ruleId) : []
 })
 const pendingCount = computed(() => store.reviewItems.length)
-const existingImportGroups = computed(() => questionStore.groups)
+const existingImportGroups = computed(() => {
+  const seen = new Map<string, typeof questionStore.groups[number]>()
+  for (const g of questionStore.groups) {
+    if (!seen.has(g.name)) seen.set(g.name, g)
+  }
+  return Array.from(seen.values())
+})
+
+const dedupedGroups = computed(() => existingImportGroups.value)
 const selectedReviewCount = computed(() => selectedReviewIds.value.length)
 const allReviewsSelected = computed(() =>
   Boolean(store.reviewItems.length) && selectedReviewIds.value.length === store.reviewItems.length
@@ -467,10 +475,6 @@ function importGroupPayload(): { target_group_id?: string | null; new_group?: Ne
   return { target_group_id: null, new_group: null, exam_year, exam_period }
 }
 
-function groupOptionLabel(group: { name: string; group_type: string; exam_year?: number | null; exam_period?: string | null }) {
-  return group.name
-}
-
 function runGroupLabel(run: typeof store.runs[number]): string {
   if (!run.target_group_id) return '未指定分组'
   const g = questionStore.groups.find((x) => x.id === run.target_group_id)
@@ -827,7 +831,7 @@ function reviewOptionsSummary(payload: ReviewPayload) {
                     </div>
                     <select v-if="editRunGroupMode === 'existing'" v-model="editRunTargetGroupId" class="input" style="width:100%">
                       <option value="">未指定分组</option>
-                      <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ groupOptionLabel(g) }}</option>
+                      <option v-for="g in dedupedGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
                     </select>
                     <template v-if="editRunGroupMode === 'new'">
                       <input v-model="editRunNewName" class="input" placeholder="分组名称" style="width:100%;margin-bottom:4px" />
@@ -902,7 +906,7 @@ function reviewOptionsSummary(payload: ReviewPayload) {
         <div v-if="groupMode === 'existing'" class="existing-group-grid">
           <select v-model="targetGroupId" class="input">
             <option value="">选择分组</option>
-            <option v-for="g in existingImportGroups" :key="g.id" :value="g.id">{{ groupOptionLabel(g) }}</option>
+            <option v-for="g in dedupedGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
           </select>
         </div>
         <div v-if="groupMode === 'new'" class="group-grid">

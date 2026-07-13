@@ -57,6 +57,14 @@ const setCounts = computed(() => {
   return counts
 })
 
+const dedupedGroups = computed(() => {
+  const seen = new Map<string, QuestionGroup>()
+  for (const g of store.groups) {
+    if (!seen.has(g.name)) seen.set(g.name, g)
+  }
+  return Array.from(seen.values())
+})
+
 onMounted(async () => {
   await Promise.all([store.fetchPage(), store.loadStats(), store.fetchGroups()])
 })
@@ -372,9 +380,9 @@ function setLabel(q: Question): string {
       </div>
 
       <div class="filter-wrap">
-        <select class="select-sm" @change="applyFilter({ group_id: ($event.target as HTMLSelectElement).value || undefined, page: 1 })">
+        <select class="select-sm" @change="applyFilter({ group_name: ($event.target as HTMLSelectElement).value || undefined, page: 1 })">
           <option value="">全部分组</option>
-          <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+          <option v-for="g in dedupedGroups" :key="g.name" :value="g.name">{{ g.name }}</option>
         </select>
         <select class="select-sm" @change="applyFilter({ source_type: ($event.target as HTMLSelectElement).value || undefined, page: 1 })">
           <option value="">全部来源</option>
@@ -624,7 +632,7 @@ function setLabel(q: Question): string {
                         class="select-sm move-select"
                       >
                         <option value="">移动到…</option>
-                        <option v-for="dest in store.groups.filter(x => x.id !== g.id)" :key="dest.id" :value="dest.id">
+                        <option v-for="dest in dedupedGroups.filter(x => x.id !== g.id)" :key="dest.id" :value="dest.id">
                           {{ dest.name }}
                         </option>
                       </select>
@@ -669,7 +677,7 @@ function setLabel(q: Question): string {
           <div v-if="importGroupMode === 'existing'" class="form-row">
             <select v-model="importTargetGroupId" class="select-sm">
               <option value="">请选择分组</option>
-              <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+              <option v-for="g in dedupedGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
             </select>
           </div>
           <div v-if="importGroupMode === 'new'" class="form-row col">

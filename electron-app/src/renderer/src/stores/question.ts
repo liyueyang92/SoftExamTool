@@ -64,6 +64,7 @@ export interface QuestionDraft {
 
 export interface QuestionFilter {
   group_id?: string
+  group_name?: string
   group_type?: QuestionGroupType
   exam_year?: number
   exam_period?: ExamPeriod
@@ -196,6 +197,7 @@ export const useQuestionStore = defineStore('question', () => {
     Object.assign(filter, f)
     if (
       f.group_id !== undefined ||
+      f.group_name !== undefined ||
       f.group_type !== undefined ||
       f.exam_year !== undefined ||
       f.exam_period !== undefined ||

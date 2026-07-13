@@ -43,6 +43,7 @@ export interface QuestionInput {
 
 export interface QueryFilter {
   group_id?: string
+  group_name?: string
   group_type?: QuestionGroupType
   exam_year?: number
   exam_period?: ExamPeriod
@@ -177,6 +178,7 @@ export function queryQuestions(db: Database.Database, filter: QueryFilter = {}):
     page = 1,
     pageSize = 20,
     group_id,
+    group_name,
     group_type,
     exam_year,
     exam_period,
@@ -190,6 +192,7 @@ export function queryQuestions(db: Database.Database, filter: QueryFilter = {}):
   const params: unknown[] = []
 
   if (group_id) { conditions.push('q.group_id = ?'); params.push(group_id) }
+  if (group_name) { conditions.push('g.name = ?'); params.push(group_name) }
   if (group_type) { conditions.push('g.group_type = ?'); params.push(group_type) }
   if (exam_year) { conditions.push('q.exam_year = ?'); params.push(exam_year) }
   if (exam_period) { conditions.push('q.exam_period = ?'); params.push(exam_period) }
