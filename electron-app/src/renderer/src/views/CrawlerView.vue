@@ -76,6 +76,7 @@ const selectedSessions = computed(() => {
   return ruleId ? store.sessions.filter((item) => item.site_id === ruleId) : []
 })
 const pendingCount = computed(() => store.reviewItems.length)
+const existingImportGroups = computed(() => questionStore.groups)
 const existingPastExamYears = computed(() => {
   const currentYear = new Date().getFullYear()
   const years: number[] = []
@@ -83,17 +84,6 @@ const existingPastExamYears = computed(() => {
     years.push(y)
   }
   return years
-})
-const existingImportGroups = computed(() => {
-  const year = existingExamYear.value
-  const period = existingExamPeriod.value
-  return questionStore.groups.filter((group) => {
-    if (!year && !period) return true
-    if (group.group_type !== 'past_exam') return false
-    if (year && group.exam_year !== year) return false
-    if (period && group.exam_period !== period) return false
-    return true
-  })
 })
 const selectedReviewCount = computed(() => selectedReviewIds.value.length)
 const allReviewsSelected = computed(() =>
@@ -116,12 +106,6 @@ const importGroupReady = computed(() => {
   if (!newGroupName.value.trim()) return false
   if (newGroupType.value === 'past_exam') return Boolean(newGroupYear.value && newGroupPeriod.value)
   return true
-})
-
-watch(existingImportGroups, (groups) => {
-  if (targetGroupId.value && !groups.some((group) => group.id === targetGroupId.value)) {
-    targetGroupId.value = ''
-  }
 })
 
 watch(() => store.reviewItems.map((item) => item.id), (ids) => {
@@ -815,6 +799,10 @@ function reviewOptionsSummary(payload: ReviewPayload) {
           <button :class="{ active: groupMode === 'new' }" @click="groupMode = 'new'">新建分组</button>
         </div>
         <div v-if="groupMode === 'existing'" class="existing-group-grid">
+          <select v-model="targetGroupId" class="input">
+            <option value="">选择分组</option>
+            <option v-for="g in existingImportGroups" :key="g.id" :value="g.id">{{ groupOptionLabel(g) }}</option>
+          </select>
           <select v-model="existingExamYear" class="input">
             <option value="">全部真题年份</option>
             <option v-for="year in existingPastExamYears" :key="year" :value="year">{{ year }}</option>
@@ -823,10 +811,6 @@ function reviewOptionsSummary(payload: ReviewPayload) {
             <option value="">全部期次</option>
             <option value="H1">上半年</option>
             <option value="H2">下半年</option>
-          </select>
-          <select v-model="targetGroupId" class="input wide-select">
-            <option value="">选择分组</option>
-            <option v-for="g in existingImportGroups" :key="g.id" :value="g.id">{{ groupOptionLabel(g) }}</option>
           </select>
         </div>
         <div v-if="groupMode === 'new'" class="group-grid">
