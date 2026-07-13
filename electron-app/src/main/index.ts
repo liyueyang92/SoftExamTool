@@ -1,5 +1,6 @@
-import { app, shell, BrowserWindow, dialog, safeStorage, Notification } from 'electron'
+import { app, shell, BrowserWindow, dialog, safeStorage, Notification, protocol, net } from 'electron'
 import { spawn } from 'child_process'
+import { randomUUID } from 'crypto'
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Database from 'better-sqlite3-multiple-ciphers'
@@ -60,6 +61,13 @@ import {
   listBackups, createBackup, deleteBackupRecord, shouldAutoBackup, pruneOldBackups,
   getDefaultBackupDir, remapManagedBackupPaths
 } from './db/backup'
+import {
+  insertImage, getImagesForQuestion, getImageById,
+  deleteImageById, deleteImagesForQuestion,
+  getOrphanedImages, deleteOrphanedImages,
+  copyImageToStorage, guessMimeType, getFileSize,
+  type InsertImageArgs,
+} from './db/images'
 import {
   copyFileSync,
   cpSync,
@@ -2140,6 +2148,39 @@ function registerIpcHandlers(): void {
     return { ready: true, version }
   })
 
+  registerHandler(IPC.DB_CLEAR_ALL, async () => {
+    const imageDir = getStoragePaths().imageDir
+    // Delete image files from disk
+    const imageFiles = db.prepare('SELECT file_name FROM question_images').all() as { file_name: string }[]
+    for (const { file_name } of imageFiles) {
+      try { const p = join(imageDir, file_name); if (existsSync(p)) unlinkSync(p) } catch { /* ignore */ }
+    }
+
+    const tables = [
+      'answer_records',
+      'question_images',
+      'questions',
+      'practice_sessions',
+      'crawler_review_items',
+    ]
+    const count = db.transaction(() => {
+      let total = 0
+      for (const table of tables) {
+        const r = db.prepare(`DELETE FROM ${table}`).run()
+        total += r.changes
+      }
+      // Reset crawler_runs saved counts
+      db.prepare("UPDATE crawler_runs SET total_saved = 0").run()
+      // Reset crawler_rules total_crawled
+      db.prepare("UPDATE crawler_rules SET total_crawled = 0").run()
+      // Rebuild FTS index
+      db.prepare("INSERT INTO questions_fts(questions_fts) VALUES('rebuild')").run()
+      return total
+    })()
+    console.log(`[DB] Cleared ${count} records from question bank`)
+    return { count }
+  })
+
   // Phase 1 - Task CRUD
   registerHandler(IPC.TASK_CREATE, async (args) => {
     const { type, payload } = args as { type: string; payload: unknown }
@@ -2205,11 +2246,94 @@ function registerIpcHandlers(): void {
   })
   registerHandler(IPC.QUESTION_UPDATE, async (args) => {
     const { id, changes } = args as { id: string; changes: Parameters<typeof updateQuestion>[2] }
+    // Detect removed image references and clean up
+    type TextFields = 'content' | 'explanation'
+    const textFields: TextFields[] = ['content', 'explanation']
+    for (const field of textFields) {
+      if (changes[field] !== undefined) {
+        const oldImages = getImagesForQuestion(db, id).filter(im => im.field_name === field)
+        const newText = String(changes[field] ?? '')
+        for (const img of oldImages) {
+          if (!newText.includes(img.id)) {
+            deleteImageById(db, img.id, getStoragePaths().imageDir)
+          }
+        }
+      }
+    }
+    // Options field: extract img exam-image:// refs from old and new, clean up removed ones
+    if (changes.options !== undefined) {
+      const oldOptionImages = getImagesForQuestion(db, id).filter(im => im.field_name === 'options')
+      const newOptionsText = Array.isArray(changes.options) ? changes.options.join(' ') : String(changes.options ?? '')
+      for (const img of oldOptionImages) {
+        if (!newOptionsText.includes(img.id)) {
+          deleteImageById(db, img.id, getStoragePaths().imageDir)
+        }
+      }
+    }
     updateQuestion(db, id, changes)
   })
-  registerHandler(IPC.QUESTION_DELETE, async (id) => deleteQuestion(db, id as string))
+  registerHandler(IPC.QUESTION_DELETE, async (id) => {
+    const questionId = id as string
+    deleteImagesForQuestion(db, questionId, getStoragePaths().imageDir)
+    deleteQuestion(db, questionId)
+  })
   registerHandler(IPC.QUESTION_TOGGLE_FAVORITE, async (id) => ({ is_favorite: toggleFavorite(db, id as string) }))
   registerHandler(IPC.QUESTION_GET_STATS, async () => getQuestionStats(db))
+
+  // Question images
+  registerHandler(IPC.QUESTION_UPLOAD_IMAGE, async (args) => {
+    const { question_id, field_name, source_path } = args as {
+      question_id: string
+      field_name: 'content' | 'options' | 'explanation'
+      source_path: string
+    }
+    if (!existsSync(source_path)) {
+      throw new Error(`Source file not found: ${source_path}`)
+    }
+    const fileSize = getFileSize(source_path)
+    if (fileSize > 5 * 1024 * 1024) {
+      throw new Error('Image file size exceeds 5MB limit')
+    }
+    const imageId = randomUUID()
+    const mimeType = guessMimeType(source_path)
+    const originalName = basename(source_path)
+    const imageDir = getStoragePaths().imageDir
+    const fileName = copyImageToStorage(source_path, imageDir, imageId)
+    const image = insertImage(db, {
+      question_id,
+      field_name,
+      file_name: fileName,
+      original_name: originalName,
+      mime_type: mimeType,
+      file_size: fileSize,
+    })
+    return { imageId: image.id, url: `exam-image://${image.id}` }
+  })
+
+  registerHandler(IPC.QUESTION_DELETE_IMAGE, async (args) => {
+    const { id } = args as { id: string }
+    return deleteImageById(db, id, getStoragePaths().imageDir)
+  })
+
+  registerHandler(IPC.QUESTION_LIST_IMAGES, async (args) => {
+    const { question_id } = args as { question_id: string }
+    return getImagesForQuestion(db, question_id)
+  })
+
+  registerHandler(IPC.APP_PICK_IMAGE_FILE, async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Select Image File',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }],
+      properties: ['openFile'],
+    })
+    if (result.canceled || !result.filePaths.length) return null
+    return result.filePaths[0]
+  })
+
+  registerHandler(IPC.IMAGE_CLEANUP_ORPHANS, async () => {
+    const count = deleteOrphanedImages(db, getStoragePaths().imageDir)
+    return { count }
+  })
 
   // Phase 2 - Practice
   registerHandler(IPC.PRACTICE_START, async (args) => startPractice(db, args as Parameters<typeof startPractice>[1]))
@@ -2493,6 +2617,11 @@ function registerIpcHandlers(): void {
 
   registerHandler(IPC.CRAWLER_DELETE_RUN, async (id) => deleteCrawlerRun(db, id as string))
 
+  registerHandler(IPC.CRAWLER_UPDATE_RUN, async (args) => {
+    const { id, patch } = args as { id: string; patch: Parameters<typeof updateCrawlerRun>[2] }
+    updateCrawlerRun(db, id, patch)
+  })
+
   registerHandler(IPC.CRAWLER_TEST, async (args) => {
     const { rule, test_url, account_alias = null } = args as {
       rule: CrawlerRule
@@ -2710,10 +2839,12 @@ function registerIpcHandlers(): void {
   })
 
   registerHandler(IPC.CRAWLER_IMPORT_REVIEW_ITEMS, async (args) => {
-    const { ids, target_group_id = null, new_group = null } = args as {
+    const { ids, target_group_id = null, new_group = null, exam_year = null, exam_period = null } = args as {
       ids: string[]
       target_group_id?: string | null
       new_group?: QuestionGroupInput | null
+      exam_year?: number | null
+      exam_period?: string | null
     }
     const items = getCrawlerReviewItemsByIds(db, ids)
       .filter((item) => item.review_status === 'pending' || item.review_status === 'approved')
@@ -2721,22 +2852,107 @@ function registerIpcHandlers(): void {
     if (!fallbackGroupId) {
       throw Object.assign(new Error('请选择现有分组或新建分组后再确认入库'), { code: 'CRAWLER_IMPORT_GROUP_REQUIRED' })
     }
-    const questions = items.map((item) => ({
-      ...item.normalized_payload,
-      source_type: 'crawled',
-      group_id: fallbackGroupId,
-    })) as Parameters<typeof batchInsertQuestions>[1]
-    const saved = batchInsertQuestions(db, questions)
+
+    const imageDir = getStoragePaths().imageDir
+
+    // Separate items with and without image_refs
+    const itemsWithImages: typeof items = []
+    const questionsForBatch: Parameters<typeof batchInsertQuestions>[1] = []
+
+    for (const item of items) {
+      const payload = item.normalized_payload as NormalizedCrawlerPayload & { image_refs?: Array<{ src_url: string; alt?: string; local_path?: string | null; content_type?: string | null; file_size?: number }> }
+      const hasImages = payload.image_refs && payload.image_refs.length > 0 &&
+        payload.image_refs.some(ref => ref.local_path)
+
+      if (hasImages) {
+        itemsWithImages.push(item)
+      } else {
+        questionsForBatch.push({
+          ...payload,
+          source_type: 'crawled' as const,
+          group_id: fallbackGroupId,
+          ...(exam_year ? { exam_year } : {}),
+          ...(exam_period ? { exam_period } : {}),
+        })
+      }
+    }
+
+    // Insert items with images individually to track question IDs
+    const imageDir_ = imageDir
+    for (const item of itemsWithImages) {
+      const payload = item.normalized_payload as NormalizedCrawlerPayload & { image_refs?: Array<{ src_url: string; alt?: string; local_path?: string | null; content_type?: string | null; file_size?: number }> }
+      const question = insertQuestion(db, {
+        ...payload,
+        source_type: 'crawled' as const,
+        group_id: fallbackGroupId,
+        ...(exam_year ? { exam_year } : {}),
+        ...(exam_period ? { exam_period } : {}),
+      })
+
+      // Process image references
+      if (payload.image_refs) {
+        for (const ref of payload.image_refs) {
+          if (!ref.local_path || !existsSync(ref.local_path)) continue
+
+          try {
+            const imageId = randomUUID()
+            const mimeType = ref.content_type || guessMimeType(ref.src_url)
+            const originalName = ref.src_url.split('/').pop() || 'image.png'
+            const fileSize = ref.file_size || getFileSize(ref.local_path)
+            if (fileSize > 5 * 1024 * 1024) continue
+
+            const fileName = copyImageToStorage(ref.local_path, imageDir_, imageId)
+            insertImage(db, {
+              question_id: question.id,
+              field_name: 'content',
+              file_name: fileName,
+              original_name: originalName,
+              mime_type: mimeType,
+              file_size: fileSize,
+            })
+
+            // Replace the original src_url in content with exam-image:// reference
+            const imgTag = `<img src="exam-image://${imageId}" alt="${ref.alt || ''}" />`
+            const escapedUrl = ref.src_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            const oldImgPattern = new RegExp(`<img[^>]*src=["']${escapedUrl}["'][^>]*>`, 'gi')
+            if (oldImgPattern.test(question.content)) {
+              const newContent = question.content.replace(oldImgPattern, imgTag)
+              updateQuestion(db, question.id, { content: newContent })
+            } else {
+              // URL may appear as plain text or in different markup
+              if (question.content.includes(ref.src_url)) {
+                updateQuestion(db, question.id, {
+                  content: question.content.replace(ref.src_url, `exam-image://${imageId}`)
+                })
+              }
+            }
+          } catch (e) {
+            console.warn(`[CrawlerImport] Failed to process image ${ref.src_url}:`, e)
+          }
+        }
+      }
+    }
+
+    // Batch insert items without images
+    let batchCount = 0
+    if (questionsForBatch.length > 0) {
+      batchCount = batchInsertQuestions(db, questionsForBatch)
+    }
+
+    const totalSaved = itemsWithImages.length + batchCount
     updateCrawlerReviewStatus(db, items.map((item) => item.id), 'imported')
 
     const byRun = new Map<string, number>()
     for (const item of items) byRun.set(item.run_id, (byRun.get(item.run_id) ?? 0) + 1)
     for (const [runId, count] of byRun) {
       const run = db.prepare('SELECT total_saved FROM crawler_runs WHERE id=?').get(runId) as { total_saved: number } | undefined
-      updateCrawlerRun(db, runId, { total_saved: (run?.total_saved ?? 0) + count })
+      const patch: Parameters<typeof updateCrawlerRun>[2] = { total_saved: (run?.total_saved ?? 0) + count }
+      if (exam_year !== undefined && exam_year !== null) patch.exam_year = exam_year
+      if (exam_period !== undefined && exam_period !== null && exam_period !== '') patch.exam_period = exam_period
+      updateCrawlerRun(db, runId, patch)
     }
 
-    return { count: saved }
+    return { count: totalSaved }
   })
 
   // Phase 5 - Knowledge Graph (computed in main process from SQLite)
@@ -3061,6 +3277,16 @@ app.whenReady().then(async () => {
     taskManager = new TaskManager(db)
     taskManager.recoverOrphanedTasks()
     console.log('[App] Database ready')
+
+    // Register custom protocol for serving question images
+    protocol.handle('exam-image', (request) => {
+      const imageId = request.url.replace('exam-image://', '')
+      const image = getImageById(db, imageId)
+      if (!image) return new Response('Not Found', { status: 404 })
+      const filePath = join(getStoragePaths().imageDir, image.file_name)
+      return net.fetch(`file://${filePath}`)
+    })
+
     registerIpcHandlers()
 
     // Auto-backup: if no backup in last 24h, create one silently

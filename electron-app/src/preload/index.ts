@@ -26,6 +26,7 @@ const customAPI = {
 
   // Phase 1 — DB
   getDbStatus: () => invokeWithTimeout<{ ready: boolean; version: number }>('db:status'),
+  clearAllData: () => invokeWithTimeout<{ count: number }>('db:clearAll'),
 
   // Phase 1 — Tasks
   createTask: (args: { type: string; payload: unknown }) =>
@@ -77,6 +78,18 @@ const customAPI = {
     invokeWithTimeout<{ is_favorite: number }>('question:toggleFavorite', id),
   getQuestionStats: () =>
     invokeWithTimeout<Record<string, unknown>>('question:getStats'),
+
+  // Question images
+  pickImageFile: () =>
+    invokeWithTimeout<string | null>('app:pickImageFile'),
+  uploadQuestionImage: (args: { question_id: string; field_name: string; source_path: string }) =>
+    invokeWithTimeout<{ imageId: string; url: string }>('question:uploadImage', args),
+  deleteQuestionImage: (args: { id: string }) =>
+    invokeWithTimeout<boolean>('question:deleteImage', args),
+  listQuestionImages: (args: { question_id: string }) =>
+    invokeWithTimeout<unknown[]>('question:listImages', args),
+  cleanupOrphanImages: () =>
+    invokeWithTimeout<{ count: number }>('image:cleanupOrphans'),
 
   // Phase 2 — Practice
   startPractice: (config: unknown) =>
@@ -137,6 +150,8 @@ const customAPI = {
     invokeWithTimeout<{ taskId: string; runId: string }>('crawler:run', args),
   listCrawlerRuns: (ruleId: string) => invokeWithTimeout<unknown[]>('crawler:listRuns', ruleId),
   deleteCrawlerRun: (id: string) => invokeWithTimeout<void>('crawler:deleteRun', id),
+  updateCrawlerRun: (args: { id: string; patch: Record<string, unknown> }) =>
+    invokeWithTimeout<void>('crawler:updateRun', args),
   startCrawlerAuth: (args: { ruleId: string; account_alias?: string }) =>
     invokeWithTimeout<unknown>('crawler:authStart', args, 300_000),
   openCrawlerVisualConfig: (args: { ruleId: string; account_alias?: string }) =>

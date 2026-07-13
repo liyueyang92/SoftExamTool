@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 QuestionGroupType = Literal['custom', 'past_exam', 'ai_generated', 'crawled', 'manual_import']
 ExamPeriod = Literal['H1', 'H2']
@@ -14,16 +14,6 @@ class NewQuestionGroupModel(BaseModel):
     exam_year: int | None = None
     exam_period: ExamPeriod | None = None
     description: str = ''
-
-    @model_validator(mode='after')
-    def validate_past_exam_metadata(self):
-        if self.group_type == 'past_exam':
-            if self.exam_year is None or self.exam_period is None:
-                raise ValueError('past_exam 分组必须提供 exam_year 和 exam_period')
-        else:
-            self.exam_year = None
-            self.exam_period = None
-        return self
 
 
 class QuestionGroupModel(NewQuestionGroupModel):

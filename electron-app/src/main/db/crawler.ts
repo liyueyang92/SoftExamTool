@@ -35,6 +35,8 @@ export interface CrawlerRun {
   total_found: number
   total_saved: number
   target_group_id: string | null
+  exam_year: number | null
+  exam_period: string | null
   started_at: string
   ended_at: string | null
   error_code: string | null
@@ -215,6 +217,9 @@ export function updateCrawlerRun(
     error_code?: string
     error_stage?: string
     error_msg?: string
+    target_group_id?: string | null
+    exam_year?: number | null
+    exam_period?: string | null
   }
 ): void {
   const sets: string[] = []

@@ -427,4 +427,48 @@ CREATE INDEX IF NOT EXISTS idx_questions_set
   ON questions(question_set_id, question_set_order);
 `,
   },
+  {
+    version: 11,
+    sql: `
+CREATE TABLE IF NOT EXISTS question_images (
+  id            TEXT PRIMARY KEY,
+  question_id   TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  field_name    TEXT NOT NULL CHECK(field_name IN ('content','options','explanation')),
+  file_name     TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  mime_type     TEXT NOT NULL,
+  file_size     INTEGER NOT NULL DEFAULT 0,
+  width         INTEGER,
+  height        INTEGER,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_question_images_question
+  ON question_images(question_id, field_name);
+`,
+  },
+  {
+    version: 12,
+    sql: `
+ALTER TABLE questions ADD COLUMN exam_year INTEGER;
+ALTER TABLE questions ADD COLUMN exam_period TEXT CHECK(exam_period IS NULL OR exam_period IN ('H1','H2'));
+
+ALTER TABLE crawler_runs ADD COLUMN exam_year INTEGER;
+ALTER TABLE crawler_runs ADD COLUMN exam_period TEXT;
+
+UPDATE questions
+SET
+  exam_year = (SELECT g.exam_year FROM question_groups g WHERE g.id = questions.group_id),
+  exam_period = (SELECT g.exam_period FROM question_groups g WHERE g.id = questions.group_id)
+WHERE group_id IS NOT NULL;
+
+UPDATE crawler_runs
+SET
+  exam_year = (SELECT g.exam_year FROM question_groups g WHERE g.id = crawler_runs.target_group_id),
+  exam_period = (SELECT g.exam_period FROM question_groups g WHERE g.id = crawler_runs.target_group_id)
+WHERE target_group_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_questions_exam ON questions(exam_year, exam_period);
+`,
+  },
 ]

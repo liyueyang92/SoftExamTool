@@ -4,6 +4,7 @@ export const IPC = {
   PING: 'ping',
 
   DB_STATUS: 'db:status',
+  DB_CLEAR_ALL: 'db:clearAll',
 
   TASK_CREATE: 'task:create',
   TASK_GET: 'task:get',
@@ -15,6 +16,7 @@ export const IPC = {
   APP_GET_STORAGE_PATHS: 'app:getStoragePaths',
   APP_SET_STORAGE_PATHS: 'app:setStoragePaths',
   APP_PICK_DIRECTORY: 'app:pickDirectory',
+  APP_PICK_IMAGE_FILE: 'app:pickImageFile',
   APP_RELAUNCH: 'app:relaunch',
 
   QUESTION_QUERY: 'question:query',
@@ -30,6 +32,9 @@ export const IPC = {
   QUESTION_DELETE: 'question:delete',
   QUESTION_TOGGLE_FAVORITE: 'question:toggleFavorite',
   QUESTION_GET_STATS: 'question:getStats',
+  QUESTION_UPLOAD_IMAGE: 'question:uploadImage',
+  QUESTION_DELETE_IMAGE: 'question:deleteImage',
+  QUESTION_LIST_IMAGES: 'question:listImages',
 
   PRACTICE_START: 'practice:start',
   PRACTICE_SUBMIT_ANSWER: 'practice:submitAnswer',
@@ -56,6 +61,7 @@ export const IPC = {
   CRAWLER_RUN: 'crawler:run',
   CRAWLER_LIST_RUNS: 'crawler:listRuns',
   CRAWLER_DELETE_RUN: 'crawler:deleteRun',
+  CRAWLER_UPDATE_RUN: 'crawler:updateRun',
   CRAWLER_LIST_REVIEW_ITEMS: 'crawler:listReviewItems',
   CRAWLER_REJECT_REVIEW_ITEMS: 'crawler:rejectReviewItems',
   CRAWLER_IMPORT_REVIEW_ITEMS: 'crawler:importReviewItems',
@@ -111,4 +117,6 @@ export const IPC = {
   BACKUP_LIST: 'backup:list',
   BACKUP_RESTORE: 'backup:restore',
   BACKUP_DELETE: 'backup:delete',
+
+  IMAGE_CLEANUP_ORPHANS: 'image:cleanupOrphans',
 } as const

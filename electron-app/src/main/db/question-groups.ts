@@ -47,31 +47,33 @@ export function getQuestionGroup(db: Database, id: string): QuestionGroup | null
 
 export function upsertQuestionGroup(
   db: Database,
-  input: QuestionGroupInput & { id?: string }
+  input: QuestionGroupInput & { id?: string; skipNameDedup?: boolean }
 ): QuestionGroup {
   const now = new Date().toISOString()
   const groupType = input.group_type ?? 'custom'
   const description = input.description ?? ''
-  const examYear = groupType === 'past_exam' ? (input.exam_year ?? null) : null
-  const examPeriod = groupType === 'past_exam' ? (input.exam_period ?? null) : null
-
-  if (groupType === 'past_exam' && (!examYear || !examPeriod)) {
-    throw Object.assign(new Error('历年真题分组必须填写年份和上/下半年'), { code: 'QUESTION_GROUP_INVALID' })
-  }
+  const examYear = input.exam_year ?? null
+  const examPeriod = input.exam_period ?? null
+  const skipNameDedup = input.skipNameDedup === true
 
   // Name-based dedup: when no explicit id, reuse existing group with same name
-  let id = input.id ?? null
+  let id: string | null = input.id ?? null
   let isNew = !id
   if (!id) {
-    const existing = db.prepare(
-      'SELECT id FROM question_groups WHERE name = ?'
-    ).get(input.name) as { id: string } | undefined
-    if (existing) {
-      id = existing.id
-      isNew = false
-    } else {
+    if (skipNameDedup) {
       id = randomUUID()
       isNew = true
+    } else {
+      const existing = db.prepare(
+        'SELECT id FROM question_groups WHERE name = ?'
+      ).get(input.name) as { id: string } | undefined
+      if (existing) {
+        id = existing.id
+        isNew = false
+      } else {
+        id = randomUUID()
+        isNew = true
+      }
     }
   }
 

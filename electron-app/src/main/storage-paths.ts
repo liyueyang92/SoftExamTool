@@ -15,6 +15,7 @@ export interface ResolvedStoragePaths {
   databasePath: string
   databaseKeyPath: string
   documentLibraryDir: string
+  imageDir: string
   backupDir: string
 }
 
@@ -39,6 +40,7 @@ function hasDataArtifacts(rootDir: string): boolean {
     'app-settings.json',
     'db.key.enc',
     'documents',
+    'images',
     'backups',
   ]
   return entries.some((name) => existsSync(join(rootDir, name)))
@@ -112,6 +114,7 @@ export function resolveStoragePaths(configOverride?: StoragePathConfig): Resolve
   const defaultDataRootDir = resolve(app.getPath('userData'))
   const dataRootDir = normalizeDirectory(configOverride?.dataRootDir ?? storagePathConfig.dataRootDir) ?? defaultDataRootDir
   const documentLibraryDir = join(dataRootDir, 'documents')
+  const imageDir = join(dataRootDir, 'images')
 
   return {
     bootstrapConfigPath,
@@ -122,6 +125,7 @@ export function resolveStoragePaths(configOverride?: StoragePathConfig): Resolve
     databasePath: join(dataRootDir, 'app.db'),
     databaseKeyPath: join(dataRootDir, 'db.key.enc'),
     documentLibraryDir,
+    imageDir,
     backupDir: join(dataRootDir, 'backups'),
   }
 }
@@ -133,6 +137,7 @@ export function getStoragePaths(): ResolvedStoragePaths {
 export function ensureStorageDirectories(paths = getStoragePaths()): void {
   mkdirSync(paths.dataRootDir, { recursive: true })
   mkdirSync(paths.documentLibraryDir, { recursive: true })
+  mkdirSync(paths.imageDir, { recursive: true })
   mkdirSync(paths.backupDir, { recursive: true })
 }
 

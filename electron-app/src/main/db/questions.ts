@@ -37,6 +37,8 @@ export interface QuestionInput {
   difficulty?: number
   source_type?: Question['source_type']
   source_url?: string | null
+  exam_year?: number | null
+  exam_period?: ExamPeriod | null
 }
 
 export interface QueryFilter {
@@ -189,8 +191,8 @@ export function queryQuestions(db: Database.Database, filter: QueryFilter = {}):
 
   if (group_id) { conditions.push('q.group_id = ?'); params.push(group_id) }
   if (group_type) { conditions.push('g.group_type = ?'); params.push(group_type) }
-  if (exam_year) { conditions.push('g.exam_year = ?'); params.push(exam_year) }
-  if (exam_period) { conditions.push('g.exam_period = ?'); params.push(exam_period) }
+  if (exam_year) { conditions.push('q.exam_year = ?'); params.push(exam_year) }
+  if (exam_period) { conditions.push('q.exam_period = ?'); params.push(exam_period) }
   if (type) { conditions.push('q.type = ?'); params.push(type) }
   if (difficulty) { conditions.push('q.difficulty = ?'); params.push(difficulty) }
   if (source_type) { conditions.push('q.source_type = ?'); params.push(source_type) }
@@ -210,9 +212,7 @@ export function queryQuestions(db: Database.Database, filter: QueryFilter = {}):
     SELECT
       q.*,
       g.name AS group_name,
-      g.group_type AS group_type,
-      g.exam_year AS exam_year,
-      g.exam_period AS exam_period
+      g.group_type AS group_type
     FROM questions q
     LEFT JOIN question_groups g ON q.group_id = g.id
     ${where}
@@ -235,9 +235,7 @@ export function searchQuestions(db: Database.Database, q: string, limit = 30): Q
     SELECT
       q.*,
       g.name AS group_name,
-      g.group_type AS group_type,
-      g.exam_year AS exam_year,
-      g.exam_period AS exam_period
+      g.group_type AS group_type
     FROM questions q
     LEFT JOIN question_groups g ON q.group_id = g.id
     JOIN questions_fts fts ON q.rowid = fts.rowid
@@ -252,9 +250,7 @@ export function getQuestionSetMembers(db: Database.Database, questionSetId: stri
     SELECT
       q.*,
       g.name AS group_name,
-      g.group_type AS group_type,
-      g.exam_year AS exam_year,
-      g.exam_period AS exam_period
+      g.group_type AS group_type
     FROM questions q
     LEFT JOIN question_groups g ON q.group_id = g.id
     WHERE q.question_set_id = ?
@@ -293,8 +289,8 @@ export function insertQuestion(db: Database.Database, input: QuestionInput): Que
   const prepared = attachQuestionSets(db, [input])[0]
   db.prepare(`
     INSERT INTO questions
-      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, exam_year, exam_period, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     prepared.group_id ?? null,
@@ -309,15 +305,15 @@ export function insertQuestion(db: Database.Database, input: QuestionInput): Que
     prepared.difficulty ?? 3,
     prepared.source_type ?? 'manual',
     prepared.source_url ?? null,
+    prepared.exam_year ?? null,
+    prepared.exam_period ?? null,
     now
   )
   return db.prepare(`
     SELECT
       q.*,
       g.name AS group_name,
-      g.group_type AS group_type,
-      g.exam_year AS exam_year,
-      g.exam_period AS exam_period
+      g.group_type AS group_type
     FROM questions q
     LEFT JOIN question_groups g ON q.group_id = g.id
     WHERE q.id = ?
@@ -327,8 +323,8 @@ export function insertQuestion(db: Database.Database, input: QuestionInput): Que
 export function batchInsertQuestions(db: Database.Database, inputs: QuestionInput[]): number {
   const stmt = db.prepare(`
     INSERT INTO questions
-      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, exam_year, exam_period, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insert = db.transaction((items: QuestionInput[]) => {
     for (const input of attachQuestionSets(db, items)) {
@@ -346,6 +342,8 @@ export function batchInsertQuestions(db: Database.Database, inputs: QuestionInpu
         input.difficulty ?? 3,
         input.source_type ?? 'manual',
         input.source_url ?? null,
+        input.exam_year ?? null,
+        input.exam_period ?? null,
         new Date().toISOString()
       )
     }
@@ -369,6 +367,8 @@ export function updateQuestion(db: Database.Database, id: string, changes: Parti
   if (changes.difficulty !== undefined) { fields.push('difficulty = ?'); vals.push(changes.difficulty) }
   if (changes.source_type !== undefined) { fields.push('source_type = ?'); vals.push(changes.source_type) }
   if (changes.source_url !== undefined) { fields.push('source_url = ?'); vals.push(changes.source_url) }
+  if (changes.exam_year !== undefined) { fields.push('exam_year = ?'); vals.push(changes.exam_year ?? null) }
+  if (changes.exam_period !== undefined) { fields.push('exam_period = ?'); vals.push(changes.exam_period ?? null) }
   if (!fields.length) return
   vals.push(id)
   db.prepare(`UPDATE questions SET ${fields.join(', ')} WHERE id = ?`).run(...vals)
@@ -411,9 +411,7 @@ export function getWrongQuestions(db: Database.Database, limit = 50): Question[]
     SELECT
       q.*,
       g.name AS group_name,
-      g.group_type AS group_type,
-      g.exam_year AS exam_year,
-      g.exam_period AS exam_period
+      g.group_type AS group_type
     FROM questions q
     LEFT JOIN question_groups g ON q.group_id = g.id
     WHERE q.id IN (

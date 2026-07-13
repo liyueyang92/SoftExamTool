@@ -28,6 +28,7 @@ def normalize_item(item: RawItem) -> NormalizedItem:
         source_url=item.canonical_url or item.source_url,
         source_site=item.source_site,
         content_hash=content_hash,
+        image_refs=item.image_refs or [],
         raw=item.raw,
     )
 

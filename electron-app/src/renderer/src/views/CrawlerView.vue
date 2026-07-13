@@ -51,12 +51,20 @@ const questionTypeConfig = ref<QuestionTypeConfig>('')
 
 const groupMode = ref<'existing' | 'new'>('existing')
 const targetGroupId = ref('')
-const existingExamYear = ref<number | ''>('')
-const existingExamPeriod = ref<'H1' | 'H2' | ''>('')
 const newGroupName = ref('')
 const newGroupType = ref<'crawled' | 'past_exam' | 'custom'>('crawled')
-const newGroupYear = ref<number | null>(null)
-const newGroupPeriod = ref<'H1' | 'H2'>('H1')
+const importExamYear = ref<number | null>(null)
+const importExamPeriod = ref<'H1' | 'H2' | ''>('')
+
+// Run history group editing
+const editingRunId = ref<string | null>(null)
+const editRunGroupMode = ref<'existing' | 'new'>('existing')
+const editRunTargetGroupId = ref('')
+const editRunNewName = ref('')
+const editRunNewType = ref<'crawled' | 'past_exam' | 'custom'>('crawled')
+const editRunExamYear = ref<number | null>(null)
+const editRunExamPeriod = ref<'H1' | 'H2' | ''>('')
+const editRunSaving = ref(false)
 
 const selectedReviewIds = ref<string[]>([])
 const reviewSelectionMode = ref(false)
@@ -77,14 +85,6 @@ const selectedSessions = computed(() => {
 })
 const pendingCount = computed(() => store.reviewItems.length)
 const existingImportGroups = computed(() => questionStore.groups)
-const existingPastExamYears = computed(() => {
-  const currentYear = new Date().getFullYear()
-  const years: number[] = []
-  for (let y = currentYear; y > currentYear - 5; y--) {
-    years.push(y)
-  }
-  return years
-})
 const selectedReviewCount = computed(() => selectedReviewIds.value.length)
 const allReviewsSelected = computed(() =>
   Boolean(store.reviewItems.length) && selectedReviewIds.value.length === store.reviewItems.length
@@ -104,7 +104,6 @@ const runStageOptions = computed(() => {
 const importGroupReady = computed(() => {
   if (groupMode.value === 'existing') return Boolean(targetGroupId.value)
   if (!newGroupName.value.trim()) return false
-  if (newGroupType.value === 'past_exam') return Boolean(newGroupYear.value && newGroupPeriod.value)
   return true
 })
 
@@ -436,25 +435,76 @@ async function doTest() {
   }
 }
 
-function importGroupPayload(): { target_group_id?: string | null; new_group?: NewCrawlerTargetGroup | null } {
-  if (groupMode.value === 'existing') return { target_group_id: targetGroupId.value || null, new_group: null }
+function importGroupPayload(): { target_group_id?: string | null; new_group?: NewCrawlerTargetGroup | null; exam_year?: number | null; exam_period?: string | null } {
+  const exam_year = importExamYear.value || null
+  const exam_period = importExamPeriod.value || null
+  if (groupMode.value === 'existing') return { target_group_id: targetGroupId.value || null, new_group: null, exam_year, exam_period }
   if (groupMode.value === 'new' && newGroupName.value.trim()) {
     return {
       target_group_id: null,
       new_group: {
         name: newGroupName.value.trim(),
         group_type: newGroupType.value,
-        exam_year: newGroupType.value === 'past_exam' ? newGroupYear.value : null,
-        exam_period: newGroupType.value === 'past_exam' ? newGroupPeriod.value : null,
       },
+      exam_year,
+      exam_period,
     }
   }
-  return { target_group_id: null, new_group: null }
+  return { target_group_id: null, new_group: null, exam_year, exam_period }
 }
 
-function groupOptionLabel(group: { name: string; group_type: string; exam_year: number | null; exam_period: string | null }) {
-  if (group.group_type !== 'past_exam' || !group.exam_year) return group.name
-  return `${group.name}`
+function groupOptionLabel(group: { name: string; group_type: string; exam_year?: number | null; exam_period?: string | null }) {
+  return group.name
+}
+
+function runGroupLabel(run: typeof store.runs[number]): string {
+  if (!run.target_group_id) return '未指定分组'
+  const g = questionStore.groups.find((x) => x.id === run.target_group_id)
+  if (!g) return '已删除的分组'
+  if (run.exam_year) {
+    return `${g.name} (${run.exam_year} ${run.exam_period === 'H1' ? '上' : '下'})`
+  }
+  return g.name
+}
+
+function startEditRun(run: typeof store.runs[number]) {
+  editingRunId.value = run.id
+  editRunGroupMode.value = 'existing'
+  editRunTargetGroupId.value = run.target_group_id || ''
+  editRunNewName.value = ''
+  editRunNewType.value = 'crawled'
+  editRunExamYear.value = run.exam_year ?? null
+  editRunExamPeriod.value = (run.exam_period as 'H1' | 'H2' | '') || ''
+}
+
+function cancelEditRun() {
+  editingRunId.value = null
+}
+
+async function saveEditRun(run: typeof store.runs[number]) {
+  editRunSaving.value = true
+  try {
+    let groupId: string | null = null
+    if (editRunGroupMode.value === 'existing') {
+      groupId = editRunTargetGroupId.value || null
+    } else if (editRunNewName.value.trim()) {
+      const g = await questionStore.saveGroup({
+        name: editRunNewName.value.trim(),
+        group_type: editRunNewType.value,
+        skipNameDedup: true,
+      } as any)
+      groupId = g.id
+    }
+    await store.updateRun(run.id, {
+      target_group_id: groupId,
+      exam_year: editRunExamYear.value || null,
+      exam_period: editRunExamPeriod.value || null,
+    })
+    editingRunId.value = null
+    if (run.rule_id) await store.fetchRuns(run.rule_id)
+  } finally {
+    editRunSaving.value = false
+  }
 }
 
 async function runCrawl(ruleId: string) {
@@ -524,7 +574,7 @@ async function importSelected() {
   if (!importGroupReady.value) {
     reviewError.value = groupMode.value === 'existing'
       ? '请先选择入库分组'
-      : '请填写新分组名称；历年真题还需要年份和上/下半年'
+      : '请填写新分组名称'
     return
   }
   try {
@@ -754,16 +804,53 @@ function reviewOptionsSummary(payload: ReviewPayload) {
             </div>
             <div v-if="!store.runs.length" class="empty">暂无运行记录</div>
             <div v-else class="runs">
-              <div v-for="run in filteredRuns" :key="run.id" class="run-row">
-                <span class="badge" :class="statusClass(run.status)">{{ run.status }}</span>
-                <span>抓取 {{ run.total_found }}</span>
-                <span>已入库 {{ run.total_saved }}</span>
-                <span>{{ formatDate(run.started_at) }}</span>
-                <small v-if="run.error_msg">{{ run.error_stage || 'unknown' }} · {{ run.error_code || 'CRAWLER_ERROR' }} · {{ run.error_msg }}</small>
-                <div class="run-actions">
-                  <button v-if="run.status === 'failed'" class="btn mini-btn" @click="retryRun(selectedRule.id)">重试</button>
-                  <button class="btn mini-btn danger" :disabled="run.status === 'running'" @click="deleteRun(run.id)">删除</button>
-                </div>
+              <div v-for="run in filteredRuns" :key="run.id" class="run-row" :class="{ editing: editingRunId === run.id }">
+                <template v-if="editingRunId === run.id">
+                  <div class="run-edit-form">
+                    <div class="segmented" style="margin-bottom:6px">
+                      <button :class="{ active: editRunGroupMode === 'existing' }" @click="editRunGroupMode = 'existing'">现有分组</button>
+                      <button :class="{ active: editRunGroupMode === 'new' }" @click="editRunGroupMode = 'new'">新建分组</button>
+                    </div>
+                    <select v-if="editRunGroupMode === 'existing'" v-model="editRunTargetGroupId" class="input" style="width:100%">
+                      <option value="">未指定分组</option>
+                      <option v-for="g in questionStore.groups" :key="g.id" :value="g.id">{{ groupOptionLabel(g) }}</option>
+                    </select>
+                    <template v-if="editRunGroupMode === 'new'">
+                      <input v-model="editRunNewName" class="input" placeholder="分组名称" style="width:100%;margin-bottom:4px" />
+                      <select v-model="editRunNewType" class="input" style="width:100%">
+                        <option value="crawled">爬虫导入</option>
+                        <option value="past_exam">历年真题</option>
+                        <option value="custom">自定义</option>
+                      </select>
+                    </template>
+                    <div class="exam-row" style="display:flex;gap:6px;margin-top:4px;align-items:center">
+                      <span style="font-size:11px;color:var(--c-text-2);white-space:nowrap">真题年份 · 期次（可选）</span>
+                      <input v-model.number="editRunExamYear" class="input" type="number" placeholder="年份" style="width:80px" min="2000" max="2100" />
+                      <select v-model="editRunExamPeriod" class="input" style="width:90px">
+                        <option value="">不限</option>
+                        <option value="H1">上半年</option>
+                        <option value="H2">下半年</option>
+                      </select>
+                    </div>
+                    <div style="display:flex;gap:4px;margin-top:6px">
+                      <button class="btn mini-btn primary" :disabled="editRunSaving" @click="saveEditRun(run)">{{ editRunSaving ? '保存中…' : '保存' }}</button>
+                      <button class="btn mini-btn" @click="cancelEditRun">取消</button>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <span class="badge" :class="statusClass(run.status)">{{ run.status }}</span>
+                  <span>抓取 {{ run.total_found }}</span>
+                  <span>已入库 {{ run.total_saved }}</span>
+                  <span class="run-group-label">{{ runGroupLabel(run) }}</span>
+                  <span>{{ formatDate(run.started_at) }}</span>
+                  <small v-if="run.error_msg">{{ run.error_stage || 'unknown' }} · {{ run.error_code || 'CRAWLER_ERROR' }} · {{ run.error_msg }}</small>
+                  <div class="run-actions">
+                    <button class="btn mini-btn" title="修改分组" @click="startEditRun(run)">✎</button>
+                    <button v-if="run.status === 'failed'" class="btn mini-btn" @click="retryRun(selectedRule.id)">重试</button>
+                    <button class="btn mini-btn danger" :disabled="run.status === 'running'" @click="deleteRun(run.id)">删除</button>
+                  </div>
+                </template>
               </div>
               <div v-if="store.runs.length && !filteredRuns.length" class="empty">当前阶段没有运行记录</div>
             </div>
@@ -803,15 +890,6 @@ function reviewOptionsSummary(payload: ReviewPayload) {
             <option value="">选择分组</option>
             <option v-for="g in existingImportGroups" :key="g.id" :value="g.id">{{ groupOptionLabel(g) }}</option>
           </select>
-          <select v-model="existingExamYear" class="input">
-            <option value="">全部真题年份</option>
-            <option v-for="year in existingPastExamYears" :key="year" :value="year">{{ year }}</option>
-          </select>
-          <select v-model="existingExamPeriod" class="input">
-            <option value="">全部期次</option>
-            <option value="H1">上半年</option>
-            <option value="H2">下半年</option>
-          </select>
         </div>
         <div v-if="groupMode === 'new'" class="group-grid">
           <input v-model="newGroupName" class="input" placeholder="分组名称" />
@@ -820,8 +898,12 @@ function reviewOptionsSummary(payload: ReviewPayload) {
             <option value="past_exam">历年真题</option>
             <option value="custom">自定义</option>
           </select>
-          <input v-if="newGroupType === 'past_exam'" v-model.number="newGroupYear" class="input" type="number" placeholder="年份" />
-          <select v-if="newGroupType === 'past_exam'" v-model="newGroupPeriod" class="input">
+        </div>
+        <div class="exam-row" style="display:flex;gap:6px;margin-top:6px;align-items:center">
+          <span style="font-size:11px;color:var(--c-text-2);white-space:nowrap">真题年份 · 期次（可选）</span>
+          <input v-model.number="importExamYear" class="input" type="number" placeholder="年份" style="width:80px" min="2000" max="2100" />
+          <select v-model="importExamPeriod" class="input" style="width:90px">
+            <option value="">不限</option>
             <option value="H1">上半年</option>
             <option value="H2">下半年</option>
           </select>
@@ -862,9 +944,11 @@ function reviewOptionsSummary(payload: ReviewPayload) {
               <span class="type-pill">{{ questionTypeLabel(item.normalized_payload.type) }}</span>
               <strong>{{ item.normalized_payload.title || item.normalized_payload.content.slice(0, 42) }}</strong>
             </div>
-            <p>{{ item.normalized_payload.content }}</p>
+            <p v-html="item.normalized_payload.content"></p>
             <p v-if="reviewOptionsSummary(item.normalized_payload)" class="review-extra">
-              {{ reviewOptionsSummary(item.normalized_payload) }}
+              <span v-for="(opt, i) in (item.normalized_payload.options || [])" :key="i">
+                <span v-html="opt"></span><br v-if="i < (item.normalized_payload.options || []).length - 1" />
+              </span>
             </p>
             <p v-if="item.normalized_payload.answer" class="review-extra">
               答案：{{ item.normalized_payload.answer }}
@@ -1064,8 +1148,11 @@ function reviewOptionsSummary(payload: ReviewPayload) {
 .existing-group-grid .wide-select { min-width: 0; }
 .input { width: 100%; border: 1px solid var(--c-input-border); background: var(--c-input); color: var(--c-text); border-radius: 6px; padding: 7px 9px; min-height: 34px; }
 .runs, .review-list { display: flex; flex-direction: column; gap: 8px; }
-.run-row { display: grid; grid-template-columns: 72px 72px 86px 112px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.run-row { display: grid; grid-template-columns: 72px 72px 86px 130px 112px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.run-row.editing { grid-template-columns: 1fr; padding: 12px; }
 .run-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-group-label { color: var(--c-brand); font-size: 11px; }
+.run-edit-form { display: flex; flex-direction: column; gap: 4px; max-width: 400px; }
 .run-actions { display: flex; justify-content: flex-end; gap: 6px; white-space: nowrap; }
 .mini-btn { height: 26px; padding: 0 8px; font-size: 12px; }
 .mini-btn.danger { color: #dc2626; border-color: #fecaca; }

@@ -48,6 +48,7 @@ declare global {
       getPythonStatus: () => Promise<IpcResponse<{ ready: boolean }>>
 
       getDbStatus: () => Promise<IpcResponse<{ ready: boolean; version: number }>>
+      clearAllData: () => Promise<IpcResponse<{ count: number }>>
 
       createTask: (args: { type: string; payload: unknown }) => Promise<IpcResponse<{ id: string }>>
       getTask: (id: string) => Promise<IpcResponse<Task | null>>
@@ -74,6 +75,12 @@ declare global {
       deleteQuestion: (id: string) => Promise<IpcResponse<void>>
       toggleFavorite: (id: string) => Promise<IpcResponse<{ is_favorite: number }>>
       getQuestionStats: () => Promise<IpcResponse<Record<string, unknown>>>
+
+      pickImageFile: () => Promise<IpcResponse<string | null>>
+      uploadQuestionImage: (args: { question_id: string; field_name: string; source_path: string }) => Promise<IpcResponse<{ imageId: string; url: string }>>
+      deleteQuestionImage: (args: { id: string }) => Promise<IpcResponse<boolean>>
+      listQuestionImages: (args: { question_id: string }) => Promise<IpcResponse<unknown[]>>
+      cleanupOrphanImages: () => Promise<IpcResponse<{ count: number }>>
 
       startPractice: (config: unknown) => Promise<IpcResponse<{ sessionId: string; questions: unknown[] }>>
       submitAnswer: (args: { sessionId: string; questionId: string; chosen: string; timeMs: number }) => Promise<IpcResponse<{ isCorrect: boolean; answer: string | null; explanation: string | null; nextIndex: number }>>
@@ -105,6 +112,7 @@ declare global {
       runCrawl: (args: { ruleId: string; account_alias?: string | null }) => Promise<IpcResponse<{ taskId: string; runId: string }>>
       listCrawlerRuns: (ruleId: string) => Promise<IpcResponse<unknown[]>>
       deleteCrawlerRun: (id: string) => Promise<IpcResponse<void>>
+      updateCrawlerRun: (args: { id: string; patch: Record<string, unknown> }) => Promise<IpcResponse<void>>
       startCrawlerAuth: (args: { ruleId: string; account_alias?: string }) => Promise<IpcResponse<{
         id: string
         site_id: string

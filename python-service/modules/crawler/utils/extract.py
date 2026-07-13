@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 from modules.crawler.schemas import CrawlRuleModel, RawItem
 from modules.crawler.utils.selectors import attr_from, list_from, text_from
+from modules.crawler.utils.image_downloader import extract_image_refs, rich_text_from
 
 
 def extract_raw_item(
@@ -15,12 +16,33 @@ def extract_raw_item(
     detail_link_selector: str | None = None,
     adapter: str,
 ) -> RawItem | None:
-    content = text_from(item, fields.get('content') or rule.question_field)
+    content = rich_text_from(item, fields.get('content') or rule.question_field)
     if not content:
         return None
+
+    # Extract plain text for fallback type detection
+    content_plain = text_from(item, fields.get('content') or rule.question_field)
+
     options = list_from(item, fields.get('options') or rule.options_field)
     if not options:
         options = _fallback_options(item)
+
+    # Also try rich text for options
+    options_rich: list[str] = []
+    options_selector = fields.get('options') or rule.options_field
+    if options_selector:
+        try:
+            opt_nodes = item.select(options_selector)
+            options_rich = [rich_text_from(node, None) for node in opt_nodes] if opt_nodes else []
+            # Merge: prefer rich versions when available
+            if options_rich and len(options_rich) == len(options):
+                options = options_rich
+        except Exception:
+            pass
+
+    # Collect image references from the item element
+    image_refs = extract_image_refs(item, url)
+
     detail_href = attr_from(item, detail_link_selector, 'href') if detail_link_selector else ''
     source_url = urljoin(url, detail_href) if detail_href else url
     canonical_href = attr_from(item, fields.get('canonical_url'), 'href') if fields.get('canonical_url') else ''
@@ -34,6 +56,7 @@ def extract_raw_item(
         source_url=source_url,
         source_site=rule.site_name,
         canonical_url=urljoin(url, canonical_href) if canonical_href else None,
+        image_refs=image_refs,
         raw={'adapter': adapter},
     )
 

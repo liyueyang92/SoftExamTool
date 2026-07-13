@@ -9,8 +9,6 @@ export type ExamPeriod = 'H1' | 'H2'
 export interface NewQuestionGroupInput {
   name: string
   group_type?: QuestionGroupType
-  exam_year?: number | null
-  exam_period?: ExamPeriod | null
   description?: string
 }
 

@@ -135,9 +135,6 @@ const aiGroupMode = ref<'none' | 'existing' | 'new'>('none')
 const aiTargetGroupId = ref('')
 const aiNewGroupName = ref('')
 const aiNewGroupType = ref<'ai_generated' | 'past_exam' | 'custom'>('ai_generated')
-const aiNewGroupYear = ref<number | null>(null)
-const aiNewGroupPeriod = ref<'H1' | 'H2'>('H1')
-
 // Grade tab
 const gradeQ = ref('')
 const gradeRef = ref('')
@@ -171,8 +168,6 @@ async function doGenerate() {
       params.new_group = {
         name: aiNewGroupName.value.trim(),
         group_type: aiNewGroupType.value,
-        exam_year: aiNewGroupType.value === 'past_exam' ? aiNewGroupYear.value : null,
-        exam_period: aiNewGroupType.value === 'past_exam' ? aiNewGroupPeriod.value : null,
       }
     } else {
       params.target_group_id = null
@@ -193,8 +188,6 @@ async function saveGenerated() {
         ? {
             name: aiNewGroupName.value.trim(),
             group_type: aiNewGroupType.value,
-            exam_year: aiNewGroupType.value === 'past_exam' ? aiNewGroupYear.value : null,
-            exam_period: aiNewGroupType.value === 'past_exam' ? aiNewGroupPeriod.value : null,
           }
         : null,
     })
@@ -297,14 +290,6 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
                 <option value="ai_generated">AI 出题</option>
                 <option value="past_exam">历年真题</option>
                 <option value="custom">自定义</option>
-              </select>
-            </div>
-            <div v-if="aiNewGroupType === 'past_exam'" class="form-group" style="width:100%">
-              <label>真题期次</label>
-              <input v-model.number="aiNewGroupYear" type="number" class="num-input" min="2000" max="2100" placeholder="年份" />
-              <select v-model="aiNewGroupPeriod" class="select-sm">
-                <option value="H1">上半年</option>
-                <option value="H2">下半年</option>
               </select>
             </div>
           </div>

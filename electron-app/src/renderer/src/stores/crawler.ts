@@ -34,6 +34,8 @@ export interface CrawlerRun {
   total_found: number
   total_saved: number
   target_group_id: string | null
+  exam_year: number | null
+  exam_period: string | null
   started_at: string
   ended_at: string | null
   error_code: string | null
@@ -95,8 +97,6 @@ export interface CrawlerAuthStartResult extends CrawlerSession {
 export interface NewCrawlerTargetGroup {
   name: string
   group_type?: 'custom' | 'past_exam' | 'ai_generated' | 'crawled' | 'manual_import'
-  exam_year?: number | null
-  exam_period?: 'H1' | 'H2' | null
   description?: string
 }
 
@@ -210,6 +210,13 @@ export const useCrawlerStore = defineStore('crawler', () => {
     reviewItems.value = reviewItems.value.filter((item) => item.run_id !== id)
   }
 
+  async function updateRun(id: string, patch: Record<string, unknown>) {
+    const res = await window.electronAPI.updateCrawlerRun(toIpcPayload({ id, patch }))
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    const idx = runs.value.findIndex((r) => r.id === id)
+    if (idx >= 0) runs.value[idx] = { ...runs.value[idx], ...patch }
+  }
+
   async function startAuth(ruleId: string, accountAlias: string) {
     const res = await window.electronAPI.startCrawlerAuth(toIpcPayload({ ruleId, account_alias: accountAlias }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
@@ -312,7 +319,7 @@ export const useCrawlerStore = defineStore('crawler', () => {
     run,
     fetchRuns,
     removeRun,
-    startAuth,
+    updateRun,    startAuth,
     openVisualConfig,
     fetchSessions,
     validateSession,

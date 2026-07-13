@@ -7,6 +7,7 @@ import {
   type QuestionGroup,
   type QuestionGroupDraft,
 } from '../stores/question'
+import ImageInsert from '../components/ImageInsert.vue'
 
 const store = useQuestionStore()
 
@@ -33,7 +34,10 @@ const saving = ref(false)
 const importLoading = ref(false)
 const importGroupMode = ref<'none' | 'existing' | 'new'>('none')
 const importTargetGroupId = ref('')
-const importNewGroup = ref<QuestionGroupDraft>({ name: '', group_type: 'manual_import', exam_year: null, exam_period: null, description: '' })
+const importNewGroup = ref<QuestionGroupDraft>({ name: '', group_type: 'manual_import', description: '' })
+
+// Pending images for new questions (not yet saved)
+const pendingImages = ref<Array<{ field_name: string; source_path: string }>>([])
 
 const typeLabels: Record<string, string> = { single: '单选', multiple: '多选', case: '案例', essay: '论文' }
 const diffLabel = (d: number) => ['', '★☆☆☆☆', '★★☆☆☆', '★★★☆☆', '★★★★☆', '★★★★★'][d] ?? d
@@ -108,7 +112,34 @@ async function saveQuestion() {
     if (editTarget.value.id) {
       await store.update(editTarget.value.id, editTarget.value)
     } else {
-      await store.insert(editTarget.value as QuestionDraft)
+      const saved = await store.insert(editTarget.value as QuestionDraft)
+      if (saved && pendingImages.value.length > 0) {
+        // Process pending images for newly created question
+        const questionId = saved.id
+        for (const pending of pendingImages.value) {
+          try {
+            const result = await window.electronAPI.uploadQuestionImage({
+              question_id: questionId,
+              field_name: pending.field_name as 'content' | 'options' | 'explanation',
+              source_path: pending.source_path,
+            })
+            const imgTag = `<img src="exam-image://${result.imageId}" alt="" />`
+            // Replace placeholder in the corresponding field
+            const placeholder = `<!-- pending-image:${pending.source_path} -->`
+            if (pending.field_name === 'content') {
+              editTarget.value.content = (editTarget.value.content || '').replace(placeholder, imgTag)
+            } else if (pending.field_name === 'explanation') {
+              editTarget.value.explanation = (editTarget.value.explanation || '').replace(placeholder, imgTag)
+            }
+          } catch (e) {
+            console.error('[saveQuestion] pending image upload failed:', e)
+          }
+        }
+        // Update question with actual image references
+        await store.update(questionId, editTarget.value)
+        pendingImages.value = []
+      }
+      if (saved) editTarget.value.id = saved.id
     }
     showEdit.value = false
   } finally {
@@ -116,8 +147,27 @@ async function saveQuestion() {
   }
 }
 
+function onInsertToField(field: 'content' | 'options' | 'explanation', html: string) {
+  if (!editTarget.value) return
+  if (html.startsWith('<!-- pending-image:')) {
+    const sourcePath = html.slice('<!-- pending-image:'.length, -4)
+    pendingImages.value.push({ field_name: field, source_path: sourcePath })
+  }
+  if (field === 'content') {
+    editTarget.value.content = (editTarget.value.content || '') + html
+  } else if (field === 'explanation') {
+    editTarget.value.explanation = (editTarget.value.explanation || '') + html
+  }
+}
+
+function stripHtml(html: string): string {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  return div.textContent || div.innerText || ''
+}
+
 function openNewGroup() {
-  groupEdit.value = { name: '', group_type: 'custom', exam_year: null, exam_period: null, description: '' }
+  groupEdit.value = { name: '', group_type: 'custom', description: '' }
   showGroupEdit.value = true
 }
 
@@ -356,7 +406,7 @@ function setLabel(q: Question): string {
             <td><span class="type-badge" :class="q.type">{{ typeLabels[q.type] }}</span></td>
             <td class="content-cell">
               <span v-if="setLabel(q)" class="set-badge">{{ setLabel(q) }}</span>
-              {{ q.content.slice(0, 80) }}{{ q.content.length > 80 ? '…' : '' }}
+              {{ stripHtml(q.content).slice(0, 80) }}{{ stripHtml(q.content).length > 80 ? '…' : '' }}
             </td>
             <td>
               <div>{{ q.group_name || '未分组' }}</div>
@@ -412,13 +462,17 @@ function setLabel(q: Question): string {
 
           <div class="form-row col">
             <label>题目内容 *</label>
-            <textarea v-model="editTarget.content" class="textarea" rows="4" placeholder="题目正文…"></textarea>
+            <div class="field-with-image">
+              <textarea v-model="editTarget.content" class="textarea flex-1" rows="4" placeholder="题目正文…"></textarea>
+              <ImageInsert :question-id="editTarget?.id || null" field-name="content" @insert="(html) => onInsertToField('content', html)" />
+            </div>
           </div>
 
           <div v-if="editTarget.type === 'single' || editTarget.type === 'multiple'" class="form-row col">
             <label>选项</label>
             <div v-for="(_opt, i) in editTarget.options" :key="i" class="option-row">
               <input v-model="editTarget.options![i]" class="input-sm" placeholder="选项内容" />
+              <ImageInsert :question-id="editTarget?.id || null" field-name="options" @insert="(html) => { if (editTarget?.options) editTarget.options[i] = (editTarget.options[i] || '') + html }" />
               <button class="icon-btn danger" @click="removeOption(i)">✕</button>
             </div>
             <button class="btn-sm" @click="addOption" style="margin-top:4px">+ 添加选项</button>
@@ -431,7 +485,10 @@ function setLabel(q: Question): string {
 
           <div class="form-row col">
             <label>解析</label>
-            <textarea v-model="editTarget.explanation" class="textarea" rows="3" placeholder="答题解析（可选）"></textarea>
+            <div class="field-with-image">
+              <textarea v-model="editTarget.explanation" class="textarea flex-1" rows="3" placeholder="答题解析（可选）"></textarea>
+              <ImageInsert :question-id="editTarget?.id || null" field-name="explanation" @insert="(html) => onInsertToField('explanation', html)" />
+            </div>
           </div>
 
           <div class="form-row col">
@@ -471,15 +528,6 @@ function setLabel(q: Question): string {
               <option value="ai_generated">AI 出题</option>
               <option value="crawled">爬虫导入</option>
               <option value="manual_import">批量导入</option>
-            </select>
-          </div>
-          <div v-if="groupEdit.group_type === 'past_exam'" class="form-row">
-            <label>年份</label>
-            <input v-model.number="groupEdit.exam_year" type="number" min="2000" max="2100" class="input-sm" style="width:120px" />
-            <label>期次</label>
-            <select v-model="groupEdit.exam_period" class="select-sm">
-              <option value="H1">上半年</option>
-              <option value="H2">下半年</option>
             </select>
           </div>
         </div>
@@ -590,13 +638,6 @@ function setLabel(q: Question): string {
               </select>
             </div>
             <div v-if="importNewGroup.group_type === 'past_exam'" class="form-row">
-              <label>年份</label>
-              <input v-model.number="importNewGroup.exam_year" type="number" min="2000" max="2100" class="input-sm" style="width:120px" />
-              <label>期次</label>
-              <select v-model="importNewGroup.exam_period" class="select-sm">
-                <option value="H1">上半年</option>
-                <option value="H2">下半年</option>
-              </select>
             </div>
           </div>
           <textarea v-model="importText" class="textarea" rows="10" placeholder='[{"type":"single","content":"…"}]'></textarea>
@@ -697,4 +738,7 @@ function setLabel(q: Question): string {
 .danger-btn { color: #f87171 !important; border-color: #f87171 !important; }
 .danger-btn:hover:not(:disabled) { background: #3b1010 !important; }
 .danger-btn:disabled { opacity: 0.35; cursor: not-allowed; color: var(--c-text-2) !important; border-color: var(--c-border-2) !important; }
+
+.field-with-image { display: flex; gap: 6px; align-items: flex-start; }
+.flex-1 { flex: 1; }
 </style>

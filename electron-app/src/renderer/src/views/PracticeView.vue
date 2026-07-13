@@ -163,14 +163,14 @@ function toggleMultiple(letter: string) {
             </span>
             <span v-for="i in store.currentQuestion.difficulty" :key="i" class="diff-stars">★</span>
           </div>
-          <div class="q-content">{{ store.currentQuestion.content }}</div>
+          <div class="q-content" v-html="store.currentQuestion.content"></div>
 
           <div v-if="store.currentQuestion.type === 'single'" class="options">
             <div v-for="(opt, i) in store.currentQuestion.options ?? []" :key="i"
                  class="option" :class="{ selected: chosenAnswer === optionLetters[i] }"
                  @click="chosenAnswer = optionLetters[i]">
               <span class="opt-letter">{{ optionLetters[i] }}</span>
-              <span>{{ opt.replace(/^[A-F]\.\s*/, '') }}</span>
+              <span v-html="opt.replace(/^[A-F]\.\s*/, '')"></span>
             </div>
           </div>
 
@@ -179,7 +179,7 @@ function toggleMultiple(letter: string) {
                  class="option" :class="{ selected: isMultipleSelected(optionLetters[i]) }"
                  @click="toggleMultiple(optionLetters[i])">
               <span class="opt-letter multi" :class="{ checked: isMultipleSelected(optionLetters[i]) }">{{ optionLetters[i] }}</span>
-              <span>{{ opt.replace(/^[A-F]\.\s*/, '') }}</span>
+              <span v-html="opt.replace(/^[A-F]\.\s*/, '')"></span>
             </div>
           </div>
 
@@ -214,7 +214,7 @@ function toggleMultiple(letter: string) {
           </div>
           <div v-if="store.lastAnswer.explanation" class="explanation">
             <div class="exp-label">解析</div>
-            <div class="exp-text">{{ store.lastAnswer.explanation }}</div>
+            <div class="exp-text" v-html="store.lastAnswer.explanation"></div>
           </div>
           <button class="btn-primary next-btn" @click="next">
             {{ store.isFinished ? '查看结果 →' : '下一题 →' }}
@@ -322,4 +322,13 @@ function toggleMultiple(letter: string) {
 .btn-outline { background: none; border: 1px solid var(--c-border-2); border-radius: 8px; color: var(--c-text-2); padding: 8px 20px; font-size: 14px; cursor: pointer; }
 .btn-outline:hover { border-color: var(--c-text-2); color: var(--c-text); }
 .error-text { color: #f87171; font-size: 13px; }
+
+.q-content :deep(img),
+.exp-text :deep(img),
+.option :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 4px 0;
+}
 </style>

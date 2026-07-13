@@ -58,6 +58,14 @@ class CrawlRuleModel(LegacySelectorRule):
         }
 
 
+class ImageRef(BaseModel):
+    src_url: str
+    alt: str = ''
+    local_path: Optional[str] = None
+    content_type: Optional[str] = None
+    file_size: int = 0
+
+
 class RawItem(BaseModel):
     title: Optional[str] = None
     content: str
@@ -70,6 +78,7 @@ class RawItem(BaseModel):
     source_url: Optional[str] = None
     source_site: Optional[str] = None
     canonical_url: Optional[str] = None
+    image_refs: list[ImageRef] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -85,6 +94,7 @@ class NormalizedItem(BaseModel):
     source_url: Optional[str] = None
     source_site: Optional[str] = None
     content_hash: str
+    image_refs: list[ImageRef] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
