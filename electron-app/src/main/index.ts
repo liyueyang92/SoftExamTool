@@ -18,8 +18,8 @@ import {
 } from './db/questions'
 import {
   listQuestionGroups, upsertQuestionGroup, deleteQuestionGroup, getQuestionGroup,
-  countQuestionsInGroup, moveQuestionsToGroup,
-  type QuestionGroupInput, type QuestionGroupType,
+  countQuestionsInGroup, moveQuestionsToGroup, syncGroupExamMeta,
+  type QuestionGroupInput, type QuestionGroupType, type ExamPeriod,
 } from './db/question-groups'
 import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
@@ -2232,6 +2232,9 @@ function registerIpcHandlers(): void {
     const { fromGroupId, toGroupId } = args as { fromGroupId: string; toGroupId: string }
     return moveQuestionsToGroup(db, fromGroupId, toGroupId)
   })
+  registerHandler(IPC.QUESTION_GROUP_SYNC_EXAM_META, async () => {
+    return syncGroupExamMeta(db)
+  })
   registerHandler(IPC.QUESTION_QUERY, async (args) => {
     return queryQuestions(db, args as Parameters<typeof queryQuestions>[1])
   })
@@ -2851,6 +2854,22 @@ function registerIpcHandlers(): void {
     const fallbackGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
     if (!fallbackGroupId) {
       throw Object.assign(new Error('请选择现有分组或新建分组后再确认入库'), { code: 'CRAWLER_IMPORT_GROUP_REQUIRED' })
+    }
+
+    // Sync exam metadata to the target group when importing with explicit year/period
+    if (exam_year !== null || (exam_period !== null && exam_period !== '')) {
+      const targetGroup = getQuestionGroup(db, fallbackGroupId)
+      if (targetGroup) {
+        upsertQuestionGroup(db, {
+          id: targetGroup.id,
+          name: targetGroup.name,
+          group_type: targetGroup.group_type as QuestionGroupType,
+          exam_year: exam_year ?? targetGroup.exam_year,
+          exam_period: exam_period && exam_period !== '' ? exam_period as ExamPeriod : targetGroup.exam_period,
+          description: targetGroup.description,
+          skipNameDedup: true,
+        })
+      }
     }
 
     const imageDir = getStoragePaths().imageDir

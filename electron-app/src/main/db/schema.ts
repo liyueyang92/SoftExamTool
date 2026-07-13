@@ -471,4 +471,60 @@ WHERE target_group_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_questions_exam ON questions(exam_year, exam_period);
 `,
   },
+  {
+    version: 13,
+    sql: `
+-- Step 1: identify the keeper row per unique key
+CREATE TEMP TABLE group_dedup_keep AS
+SELECT
+  g.id,
+  g.name,
+  g.group_type,
+  COALESCE(g.exam_year, -1) AS ey,
+  COALESCE(g.exam_period, '') AS ep
+FROM question_groups g
+WHERE g.id = (
+  SELECT g2.id FROM question_groups g2
+  WHERE g2.name = g.name
+    AND g2.group_type = g.group_type
+    AND COALESCE(g2.exam_year, -1) = COALESCE(g.exam_year, -1)
+    AND COALESCE(g2.exam_period, '') = COALESCE(g.exam_period, '')
+  ORDER BY
+    (SELECT COUNT(*) FROM questions WHERE group_id = g2.id) DESC,
+    g2.created_at ASC
+  LIMIT 1
+);
+
+-- Step 2: reassign questions from duplicate groups to the keeper
+UPDATE questions SET group_id = (
+  SELECT k.id FROM group_dedup_keep k
+  JOIN question_groups g ON g.id = questions.group_id
+  WHERE g.name = k.name
+    AND g.group_type = k.group_type
+    AND COALESCE(g.exam_year, -1) = k.ey
+    AND COALESCE(g.exam_period, '') = k.ep
+    AND g.id != k.id
+)
+WHERE group_id IN (
+  SELECT g.id FROM question_groups g
+  WHERE NOT EXISTS (SELECT 1 FROM group_dedup_keep k WHERE k.id = g.id)
+    AND EXISTS (
+      SELECT 1 FROM group_dedup_keep k
+      WHERE g.name = k.name
+        AND g.group_type = k.group_type
+        AND COALESCE(g.exam_year, -1) = k.ey
+        AND COALESCE(g.exam_period, '') = k.ep
+    )
+);
+
+-- Step 3: remove duplicate rows
+DELETE FROM question_groups WHERE id NOT IN (SELECT id FROM group_dedup_keep);
+
+DROP TABLE group_dedup_keep;
+
+-- Step 4: enforce uniqueness going forward
+CREATE UNIQUE INDEX IF NOT EXISTS idx_question_groups_unique
+  ON question_groups(name, group_type, COALESCE(exam_year, -1), COALESCE(exam_period, ''));
+`,
+  },
 ]

@@ -67,6 +67,7 @@ declare global {
       deleteQuestionGroup: (id: string) => Promise<IpcResponse<void>>
       countQuestionsInGroup: (id: string) => Promise<IpcResponse<number>>
       moveQuestionsToGroup: (args: { fromGroupId: string; toGroupId: string }) => Promise<IpcResponse<number>>
+      syncGroupExamMeta: () => Promise<IpcResponse<{ updated: number; merged: number }>>
       queryQuestions: (filter?: Record<string, unknown>) => Promise<IpcResponse<{ items: unknown[]; total: number }>>
       searchQuestions: (args: { q: string; limit?: number }) => Promise<IpcResponse<unknown[]>>
       insertQuestion: (q: unknown) => Promise<IpcResponse<unknown>>

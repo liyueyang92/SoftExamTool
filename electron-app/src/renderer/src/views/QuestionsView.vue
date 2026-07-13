@@ -23,6 +23,7 @@ const moveTargets = ref<Record<string, string>>({})
 const manageMessage = ref('')
 const manageError = ref('')
 const manageLoading = ref(false)
+const syncing = ref(false)
 const editTarget = ref<Partial<Question> | null>(null)
 const editGroupOptions = ref<QuestionGroup[]>([])
 const editGroupsLoading = ref(false)
@@ -167,7 +168,7 @@ function stripHtml(html: string): string {
 }
 
 function openNewGroup() {
-  groupEdit.value = { name: '', group_type: 'custom', description: '' }
+  groupEdit.value = { name: '', group_type: 'custom', exam_year: null, exam_period: null, description: '' }
   showGroupEdit.value = true
 }
 
@@ -185,11 +186,7 @@ function groupTypeLabel(t: string) {
   return labels[t] ?? t
 }
 
-async function openGroupManage() {
-  manageMessage.value = ''
-  manageError.value = ''
-  manageLoading.value = true
-  moveTargets.value = {}
+async function refreshGroupCounts() {
   await store.fetchGroups()
   const counts: Record<string, number> = {}
   for (const g of store.groups) {
@@ -201,8 +198,39 @@ async function openGroupManage() {
     }
   }
   groupQuestionCounts.value = counts
+}
+
+async function openGroupManage() {
+  manageMessage.value = ''
+  manageError.value = ''
+  manageLoading.value = true
+  moveTargets.value = {}
+  await refreshGroupCounts()
   manageLoading.value = false
   showGroupManage.value = true
+}
+
+async function syncGroupMeta() {
+  manageMessage.value = ''
+  manageError.value = ''
+  syncing.value = true
+  try {
+    const res = await window.electronAPI.syncGroupExamMeta()
+    if (res.success) {
+      const result = res.data as { updated: number; merged: number }
+      const parts: string[] = []
+      if (result.updated > 0) parts.push(`${result.updated} 个分组更新了元数据`)
+      if (result.merged > 0) parts.push(`${result.merged} 个重复分组已合并`)
+      manageMessage.value = parts.length ? parts.join('，') : '所有分组元数据已是最新，无重复'
+      await refreshGroupCounts()
+    } else {
+      manageError.value = (res.error as { message: string })?.message || '同步失败'
+    }
+  } catch (e) {
+    manageError.value = (e as Error).message
+  } finally {
+    syncing.value = false
+  }
 }
 
 async function deleteGroup(id: string) {
@@ -530,6 +558,19 @@ function setLabel(q: Question): string {
               <option value="manual_import">批量导入</option>
             </select>
           </div>
+          <div v-if="groupEdit.group_type === 'past_exam'" class="form-row">
+            <label>真题年份</label>
+            <select v-model="groupEdit.exam_year" class="select-sm" style="width:110px">
+              <option :value="null">请选择</option>
+              <option v-for="year in recentExamYears" :key="year" :value="year">{{ year }}年</option>
+            </select>
+            <label style="min-width:auto">期次</label>
+            <select v-model="groupEdit.exam_period" class="select-sm" style="width:110px">
+              <option :value="null">请选择</option>
+              <option value="H1">上半年</option>
+              <option value="H2">下半年</option>
+            </select>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn-sm" @click="showGroupEdit = false">取消</button>
@@ -540,9 +581,10 @@ function setLabel(q: Question): string {
 
     <!-- Group Manage Modal -->
     <div v-if="showGroupManage" class="modal-backdrop" @click.self="showGroupManage = false">
-      <div class="modal" style="width:680px">
+      <div class="modal" style="width:800px">
         <div class="modal-header">
           <h3>管理分组</h3>
+          <button class="btn-sm" style="margin-right:8px" @click="syncGroupMeta" :disabled="syncing">{{ syncing ? '同步中…' : '同步元数据' }}</button>
           <button class="close-btn" @click="showGroupManage = false">✕</button>
         </div>
         <div class="modal-body">
@@ -551,9 +593,11 @@ function setLabel(q: Question): string {
           <table v-else class="group-table">
             <thead>
               <tr>
-                <th style="width:180px">分组名称</th>
-                <th style="width:90px">类型</th>
-                <th style="width:70px">题目数</th>
+                <th style="width:160px">分组名称</th>
+                <th style="width:80px">类型</th>
+                <th style="width:80px">真题年份</th>
+                <th style="width:70px">期次</th>
+                <th style="width:60px">题目数</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -561,9 +605,10 @@ function setLabel(q: Question): string {
               <tr v-for="g in store.groups" :key="g.id">
                 <td class="group-name-cell">
                   <strong>{{ g.name }}</strong>
-                  <span v-if="g.exam_year" class="mini-meta">{{ g.exam_year }} {{ g.exam_period === 'H1' ? '上半年' : '下半年' }}</span>
                 </td>
                 <td><span class="type-pill-sm">{{ groupTypeLabel(g.group_type) }}</span></td>
+                <td class="count-cell">{{ g.exam_year ?? '-' }}</td>
+                <td class="count-cell">{{ g.exam_period ? (g.exam_period === 'H1' ? '上半年' : '下半年') : '-' }}</td>
                 <td class="count-cell">{{ groupQuestionCounts[g.id] ?? '…' }}</td>
                 <td>
                   <div class="group-actions">
@@ -637,7 +682,18 @@ function setLabel(q: Question): string {
                 <option value="custom">自定义</option>
               </select>
             </div>
-            <div v-if="importNewGroup.group_type === 'past_exam'" class="form-row">
+            <div v-if="importNewGroup.group_type === 'past_exam'" class="form-row" style="margin-top:4px">
+              <label>真题年份</label>
+              <select v-model="importNewGroup.exam_year" class="select-sm" style="width:110px">
+                <option :value="null">请选择</option>
+                <option v-for="year in recentExamYears" :key="year" :value="year">{{ year }}年</option>
+              </select>
+              <label style="min-width:auto">期次</label>
+              <select v-model="importNewGroup.exam_period" class="select-sm" style="width:110px">
+                <option :value="null">请选择</option>
+                <option value="H1">上半年</option>
+                <option value="H2">下半年</option>
+              </select>
             </div>
           </div>
           <textarea v-model="importText" class="textarea" rows="10" placeholder='[{"type":"single","content":"…"}]'></textarea>

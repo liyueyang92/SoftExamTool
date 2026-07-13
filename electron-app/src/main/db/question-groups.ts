@@ -56,7 +56,7 @@ export function upsertQuestionGroup(
   const examPeriod = input.exam_period ?? null
   const skipNameDedup = input.skipNameDedup === true
 
-  // Name-based dedup: when no explicit id, reuse existing group with same name
+  // Composite dedup: reuse existing group matching (name, group_type, exam_year, exam_period)
   let id: string | null = input.id ?? null
   let isNew = !id
   if (!id) {
@@ -64,9 +64,12 @@ export function upsertQuestionGroup(
       id = randomUUID()
       isNew = true
     } else {
-      const existing = db.prepare(
-        'SELECT id FROM question_groups WHERE name = ?'
-      ).get(input.name) as { id: string } | undefined
+      const existing = db.prepare(`
+        SELECT id FROM question_groups
+        WHERE name = ? AND group_type = ?
+          AND COALESCE(exam_year, -1) = COALESCE(?, -1)
+          AND COALESCE(exam_period, '') = COALESCE(?, '')
+      `).get(input.name, groupType, examYear, examPeriod) as { id: string } | undefined
       if (existing) {
         id = existing.id
         isNew = false
@@ -128,4 +131,92 @@ export function deleteQuestionGroup(db: Database, id: string): void {
     )
   }
   db.prepare('DELETE FROM question_groups WHERE id = ?').run(id)
+}
+
+export function syncGroupExamMeta(db: Database): { updated: number; merged: number } {
+  const groups = listQuestionGroups(db)
+  let updated = 0
+
+  // Phase 1: reorganize — for each group, split questions by (exam_year, exam_period),
+  // creating new groups as needed for mismatches, then update group's own metadata.
+  for (const group of groups) {
+    // Find distinct exam metadata combos in this group's questions
+    const combos = db.prepare(`
+      SELECT exam_year, exam_period, COUNT(*) as cnt
+      FROM questions
+      WHERE group_id = ? AND exam_year IS NOT NULL
+      GROUP BY exam_year, COALESCE(exam_period, '')
+      ORDER BY cnt DESC
+    `).all(group.id) as Array<{ exam_year: number; exam_period: string | null; cnt: number }>
+
+    if (combos.length === 0) continue
+
+    // The most common combo stays with this group; update the group's metadata
+    const primary = combos[0]
+    if (primary.exam_year !== group.exam_year || primary.exam_period !== group.exam_period) {
+      db.prepare(`
+        UPDATE question_groups
+        SET exam_year = ?, exam_period = ?, updated_at = ?
+        WHERE id = ?
+      `).run(primary.exam_year, primary.exam_period ?? null, new Date().toISOString(), group.id)
+      updated++
+    }
+
+    // For other combos, create/find a matching group and move questions there
+    for (let i = 1; i < combos.length; i++) {
+      const combo = combos[i]
+      // Use upsert to dedup: find or create a group with same name/type but this year/period
+      const target = upsertQuestionGroup(db, {
+        name: group.name,
+        group_type: group.group_type as QuestionGroupType,
+        exam_year: combo.exam_year,
+        exam_period: combo.exam_period as ExamPeriod,
+        description: group.description,
+      })
+      db.prepare(`
+        UPDATE questions SET group_id = ?
+        WHERE group_id = ? AND exam_year = ? AND COALESCE(exam_period, '') = COALESCE(?, '')
+      `).run(target.id, group.id, combo.exam_year, combo.exam_period)
+      updated++
+    }
+  }
+
+  // Phase 2: deduplicate — merge groups sharing the same (name, group_type, exam_year, exam_period)
+  let merged = 0
+
+  const dupKeys = db.prepare(`
+    SELECT name, group_type, COALESCE(exam_year, -1) AS ey, COALESCE(exam_period, '') AS ep
+    FROM question_groups
+    GROUP BY name, group_type, COALESCE(exam_year, -1), COALESCE(exam_period, '')
+    HAVING COUNT(*) > 1
+  `).all() as Array<{ name: string; group_type: string; ey: number; ep: string }>
+
+  for (const key of dupKeys) {
+    const keeper = db.prepare(`
+      SELECT id FROM question_groups
+      WHERE name = ? AND group_type = ?
+        AND COALESCE(exam_year, -1) = ?
+        AND COALESCE(exam_period, '') = ?
+      ORDER BY
+        (SELECT COUNT(*) FROM questions WHERE group_id = question_groups.id) DESC,
+        created_at ASC
+      LIMIT 1
+    `).get(key.name, key.group_type, key.ey, key.ep) as { id: string }
+
+    const dupIds = db.prepare(`
+      SELECT id FROM question_groups
+      WHERE name = ? AND group_type = ?
+        AND COALESCE(exam_year, -1) = ?
+        AND COALESCE(exam_period, '') = ?
+        AND id != ?
+    `).all(key.name, key.group_type, key.ey, key.ep, keeper.id) as Array<{ id: string }>
+
+    for (const dup of dupIds) {
+      db.prepare('UPDATE questions SET group_id = ? WHERE group_id = ?').run(keeper.id, dup.id)
+      db.prepare('DELETE FROM question_groups WHERE id = ?').run(dup.id)
+      merged++
+    }
+  }
+
+  return { updated, merged }
 }

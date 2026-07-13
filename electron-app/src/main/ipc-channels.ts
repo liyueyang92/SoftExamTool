@@ -26,6 +26,7 @@ export const IPC = {
   QUESTION_GROUP_DELETE: 'questionGroup:delete',
   QUESTION_GROUP_COUNT: 'questionGroup:count',
   QUESTION_GROUP_MOVE_QUESTIONS: 'questionGroup:moveQuestions',
+  QUESTION_GROUP_SYNC_EXAM_META: 'questionGroup:syncExamMeta',
   QUESTION_INSERT: 'question:insert',
   QUESTION_BATCH_INSERT: 'question:batchInsert',
   QUESTION_UPDATE: 'question:update',
