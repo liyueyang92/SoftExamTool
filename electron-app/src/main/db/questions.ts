@@ -174,33 +174,8 @@ function attachQuestionSets(db: Database.Database, inputs: QuestionInput[]): Que
 }
 
 export function queryQuestions(db: Database.Database, filter: QueryFilter = {}): { items: Question[]; total: number } {
-  const {
-    page = 1,
-    pageSize = 20,
-    group_id,
-    group_name,
-    group_type,
-    exam_year,
-    exam_period,
-    type,
-    difficulty,
-    source_type,
-    knowledge_tag,
-    is_favorite,
-  } = filter
-  const conditions: string[] = []
-  const params: unknown[] = []
-
-  if (group_id) { conditions.push('q.group_id = ?'); params.push(group_id) }
-  if (group_name) { conditions.push('g.name = ?'); params.push(group_name) }
-  if (group_type) { conditions.push('g.group_type = ?'); params.push(group_type) }
-  if (exam_year) { conditions.push('q.exam_year = ?'); params.push(exam_year) }
-  if (exam_period) { conditions.push('q.exam_period = ?'); params.push(exam_period) }
-  if (type) { conditions.push('q.type = ?'); params.push(type) }
-  if (difficulty) { conditions.push('q.difficulty = ?'); params.push(difficulty) }
-  if (source_type) { conditions.push('q.source_type = ?'); params.push(source_type) }
-  if (knowledge_tag) { conditions.push('q.knowledge_tags LIKE ?'); params.push(`%${knowledge_tag}%`) }
-  if (is_favorite) { conditions.push('q.is_favorite = 1') }
+  const { page = 1, pageSize = 20 } = filter
+  const { conditions, params } = buildFilterConditions(filter)
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
   const offset = (page - 1) * pageSize
@@ -384,6 +359,54 @@ export function deleteQuestion(db: Database.Database, id: string): void {
 export function toggleFavorite(db: Database.Database, id: string): number {
   db.prepare('UPDATE questions SET is_favorite = 1 - is_favorite WHERE id = ?').run(id)
   return (db.prepare('SELECT is_favorite FROM questions WHERE id = ?').get(id) as { is_favorite: number }).is_favorite
+}
+
+function buildFilterConditions(filter: QueryFilter): { conditions: string[]; params: unknown[] } {
+  const {
+    group_id,
+    group_name,
+    group_type,
+    exam_year,
+    exam_period,
+    type,
+    difficulty,
+    source_type,
+    knowledge_tag,
+    is_favorite,
+  } = filter
+  const conditions: string[] = []
+  const params: unknown[] = []
+
+  if (group_id) { conditions.push('q.group_id = ?'); params.push(group_id) }
+  if (group_name) { conditions.push('g.name = ?'); params.push(group_name) }
+  if (group_type) { conditions.push('g.group_type = ?'); params.push(group_type) }
+  if (exam_year) { conditions.push('q.exam_year = ?'); params.push(exam_year) }
+  if (exam_period) { conditions.push('q.exam_period = ?'); params.push(exam_period) }
+  if (type) { conditions.push('q.type = ?'); params.push(type) }
+  if (difficulty) { conditions.push('q.difficulty = ?'); params.push(difficulty) }
+  if (source_type) { conditions.push('q.source_type = ?'); params.push(source_type) }
+  if (knowledge_tag) { conditions.push('q.knowledge_tags LIKE ?'); params.push(`%${knowledge_tag}%`) }
+  if (is_favorite) { conditions.push('q.is_favorite = 1') }
+
+  return { conditions, params }
+}
+
+export function exportQuestions(db: Database.Database, filter: QueryFilter = {}): Question[] {
+  const { conditions, params } = buildFilterConditions(filter)
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+  const rows = db.prepare(`
+    SELECT
+      q.*,
+      g.name AS group_name,
+      g.group_type AS group_type
+    FROM questions q
+    LEFT JOIN question_groups g ON q.group_id = g.id
+    ${where}
+    ORDER BY q.created_at DESC
+  `).all(...params) as Record<string, unknown>[]
+
+  return expandQuestionSets(db, rows.map(parseQuestion))
 }
 
 export function getQuestionStats(db: Database.Database): Record<string, unknown> {

@@ -166,6 +166,23 @@ export const useQuestionStore = defineStore('question', () => {
     return 0
   }
 
+  async function exportData(exportFilter?: QuestionFilter): Promise<{ count: number; filePath: string; imageCount?: number } | null> {
+    const res = await window.electronAPI.exportQuestions(toIpcPayload({ filter: exportFilter ?? filter }))
+    if (res.success) return res.data as { count: number; filePath: string; imageCount?: number }
+    return null
+  }
+
+  async function importFile(args: { groupId?: string | null; newGroup?: QuestionGroupDraft | null }): Promise<{ count: number; imageCount?: number }> {
+    const groupId = await ensureGroupId(args)
+    const res = await window.electronAPI.importQuestionsFile(toIpcPayload({ group_id: groupId }))
+    if (res.success) {
+      await fetchPage()
+      await loadStats()
+      return res.data as { count: number; imageCount?: number }
+    }
+    throw new Error((res.error as { message: string }).message)
+  }
+
   async function update(id: string, changes: Partial<Question>) {
     const res = await window.electronAPI.updateQuestion(toIpcPayload({ id, changes }))
     if (!res.success) throw new Error((res.error as { message: string }).message)
@@ -214,6 +231,6 @@ export const useQuestionStore = defineStore('question', () => {
   return {
     groups, groupsLoading, questions, total, loading, filter, stats,
     fetchGroups, saveGroup, removeGroup, moveQuestions, ensureGroupId,
-    fetchPage, search, insert, batchImport, update, remove, toggleFavorite, loadStats, setFilter,
+    fetchPage, search, insert, batchImport, exportData, importFile, update, remove, toggleFavorite, loadStats, setFilter,
   }
 })

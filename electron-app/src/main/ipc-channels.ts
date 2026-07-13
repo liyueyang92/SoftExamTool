@@ -120,4 +120,7 @@ export const IPC = {
   BACKUP_DELETE: 'backup:delete',
 
   IMAGE_CLEANUP_ORPHANS: 'image:cleanupOrphans',
+
+  QUESTION_EXPORT: 'question:export',
+  QUESTION_IMPORT_FILE: 'question:importFile',
 } as const

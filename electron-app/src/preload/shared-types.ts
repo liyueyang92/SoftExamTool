@@ -139,6 +139,7 @@ export interface StoragePathsInfo {
   appSettingsPath: string
   databasePath: string
   documentLibraryDir: string
+  imageDir: string
   backupDir: string
   customDataRootDir: string
   usingCustomDataRoot: boolean

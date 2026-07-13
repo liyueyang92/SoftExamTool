@@ -241,6 +241,10 @@ function formatDt(iso: string) {
           <span class="path-value">{{ storagePaths.dataRootDir }}</span>
         </div>
         <div class="path-item">
+          <span class="path-label">当前图片目录</span>
+          <span class="path-value">{{ storagePaths.imageDir }}</span>
+        </div>
+        <div class="path-item">
           <span class="path-label">当前数据库</span>
           <span class="path-value">{{ storagePaths.databasePath }}</span>
         </div>

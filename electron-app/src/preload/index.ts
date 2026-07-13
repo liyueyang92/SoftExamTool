@@ -80,6 +80,10 @@ const customAPI = {
     invokeWithTimeout<{ is_favorite: number }>('question:toggleFavorite', id),
   getQuestionStats: () =>
     invokeWithTimeout<Record<string, unknown>>('question:getStats'),
+  exportQuestions: (args: { filter?: Record<string, unknown> }) =>
+    invokeWithTimeout<{ count: number; filePath: string; imageCount?: number }>('question:export', args, 60_000),
+  importQuestionsFile: (args: { group_id?: string | null; new_group?: unknown | null; group_type?: string }) =>
+    invokeWithTimeout<{ count: number; imageCount?: number }>('question:importFile', args, 60_000),
 
   // Question images
   pickImageFile: () =>

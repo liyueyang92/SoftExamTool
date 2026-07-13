@@ -14,7 +14,8 @@ import { WsProgressClient } from './ws-client'
 import { registerHandler } from './ipc-handler'
 import {
   queryQuestions, searchQuestions, insertQuestion, batchInsertQuestions,
-  updateQuestion, deleteQuestion, toggleFavorite, getQuestionStats, getWrongQuestions
+  updateQuestion, deleteQuestion, toggleFavorite, getQuestionStats, getWrongQuestions,
+  exportQuestions
 } from './db/questions'
 import {
   listQuestionGroups, upsertQuestionGroup, deleteQuestionGroup, getQuestionGroup,
@@ -285,6 +286,7 @@ function getStorageSettingsPayload(paths = getStoragePaths()) {
     appSettingsPath: paths.appSettingsPath,
     databasePath: paths.databasePath,
     documentLibraryDir: paths.documentLibraryDir,
+    imageDir: paths.imageDir,
     backupDir: paths.backupDir,
     customDataRootDir: config.dataRootDir ?? '',
     usingCustomDataRoot: Boolean(config.dataRootDir),
@@ -312,6 +314,9 @@ async function updateStoragePaths(args: {
   if (currentPaths.backupDir !== nextPaths.backupDir) {
     remapManagedBackupPaths(db, currentPaths.backupDir, nextPaths.backupDir)
     copyDirectoryIfNeeded(currentPaths.backupDir, nextPaths.backupDir)
+  }
+  if (currentPaths.imageDir !== nextPaths.imageDir) {
+    copyDirectoryIfNeeded(currentPaths.imageDir, nextPaths.imageDir)
   }
 
   writeJsonFile(nextPaths.aiConfigPath, aiConfig)
@@ -2283,6 +2288,262 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.QUESTION_TOGGLE_FAVORITE, async (id) => ({ is_favorite: toggleFavorite(db, id as string) }))
   registerHandler(IPC.QUESTION_GET_STATS, async () => getQuestionStats(db))
 
+  // Question export / import
+  registerHandler(IPC.QUESTION_EXPORT, async (args) => {
+    const { filter } = (args ?? {}) as { filter?: Record<string, unknown> }
+    const questions = exportQuestions(db, filter as Record<string, unknown>)
+    const imageDir = getStoragePaths().imageDir
+
+    // Scan all question fields for exam-image:// references
+    const imageIds = new Set<string>()
+    const imageIdRegex = /exam-image:\/\/([a-f0-9-]+)/gi
+    for (const q of questions) {
+      for (const field of ['content', 'options', 'explanation'] as const) {
+        let val = q[field]
+        if (Array.isArray(val)) val = val.join('\n')
+        if (typeof val !== 'string') continue
+        for (const match of val.matchAll(imageIdRegex)) {
+          imageIds.add(match[1])
+        }
+      }
+    }
+
+    // Read image data from disk and base64-encode
+    const images: Record<string, { mime_type: string; file_name: string; data: string }> = {}
+    for (const id of imageIds) {
+      const img = getImageById(db, id)
+      if (!img) continue
+      const filePath = join(imageDir, img.file_name)
+      if (!existsSync(filePath)) continue
+      try {
+        const buf = readFileSync(filePath)
+        images[id] = {
+          mime_type: img.mime_type,
+          file_name: img.original_name || img.file_name,
+          data: buf.toString('base64'),
+        }
+      } catch { /* skip unreadable images */ }
+    }
+
+    const exportPayload = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      images,
+      questions: questions.map((q) => ({
+        type: q.type,
+        content: q.content,
+        options: q.options,
+        answer: q.answer,
+        explanation: q.explanation,
+        knowledge_tags: q.knowledge_tags,
+        difficulty: q.difficulty,
+        source_type: q.source_type,
+        source_url: q.source_url,
+        group_name: q.group_name,
+        exam_year: q.exam_year,
+        exam_period: q.exam_period,
+      })),
+    }
+
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: '导出题目',
+      defaultPath: `softexam-questions-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    })
+    if (result.canceled || !result.filePath) {
+      throw Object.assign(new Error('用户取消了导出'), { code: 'EXPORT_CANCELLED' })
+    }
+    writeFileSync(result.filePath, JSON.stringify(exportPayload, null, 2), 'utf-8')
+    return { count: questions.length, filePath: result.filePath, imageCount: imageIds.size }
+  })
+
+  registerHandler(IPC.QUESTION_IMPORT_FILE, async (args) => {
+    const { group_id, new_group, group_type } = (args ?? {}) as {
+      group_id?: string | null
+      new_group?: { name?: string; group_type?: string; exam_year?: number | null; exam_period?: string | null; description?: string } | null
+      group_type?: string
+    }
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择导入文件',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+      properties: ['openFile'],
+    })
+    if (result.canceled || !result.filePaths.length) {
+      throw Object.assign(new Error('用户取消了导入'), { code: 'IMPORT_CANCELLED' })
+    }
+    const raw = readFileSync(result.filePaths[0], 'utf-8')
+    let payload: { version?: number; images?: Record<string, { mime_type: string; file_name: string; data: string }>; questions?: unknown[] }
+    let questionData: unknown[]
+    try {
+      payload = JSON.parse(raw)
+      // Support both new wrapped format and legacy bare array format
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        questionData = (payload.questions as unknown[]) ?? []
+      } else if (Array.isArray(payload)) {
+        questionData = payload as unknown[]
+      } else {
+        throw new Error('文件内容必须是 JSON 数组或带 questions 字段的对象')
+      }
+    } catch (e) {
+      throw Object.assign(
+        new Error(`文件解析失败：${(e as Error).message}`),
+        { code: 'IMPORT_PARSE_ERROR' }
+      )
+    }
+    if (!questionData.length) return { count: 0 }
+
+    // Resolve group id
+    let targetGroupId: string | null = null
+    if (group_id) {
+      const existing = getQuestionGroup(db, group_id)
+      if (!existing) {
+        throw Object.assign(new Error('目标分组不存在'), { code: 'QUESTION_GROUP_NOT_FOUND' })
+      }
+      targetGroupId = existing.id
+    } else if (new_group?.name?.trim()) {
+      const created = upsertQuestionGroup(db, {
+        name: new_group.name.trim(),
+        group_type: (new_group.group_type || group_type || 'manual_import') as QuestionGroupType,
+        exam_year: new_group.exam_year ?? null,
+        exam_period: (new_group.exam_period as ExamPeriod) ?? null,
+        description: new_group.description ?? '',
+      })
+      targetGroupId = created.id
+    }
+
+    // Phase 1: Process embedded images — write to disk, build old→new UUID mapping
+    const imageDir = getStoragePaths().imageDir
+    const uuidMap = new Map<string, string>() // old UUID → new UUID
+    const embeddedImages = payload.images ?? {}
+    for (const [oldId, img] of Object.entries(embeddedImages)) {
+      if (!img?.data) continue
+      try {
+        const newId = randomUUID()
+        const origExt = extname(img.file_name ?? '').toLowerCase()
+        const ext = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(origExt)
+          ? (origExt === '.jpeg' ? '.jpg' : origExt)
+          : '.png'
+        const fileName = `${newId}${ext}`
+        const destPath = join(imageDir, fileName)
+        writeFileSync(destPath, Buffer.from(img.data, 'base64'))
+        uuidMap.set(oldId, newId)
+        // Temporarily store metadata for later DB insertion
+        ;(img as Record<string, unknown>)._newFile = fileName
+        ;(img as Record<string, unknown>)._newId = newId
+      } catch { /* skip broken image */ }
+    }
+
+    // Phase 1b: Replace old exam-image:// UUIDs with new UUIDs in all question text
+    const replaceImageRefs = (text: unknown): unknown => {
+      if (typeof text !== 'string') return text
+      return text.replace(/exam-image:\/\/([a-f0-9-]+)/gi, (_match, id: string) => {
+        const newId = uuidMap.get(id)
+        return newId ? `exam-image://${newId}` : _match
+      })
+    }
+
+    // Normalize items for batchInsertQuestions
+    const inputs = questionData.map((item) => {
+      if (typeof item === 'object' && item !== null) {
+        const obj = item as Record<string, unknown>
+        const options = obj.options != null
+          ? (Array.isArray(obj.options)
+              ? (obj.options as string[]).map((o) => replaceImageRefs(o) as string)
+              : null)
+          : null
+        return {
+          group_id: targetGroupId ?? (obj.group_id as string | null) ?? null,
+          source_type: obj.source_type ?? 'imported',
+          type: obj.type,
+          content: replaceImageRefs(obj.content),
+          options,
+          answer: obj.answer,
+          explanation: replaceImageRefs(obj.explanation),
+          knowledge_tags: obj.knowledge_tags,
+          difficulty: obj.difficulty,
+          source_url: obj.source_url,
+          exam_year: obj.exam_year ?? null,
+          exam_period: obj.exam_period ?? null,
+        }
+      }
+      return item
+    })
+
+    // Phase 2: Insert questions (need to track IDs for image registration)
+    // Use single inserts so we can get back question IDs and register images
+    let importedCount = 0
+    const insertOne = db.prepare(`
+      INSERT INTO questions
+        (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, exam_year, exam_period, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+
+    const insertTx = db.transaction((items: Record<string, unknown>[]) => {
+      for (const inp of items) {
+        const qId = randomUUID()
+        insertOne.run(
+          qId,
+          inp.group_id ?? null,
+          null,
+          0,
+          inp.type ?? 'single',
+          inp.content ?? '',
+          inp.options ? JSON.stringify(inp.options) : null,
+          inp.answer ?? null,
+          inp.explanation ?? null,
+          JSON.stringify(inp.knowledge_tags ?? []),
+          inp.difficulty ?? 3,
+          inp.source_type ?? 'imported',
+          inp.source_url ?? null,
+          inp.exam_year ?? null,
+          inp.exam_period ?? null,
+          new Date().toISOString(),
+        )
+
+        // Phase 3: Register images referenced by this question
+        const questionTexts = [inp.content, ...(Array.isArray(inp.options) ? inp.options as string[] : []), inp.explanation]
+          .filter((t): t is string => typeof t === 'string')
+        const refImageIds = new Set<string>()
+        for (const text of questionTexts) {
+          for (const match of text.matchAll(/exam-image:\/\/([a-f0-9-]+)/gi)) {
+            refImageIds.add(match[1])
+          }
+        }
+        for (const imgId of refImageIds) {
+          // Find the embedded image metadata for this new UUID
+          for (const [, img] of Object.entries(embeddedImages)) {
+            const meta = img as Record<string, unknown>
+            if (meta._newId === imgId) {
+              const fileSize = existsSync(join(imageDir, meta._newFile as string))
+                ? getFileSize(join(imageDir, meta._newFile as string))
+                : 0
+              db.prepare(`
+                INSERT INTO question_images (id, question_id, field_name, file_name, original_name, mime_type, file_size, width, height)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `).run(
+                imgId,
+                qId,
+                'content',
+                meta._newFile,
+                img.file_name ?? '',
+                img.mime_type ?? 'image/png',
+                fileSize,
+                null,
+                null,
+              )
+              break
+            }
+          }
+        }
+        importedCount++
+      }
+    })
+
+    const wrapped = inputs.filter((inp): inp is Record<string, unknown> => typeof inp === 'object' && inp !== null)
+    insertTx(wrapped)
+    return { count: importedCount, imageCount: uuidMap.size }
+  })
+
   // Question images
   registerHandler(IPC.QUESTION_UPLOAD_IMAGE, async (args) => {
     const { question_id, field_name, source_path } = args as {
@@ -2939,6 +3200,9 @@ function registerIpcHandlers(): void {
               mime_type: mimeType,
               file_size: fileSize,
             })
+
+            // Clean up the temporary source file after successful copy
+            try { unlinkSync(ref.local_path) } catch { /* ignore */ }
 
             // Replace the original src_url in content with exam-image:// reference
             const imgTag = `<img src="exam-image://${imageId}" alt="${ref.alt || ''}" />`

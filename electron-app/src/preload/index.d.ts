@@ -76,6 +76,8 @@ declare global {
       deleteQuestion: (id: string) => Promise<IpcResponse<void>>
       toggleFavorite: (id: string) => Promise<IpcResponse<{ is_favorite: number }>>
       getQuestionStats: () => Promise<IpcResponse<Record<string, unknown>>>
+      exportQuestions: (args: { filter?: Record<string, unknown> }) => Promise<IpcResponse<{ count: number; filePath: string; imageCount?: number }>>
+      importQuestionsFile: (args: { group_id?: string | null; new_group?: unknown | null; group_type?: string }) => Promise<IpcResponse<{ count: number; imageCount?: number }>>
 
       pickImageFile: () => Promise<IpcResponse<string | null>>
       uploadQuestionImage: (args: { question_id: string; field_name: string; source_path: string }) => Promise<IpcResponse<{ imageId: string; url: string }>>

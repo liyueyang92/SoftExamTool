@@ -16,6 +16,7 @@ const searching = ref(false)
 const searchResults = ref<Question[]>([])
 const showEdit = ref(false)
 const showImport = ref(false)
+const showExport = ref(false)
 const showGroupEdit = ref(false)
 const showGroupManage = ref(false)
 const groupQuestionCounts = ref<Record<string, number>>({})
@@ -36,6 +37,13 @@ const importLoading = ref(false)
 const importGroupMode = ref<'none' | 'existing' | 'new'>('none')
 const importTargetGroupId = ref('')
 const importNewGroup = ref<QuestionGroupDraft>({ name: '', group_type: 'manual_import', description: '' })
+const importFileLoading = ref(false)
+
+// Export state
+const exportLoading = ref(false)
+const exportScope = ref<'all' | 'filtered'>('all')
+const exportMessage = ref('')
+const exportError = ref('')
 
 // Pending images for new questions (not yet saved)
 const pendingImages = ref<Array<{ field_name: string; source_path: string }>>([])
@@ -330,6 +338,48 @@ async function doImport() {
   }
 }
 
+async function doImportFile() {
+  importError.value = ''; importSuccess.value = ''
+  importFileLoading.value = true
+  try {
+    const result = await store.importFile({
+      groupId: importGroupMode.value === 'existing' ? (importTargetGroupId.value || null) : null,
+      newGroup: importGroupMode.value === 'new' && importNewGroup.value.name.trim() ? importNewGroup.value : null,
+    })
+    const imgInfo = result.imageCount ? `，含 ${result.imageCount} 张图片` : ''
+    importSuccess.value = `成功从文件导入 ${result.count} 道题${imgInfo}`
+  } catch (e) {
+    importError.value = String(e)
+  } finally {
+    importFileLoading.value = false
+  }
+}
+
+async function openExport() {
+  exportMessage.value = ''; exportError.value = ''
+  exportScope.value = 'all'
+  showExport.value = true
+}
+
+async function doExport() {
+  exportMessage.value = ''; exportError.value = ''
+  exportLoading.value = true
+  try {
+    const exportFilter = exportScope.value === 'filtered' ? { ...store.filter } : {}
+    // Remove page/pageSize from filter for export
+    delete exportFilter.page; delete exportFilter.pageSize
+    const result = await store.exportData(exportFilter)
+    if (result) {
+      const imgInfo = result.imageCount ? `，含 ${result.imageCount} 张图片` : ''
+      exportMessage.value = `成功导出 ${result.count} 道题目${imgInfo}到 ${result.filePath}`
+    }
+  } catch (e) {
+    exportError.value = String(e)
+  } finally {
+    exportLoading.value = false
+  }
+}
+
 const tagInput = ref('')
 function addTag() {
   const t = tagInput.value.trim()
@@ -419,6 +469,7 @@ function setLabel(q: Question): string {
         <button class="btn-sm" @click="openNewGroup">+ 新建分组</button>
         <button class="btn-sm" @click="openGroupManage">管理分组</button>
         <button class="btn-sm" @click="showImport = true">批量导入</button>
+        <button class="btn-sm" @click="openExport">导出题目</button>
       </div>
     </div>
 
@@ -705,6 +756,12 @@ function setLabel(q: Question): string {
             </div>
           </div>
           <textarea v-model="importText" class="textarea" rows="10" placeholder='[{"type":"single","content":"…"}]'></textarea>
+          <div class="form-row" style="justify-content:space-between">
+            <span class="hint-text">或从文件导入：</span>
+            <button class="btn-sm" @click="doImportFile" :disabled="importFileLoading">
+              {{ importFileLoading ? '导入中…' : '从 JSON 文件导入' }}
+            </button>
+          </div>
           <p v-if="importError" class="error-text">{{ importError }}</p>
           <p v-if="importSuccess" class="success-text">{{ importSuccess }}</p>
         </div>
@@ -712,6 +769,34 @@ function setLabel(q: Question): string {
           <button class="btn-sm" @click="showImport = false">关闭</button>
           <button class="btn-sm btn-primary" @click="doImport" :disabled="importLoading || !importText.trim()">
             {{ importLoading ? '导入中…' : '确认导入' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div v-if="showExport" class="modal-backdrop" @click.self="showExport = false">
+      <div class="modal" style="width:480px">
+        <div class="modal-header">
+          <h3>导出题目</h3>
+          <button class="close-btn" @click="showExport = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="hint-text">将题目导出为 JSON 文件，可用于备份或跨设备迁移。</p>
+          <div class="form-row col">
+            <label>导出范围</label>
+            <div class="type-checks">
+              <label class="check-label"><input type="radio" value="all" v-model="exportScope" /> 全部题目（{{ store.stats.total ?? '…' }} 道）</label>
+              <label class="check-label"><input type="radio" value="filtered" v-model="exportScope" /> 当前筛选结果（{{ store.total }} 道）</label>
+            </div>
+          </div>
+          <p v-if="exportMessage" class="success-text">{{ exportMessage }}</p>
+          <p v-if="exportError" class="error-text">{{ exportError }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="showExport = false">关闭</button>
+          <button class="btn-sm btn-primary" @click="doExport" :disabled="exportLoading">
+            {{ exportLoading ? '导出中…' : '导出 JSON 文件' }}
           </button>
         </div>
       </div>
@@ -805,4 +890,8 @@ function setLabel(q: Question): string {
 
 .field-with-image { display: flex; gap: 6px; align-items: flex-start; }
 .flex-1 { flex: 1; }
+
+.type-checks { display: flex; flex-direction: column; gap: 6px; }
+.check-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--c-text); cursor: pointer; }
+.check-label input[type="radio"] { accent-color: #1d4ed8; }
 </style>
