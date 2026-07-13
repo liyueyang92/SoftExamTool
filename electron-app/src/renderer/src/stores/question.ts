@@ -73,6 +73,8 @@ export interface QuestionFilter {
   source_type?: string
   knowledge_tag?: string
   is_favorite?: boolean
+  has_images?: boolean
+  has_img_tags?: boolean
   page?: number
   pageSize?: number
 }
@@ -222,7 +224,9 @@ export const useQuestionStore = defineStore('question', () => {
       f.difficulty !== undefined ||
       f.source_type !== undefined ||
       f.knowledge_tag !== undefined ||
-      f.is_favorite !== undefined
+      f.is_favorite !== undefined ||
+      f.has_images !== undefined ||
+      f.has_img_tags !== undefined
     ) {
       filter.page = 1
     }

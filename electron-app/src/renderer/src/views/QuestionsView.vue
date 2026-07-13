@@ -459,6 +459,14 @@ function setLabel(q: Question): string {
           <option v-for="d in [1,2,3,4,5]" :key="d" :value="d">{{ diffLabel(d) }}</option>
         </select>
         <label class="fav-toggle">
+          <input type="checkbox" @change="applyFilter({ has_images: ($event.target as HTMLInputElement).checked || undefined, page: 1 })" />
+          含图片
+        </label>
+        <label class="fav-toggle">
+          <input type="checkbox" @change="applyFilter({ has_img_tags: ($event.target as HTMLInputElement).checked || undefined, page: 1 })" />
+          &lt;img&gt;标签
+        </label>
+        <label class="fav-toggle">
           <input type="checkbox" @change="applyFilter({ is_favorite: ($event.target as HTMLInputElement).checked || undefined, page: 1 })" />
           仅收藏
         </label>

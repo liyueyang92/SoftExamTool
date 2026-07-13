@@ -52,6 +52,8 @@ export interface QueryFilter {
   source_type?: string
   knowledge_tag?: string
   is_favorite?: boolean
+  has_images?: boolean
+  has_img_tags?: boolean
   page?: number
   pageSize?: number
 }
@@ -373,6 +375,8 @@ function buildFilterConditions(filter: QueryFilter): { conditions: string[]; par
     source_type,
     knowledge_tag,
     is_favorite,
+    has_images,
+    has_img_tags,
   } = filter
   const conditions: string[] = []
   const params: unknown[] = []
@@ -387,6 +391,20 @@ function buildFilterConditions(filter: QueryFilter): { conditions: string[]; par
   if (source_type) { conditions.push('q.source_type = ?'); params.push(source_type) }
   if (knowledge_tag) { conditions.push('q.knowledge_tags LIKE ?'); params.push(`%${knowledge_tag}%`) }
   if (is_favorite) { conditions.push('q.is_favorite = 1') }
+  if (has_images !== undefined) {
+    if (has_images) {
+      conditions.push("EXISTS (SELECT 1 FROM question_images WHERE question_images.question_id = q.id)")
+    } else {
+      conditions.push("NOT EXISTS (SELECT 1 FROM question_images WHERE question_images.question_id = q.id)")
+    }
+  }
+  if (has_img_tags !== undefined) {
+    if (has_img_tags) {
+      conditions.push("(q.content LIKE '%<img%' OR q.options LIKE '%<img%' OR q.explanation LIKE '%<img%')")
+    } else {
+      conditions.push("(q.content NOT LIKE '%<img%' AND (q.options NOT LIKE '%<img%' OR q.options IS NULL) AND (q.explanation NOT LIKE '%<img%' OR q.explanation IS NULL))")
+    }
+  }
 
   return { conditions, params }
 }
