@@ -81,11 +81,29 @@ export function upsertQuestionGroup(
   }
 
   if (isNew) {
-    db.prepare(`
-      INSERT INTO question_groups
+    const insResult = db.prepare(`
+      INSERT OR IGNORE INTO question_groups
         (id, name, group_type, exam_year, exam_period, description, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, input.name, groupType, examYear, examPeriod, description, now, now)
+
+    if (insResult.changes === 0) {
+      // UNIQUE constraint prevented insert — race / lookup mismatch, find existing and update
+      const conflictId = db.prepare(`
+        SELECT id FROM question_groups
+        WHERE name = ? AND group_type = ?
+          AND COALESCE(exam_year, -1) = COALESCE(?, -1)
+          AND COALESCE(exam_period, '') = COALESCE(?, '')
+      `).get(input.name, groupType, examYear, examPeriod) as { id: string } | undefined
+      if (conflictId) {
+        id = conflictId
+        db.prepare(`
+          UPDATE question_groups
+          SET name = ?, group_type = ?, exam_year = ?, exam_period = ?, description = ?, updated_at = ?
+          WHERE id = ?
+        `).run(input.name, groupType, examYear, examPeriod, description, now, id)
+      }
+    }
   } else {
     db.prepare(`
       UPDATE question_groups

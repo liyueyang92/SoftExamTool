@@ -2851,25 +2851,35 @@ function registerIpcHandlers(): void {
     }
     const items = getCrawlerReviewItemsByIds(db, ids)
       .filter((item) => item.review_status === 'pending' || item.review_status === 'approved')
-    const fallbackGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
+
+    // When importing with exam metadata, resolve group via composite key (name, type, year, period)
+    let fallbackGroupId: string | null = null
+    if (exam_year !== null || (exam_period !== null && exam_period !== '')) {
+      if (new_group?.name?.trim()) {
+        fallbackGroupId = upsertQuestionGroup(db, {
+          ...new_group,
+          group_type: new_group.group_type ?? 'crawled',
+          exam_year,
+          exam_period: exam_period && exam_period !== '' ? exam_period as ExamPeriod : null,
+        }).id
+      } else if (target_group_id) {
+        const existingGroup = getQuestionGroup(db, target_group_id)
+        if (existingGroup) {
+          fallbackGroupId = upsertQuestionGroup(db, {
+            name: existingGroup.name,
+            group_type: existingGroup.group_type as QuestionGroupType,
+            exam_year,
+            exam_period: exam_period && exam_period !== '' ? exam_period as ExamPeriod : null,
+            description: existingGroup.description,
+          }).id
+        }
+      }
+    }
+    if (!fallbackGroupId) {
+      fallbackGroupId = resolveQuestionGroupId(db, { target_group_id, new_group }, 'crawled')
+    }
     if (!fallbackGroupId) {
       throw Object.assign(new Error('请选择现有分组或新建分组后再确认入库'), { code: 'CRAWLER_IMPORT_GROUP_REQUIRED' })
-    }
-
-    // Sync exam metadata to the target group when importing with explicit year/period
-    if (exam_year !== null || (exam_period !== null && exam_period !== '')) {
-      const targetGroup = getQuestionGroup(db, fallbackGroupId)
-      if (targetGroup) {
-        upsertQuestionGroup(db, {
-          id: targetGroup.id,
-          name: targetGroup.name,
-          group_type: targetGroup.group_type as QuestionGroupType,
-          exam_year: exam_year ?? targetGroup.exam_year,
-          exam_period: exam_period && exam_period !== '' ? exam_period as ExamPeriod : targetGroup.exam_period,
-          description: targetGroup.description,
-          skipNameDedup: true,
-        })
-      }
     }
 
     const imageDir = getStoragePaths().imageDir
