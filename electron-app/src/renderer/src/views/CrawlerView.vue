@@ -51,6 +51,8 @@ const questionTypeConfig = ref<QuestionTypeConfig>('')
 
 const groupMode = ref<'existing' | 'new'>('existing')
 const targetGroupId = ref('')
+const existingExamYear = ref<number | ''>('')
+const existingExamPeriod = ref<'H1' | 'H2' | ''>('')
 const newGroupName = ref('')
 const newGroupType = ref<'crawled' | 'past_exam' | 'custom'>('crawled')
 const newGroupYear = ref<number | null>(null)
@@ -74,9 +76,25 @@ const selectedSessions = computed(() => {
   return ruleId ? store.sessions.filter((item) => item.site_id === ruleId) : []
 })
 const pendingCount = computed(() => store.reviewItems.length)
-const existingImportGroups = computed(() =>
-  questionStore.groups.filter((group) => group.group_type !== 'past_exam')
-)
+const existingPastExamYears = computed(() => {
+  const currentYear = new Date().getFullYear()
+  const years: number[] = []
+  for (let y = currentYear; y > currentYear - 5; y--) {
+    years.push(y)
+  }
+  return years
+})
+const existingImportGroups = computed(() => {
+  const year = existingExamYear.value
+  const period = existingExamPeriod.value
+  return questionStore.groups.filter((group) => {
+    if (!year && !period) return true
+    if (group.group_type !== 'past_exam') return false
+    if (year && group.exam_year !== year) return false
+    if (period && group.exam_period !== period) return false
+    return true
+  })
+})
 const selectedReviewCount = computed(() => selectedReviewIds.value.length)
 const allReviewsSelected = computed(() =>
   Boolean(store.reviewItems.length) && selectedReviewIds.value.length === store.reviewItems.length
@@ -450,6 +468,11 @@ function importGroupPayload(): { target_group_id?: string | null; new_group?: Ne
   return { target_group_id: null, new_group: null }
 }
 
+function groupOptionLabel(group: { name: string; group_type: string; exam_year: number | null; exam_period: string | null }) {
+  if (group.group_type !== 'past_exam' || !group.exam_year) return group.name
+  return `${group.name}`
+}
+
 async function runCrawl(ruleId: string) {
   runProgress.value = 0
   runMessage.value = '准备启动'
@@ -791,10 +814,21 @@ function reviewOptionsSummary(payload: ReviewPayload) {
           <button :class="{ active: groupMode === 'existing' }" @click="groupMode = 'existing'">现有分组</button>
           <button :class="{ active: groupMode === 'new' }" @click="groupMode = 'new'">新建分组</button>
         </div>
-        <select v-if="groupMode === 'existing'" v-model="targetGroupId" class="input">
-          <option value="">选择分组</option>
-          <option v-for="g in existingImportGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
-        </select>
+        <div v-if="groupMode === 'existing'" class="existing-group-grid">
+          <select v-model="existingExamYear" class="input">
+            <option value="">全部真题年份</option>
+            <option v-for="year in existingPastExamYears" :key="year" :value="year">{{ year }}</option>
+          </select>
+          <select v-model="existingExamPeriod" class="input">
+            <option value="">全部期次</option>
+            <option value="H1">上半年</option>
+            <option value="H2">下半年</option>
+          </select>
+          <select v-model="targetGroupId" class="input wide-select">
+            <option value="">选择分组</option>
+            <option v-for="g in existingImportGroups" :key="g.id" :value="g.id">{{ groupOptionLabel(g) }}</option>
+          </select>
+        </div>
         <div v-if="groupMode === 'new'" class="group-grid">
           <input v-model="newGroupName" class="input" placeholder="分组名称" />
           <select v-model="newGroupType" class="input">
@@ -1042,6 +1076,8 @@ function reviewOptionsSummary(payload: ReviewPayload) {
 .segmented button:last-child { border-right: 0; }
 .segmented button.active { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
 .group-grid, .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.existing-group-grid { display: grid; grid-template-columns: minmax(120px, 160px) minmax(110px, 140px) minmax(220px, 1fr); gap: 10px; }
+.existing-group-grid .wide-select { min-width: 0; }
 .input { width: 100%; border: 1px solid var(--c-input-border); background: var(--c-input); color: var(--c-text); border-radius: 6px; padding: 7px 9px; min-height: 34px; }
 .runs, .review-list { display: flex; flex-direction: column; gap: 8px; }
 .run-row { display: grid; grid-template-columns: 72px 72px 86px 112px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }

@@ -17,6 +17,7 @@ import {
 } from './db/questions'
 import {
   listQuestionGroups, upsertQuestionGroup, deleteQuestionGroup, getQuestionGroup,
+  countQuestionsInGroup, moveQuestionsToGroup,
   type QuestionGroupInput, type QuestionGroupType,
 } from './db/question-groups'
 import { startPractice, submitAnswer, endPractice } from './db/practice'
@@ -2184,6 +2185,12 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.QUESTION_GROUP_UPSERT, async (args) =>
     upsertQuestionGroup(db, args as Parameters<typeof upsertQuestionGroup>[1]))
   registerHandler(IPC.QUESTION_GROUP_DELETE, async (id) => deleteQuestionGroup(db, id as string))
+  registerHandler(IPC.QUESTION_GROUP_COUNT, async (id) =>
+    countQuestionsInGroup(db, id as string))
+  registerHandler(IPC.QUESTION_GROUP_MOVE_QUESTIONS, async (args) => {
+    const { fromGroupId, toGroupId } = args as { fromGroupId: string; toGroupId: string }
+    return moveQuestionsToGroup(db, fromGroupId, toGroupId)
+  })
   registerHandler(IPC.QUESTION_QUERY, async (args) => {
     return queryQuestions(db, args as Parameters<typeof queryQuestions>[1])
   })

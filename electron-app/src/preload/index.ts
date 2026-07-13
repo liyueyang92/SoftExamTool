@@ -57,6 +57,10 @@ const customAPI = {
     invokeWithTimeout<unknown>('questionGroup:upsert', args),
   deleteQuestionGroup: (id: string) =>
     invokeWithTimeout<void>('questionGroup:delete', id),
+  countQuestionsInGroup: (id: string) =>
+    invokeWithTimeout<number>('questionGroup:count', id),
+  moveQuestionsToGroup: (args: { fromGroupId: string; toGroupId: string }) =>
+    invokeWithTimeout<number>('questionGroup:moveQuestions', args),
   queryQuestions: (filter?: Record<string, unknown>) =>
     invokeWithTimeout<{ items: unknown[]; total: number }>('question:query', filter),
   searchQuestions: (args: { q: string; limit?: number }) =>

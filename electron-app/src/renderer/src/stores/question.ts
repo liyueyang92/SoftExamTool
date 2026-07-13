@@ -124,6 +124,13 @@ export const useQuestionStore = defineStore('question', () => {
     groups.value = groups.value.filter((g) => g.id !== id)
   }
 
+  async function moveQuestions(fromGroupId: string, toGroupId: string): Promise<number> {
+    const res = await window.electronAPI.moveQuestionsToGroup({ fromGroupId, toGroupId })
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    await fetchGroups()
+    return res.data as number
+  }
+
   async function ensureGroupId(args: { groupId?: string | null; newGroup?: QuestionGroupDraft | null }): Promise<string | null> {
     if (args.groupId) return args.groupId
     if (args.newGroup?.name?.trim()) {
@@ -204,7 +211,7 @@ export const useQuestionStore = defineStore('question', () => {
 
   return {
     groups, groupsLoading, questions, total, loading, filter, stats,
-    fetchGroups, saveGroup, removeGroup, ensureGroupId,
+    fetchGroups, saveGroup, removeGroup, moveQuestions, ensureGroupId,
     fetchPage, search, insert, batchImport, update, remove, toggleFavorite, loadStats, setFilter,
   }
 })

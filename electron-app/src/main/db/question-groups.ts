@@ -92,6 +92,38 @@ export function upsertQuestionGroup(
   return db.prepare('SELECT * FROM question_groups WHERE id = ?').get(id) as QuestionGroup
 }
 
+export function countQuestionsInGroup(db: Database, id: string): number {
+  const row = db.prepare(
+    'SELECT COUNT(*) as n FROM questions WHERE group_id = ?'
+  ).get(id) as { n: number }
+  return row.n
+}
+
+export function moveQuestionsToGroup(
+  db: Database,
+  fromGroupId: string,
+  toGroupId: string
+): number {
+  const target = getQuestionGroup(db, toGroupId)
+  if (!target) {
+    throw Object.assign(new Error('目标分组不存在'), { code: 'QUESTION_GROUP_NOT_FOUND' })
+  }
+  if (fromGroupId === toGroupId) {
+    throw Object.assign(new Error('源分组和目标分组不能相同'), { code: 'QUESTION_GROUP_SAME' })
+  }
+  const result = db.prepare(
+    'UPDATE questions SET group_id = ? WHERE group_id = ?'
+  ).run(toGroupId, fromGroupId)
+  return result.changes
+}
+
 export function deleteQuestionGroup(db: Database, id: string): void {
+  const count = countQuestionsInGroup(db, id)
+  if (count > 0) {
+    throw Object.assign(
+      new Error(`分组内还有 ${count} 道题目，请先移动或删除题目`),
+      { code: 'QUESTION_GROUP_NOT_EMPTY' }
+    )
+  }
   db.prepare('DELETE FROM question_groups WHERE id = ?').run(id)
 }

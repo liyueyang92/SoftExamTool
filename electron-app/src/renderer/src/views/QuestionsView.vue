@@ -16,6 +16,12 @@ const searchResults = ref<Question[]>([])
 const showEdit = ref(false)
 const showImport = ref(false)
 const showGroupEdit = ref(false)
+const showGroupManage = ref(false)
+const groupQuestionCounts = ref<Record<string, number>>({})
+const moveTargets = ref<Record<string, string>>({})
+const manageMessage = ref('')
+const manageError = ref('')
+const manageLoading = ref(false)
 const editTarget = ref<Partial<Question> | null>(null)
 const editGroupOptions = ref<QuestionGroup[]>([])
 const editGroupsLoading = ref(false)
@@ -119,6 +125,70 @@ async function saveGroup() {
   if (!groupEdit.value.name.trim()) return
   await store.saveGroup(groupEdit.value)
   showGroupEdit.value = false
+}
+
+function groupTypeLabel(t: string) {
+  const labels: Record<string, string> = {
+    custom: '自定义', past_exam: '历年真题', ai_generated: 'AI出题',
+    crawled: '爬虫导入', manual_import: '批量导入',
+  }
+  return labels[t] ?? t
+}
+
+async function openGroupManage() {
+  manageMessage.value = ''
+  manageError.value = ''
+  manageLoading.value = true
+  moveTargets.value = {}
+  await store.fetchGroups()
+  const counts: Record<string, number> = {}
+  for (const g of store.groups) {
+    try {
+      const res = await window.electronAPI.countQuestionsInGroup(g.id)
+      counts[g.id] = res.success ? (res.data as number) : 0
+    } catch {
+      counts[g.id] = 0
+    }
+  }
+  groupQuestionCounts.value = counts
+  manageLoading.value = false
+  showGroupManage.value = true
+}
+
+async function deleteGroup(id: string) {
+  const g = store.groups.find((x) => x.id === id)
+  if (!confirm(`确认删除分组「${g?.name || id}」？此操作不可撤销。`)) return
+  manageMessage.value = ''
+  manageError.value = ''
+  try {
+    await store.removeGroup(id)
+    const newCounts = { ...groupQuestionCounts.value }
+    delete newCounts[id]
+    groupQuestionCounts.value = newCounts
+    manageMessage.value = '分组已删除'
+  } catch (e) {
+    manageError.value = (e as Error).message
+  }
+}
+
+async function moveGroup(fromId: string) {
+  const toId = moveTargets.value[fromId]
+  if (!toId) { manageError.value = '请选择目标分组'; return }
+  const fromGroup = store.groups.find((g) => g.id === fromId)
+  const toGroup = store.groups.find((g) => g.id === toId)
+  const count = groupQuestionCounts.value[fromId] || 0
+  if (!confirm(`确认将「${fromGroup?.name || fromId}」中的 ${count} 道题目移动到「${toGroup?.name || toId}」？`)) return
+  manageMessage.value = ''
+  manageError.value = ''
+  try {
+    const moved = await store.moveQuestions(fromId, toId)
+    groupQuestionCounts.value[fromId] = Math.max(0, (groupQuestionCounts.value[fromId] || 0) - moved)
+    groupQuestionCounts.value[toId] = (groupQuestionCounts.value[toId] || 0) + moved
+    moveTargets.value[fromId] = ''
+    manageMessage.value = `已移动 ${moved} 道题目`
+  } catch (e) {
+    manageError.value = (e as Error).message
+  }
 }
 
 async function deleteQuestion(q: Question) {
@@ -261,6 +331,7 @@ function setLabel(q: Question): string {
       <div class="btn-group">
         <button class="btn-sm btn-primary" @click="openNew">+ 新建题目</button>
         <button class="btn-sm" @click="openNewGroup">+ 新建分组</button>
+        <button class="btn-sm" @click="openGroupManage">管理分组</button>
         <button class="btn-sm" @click="showImport = true">批量导入</button>
       </div>
     </div>
@@ -419,6 +490,71 @@ function setLabel(q: Question): string {
       </div>
     </div>
 
+    <!-- Group Manage Modal -->
+    <div v-if="showGroupManage" class="modal-backdrop" @click.self="showGroupManage = false">
+      <div class="modal" style="width:680px">
+        <div class="modal-header">
+          <h3>管理分组</h3>
+          <button class="close-btn" @click="showGroupManage = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="manageLoading" class="loading-tip">加载中…</div>
+          <div v-else-if="!store.groups.length" class="empty-tip">暂无分组</div>
+          <table v-else class="group-table">
+            <thead>
+              <tr>
+                <th style="width:180px">分组名称</th>
+                <th style="width:90px">类型</th>
+                <th style="width:70px">题目数</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="g in store.groups" :key="g.id">
+                <td class="group-name-cell">
+                  <strong>{{ g.name }}</strong>
+                  <span v-if="g.exam_year" class="mini-meta">{{ g.exam_year }} {{ g.exam_period === 'H1' ? '上半年' : '下半年' }}</span>
+                </td>
+                <td><span class="type-pill-sm">{{ groupTypeLabel(g.group_type) }}</span></td>
+                <td class="count-cell">{{ groupQuestionCounts[g.id] ?? '…' }}</td>
+                <td>
+                  <div class="group-actions">
+                    <button
+                      class="btn-sm danger-btn"
+                      :disabled="(groupQuestionCounts[g.id] ?? 0) > 0"
+                      @click="deleteGroup(g.id)"
+                      :title="(groupQuestionCounts[g.id] ?? 0) > 0 ? '分组非空，无法删除' : '删除空分组'"
+                    >删除</button>
+                    <template v-if="(groupQuestionCounts[g.id] ?? 0) > 0">
+                      <select
+                        v-model="moveTargets[g.id]"
+                        class="select-sm move-select"
+                      >
+                        <option value="">移动到…</option>
+                        <option v-for="dest in store.groups.filter(x => x.id !== g.id)" :key="dest.id" :value="dest.id">
+                          {{ dest.name }}
+                        </option>
+                      </select>
+                      <button
+                        class="btn-sm"
+                        :disabled="!moveTargets[g.id]"
+                        @click="moveGroup(g.id)"
+                      >移动</button>
+                    </template>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="manageMessage" class="success-text">{{ manageMessage }}</p>
+          <p v-if="manageError" class="error-text">{{ manageError }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="showGroupManage = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Import Modal -->
     <div v-if="showImport" class="modal-backdrop" @click.self="showImport = false">
       <div class="modal">
@@ -547,4 +683,18 @@ function setLabel(q: Question): string {
 .code-hint { background: var(--c-bg); border-radius: 6px; padding: 8px; font-size: 11px; color: #86efac; overflow-x: auto; margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
 .error-text { color: #f87171; font-size: 13px; }
 .success-text { color: #4ade80; font-size: 13px; }
+
+.group-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.group-table th { text-align: left; padding: 8px 10px; color: var(--c-text-2); font-weight: 600; border-bottom: 1px solid var(--c-border); }
+.group-table td { padding: 10px; border-bottom: 1px solid var(--c-panel); color: var(--c-text); vertical-align: middle; }
+.group-table tbody tr:hover td { background: #1a2740; }
+.group-name-cell { display: flex; flex-direction: column; }
+.group-name-cell strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.count-cell { font-weight: 700; font-variant-numeric: tabular-nums; }
+.type-pill-sm { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #1e3a5f; color: #93c5fd; }
+.group-actions { display: flex; gap: 6px; align-items: center; }
+.move-select { min-width: 140px; }
+.danger-btn { color: #f87171 !important; border-color: #f87171 !important; }
+.danger-btn:hover:not(:disabled) { background: #3b1010 !important; }
+.danger-btn:disabled { opacity: 0.35; cursor: not-allowed; color: var(--c-text-2) !important; border-color: var(--c-border-2) !important; }
 </style>
