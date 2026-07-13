@@ -2946,7 +2946,10 @@ function registerIpcHandlers(): void {
     for (const item of items) byRun.set(item.run_id, (byRun.get(item.run_id) ?? 0) + 1)
     for (const [runId, count] of byRun) {
       const run = db.prepare('SELECT total_saved FROM crawler_runs WHERE id=?').get(runId) as { total_saved: number } | undefined
-      const patch: Parameters<typeof updateCrawlerRun>[2] = { total_saved: (run?.total_saved ?? 0) + count }
+      const patch: Parameters<typeof updateCrawlerRun>[2] = {
+        total_saved: (run?.total_saved ?? 0) + count,
+        target_group_id: fallbackGroupId,
+      }
       if (exam_year !== undefined && exam_year !== null) patch.exam_year = exam_year
       if (exam_period !== undefined && exam_period !== null && exam_period !== '') patch.exam_period = exam_period
       updateCrawlerRun(db, runId, patch)

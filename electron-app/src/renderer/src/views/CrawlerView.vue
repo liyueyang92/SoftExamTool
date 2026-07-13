@@ -120,10 +120,24 @@ onMounted(async () => {
     questionStore.fetchGroups(),
   ])
   checkRuntimeStatus()
-  window.electronAPI.onTaskProgress((msg) => {
+  window.electronAPI.onTaskProgress(async (msg) => {
     if (activeRun.value && msg.taskId === activeRun.value.taskId) {
       runProgress.value = msg.progress
       runMessage.value = msg.message
+      if (msg.progress === 100) {
+        // 爬取完成，刷新运行历史和待确认结果
+        if (selectedRuleId.value) {
+          await Promise.all([
+            store.fetchRuns(selectedRuleId.value),
+            store.fetchReviewItems({ status: 'pending', limit: 100 }),
+          ])
+        }
+      } else if (msg.progress === 0 && msg.message) {
+        // 爬取出错，刷新运行历史
+        if (selectedRuleId.value) {
+          await store.fetchRuns(selectedRuleId.value)
+        }
+      }
     }
   })
 })
