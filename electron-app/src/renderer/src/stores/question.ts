@@ -199,6 +199,17 @@ export const useQuestionStore = defineStore('question', () => {
     total.value = Math.max(0, total.value - 1)
   }
 
+  async function batchRemove(ids: string[]) {
+    if (!ids.length) return
+    const res = await window.electronAPI.batchDeleteQuestions(ids)
+    if (res.success) {
+      const deletedCount = (res.data as { deleted: number }).deleted
+      const idSet = new Set(ids)
+      questions.value = questions.value.filter((q) => !idSet.has(q.id))
+      total.value = Math.max(0, total.value - deletedCount)
+    }
+  }
+
   async function toggleFavorite(id: string) {
     const res = await window.electronAPI.toggleFavorite(id)
     if (res.success) {
@@ -235,6 +246,6 @@ export const useQuestionStore = defineStore('question', () => {
   return {
     groups, groupsLoading, questions, total, loading, filter, stats,
     fetchGroups, saveGroup, removeGroup, moveQuestions, ensureGroupId,
-    fetchPage, search, insert, batchImport, exportData, importFile, update, remove, toggleFavorite, loadStats, setFilter,
+    fetchPage, search, insert, batchImport, exportData, importFile, update, remove, batchRemove, toggleFavorite, loadStats, setFilter,
   }
 })

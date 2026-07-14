@@ -112,6 +112,11 @@ const importGroupReady = computed(() => {
   if (!newGroupName.value.trim()) return false
   return true
 })
+const recentRunWithDuplicates = computed(() => {
+  return store.runs.find(
+    (r) => r.status === 'completed' && r.total_found > 0 && r.total_review === 0
+  ) ?? null
+})
 
 watch(() => store.reviewItems.map((item) => item.id), (ids) => {
   selectedReviewIds.value = selectedReviewIds.value.filter((id) => ids.includes(id))
@@ -128,10 +133,11 @@ onMounted(async () => {
   checkRuntimeStatus()
   window.electronAPI.onTaskProgress(async (msg) => {
     if (activeRun.value && msg.taskId === activeRun.value.taskId) {
+      const wasComplete = runProgress.value === 100
       runProgress.value = msg.progress
       runMessage.value = msg.message
-      if (msg.progress === 100) {
-        // 爬取完成，刷新运行历史和待确认结果
+      if (msg.progress === 100 && !wasComplete) {
+        // 爬取完成，刷新运行历史和待确认结果（仅首次 progress=100 时刷新）
         if (selectedRuleId.value) {
           await Promise.all([
             store.fetchRuns(selectedRuleId.value),
@@ -857,6 +863,10 @@ function reviewOptionsSummary(payload: ReviewPayload) {
                 <template v-else>
                   <span class="badge" :class="statusClass(run.status)">{{ run.status }}</span>
                   <span>抓取 {{ run.total_found }}</span>
+                  <span class="run-review-col">
+                    <template v-if="run.total_review > 0 && run.total_found !== run.total_review">新 {{ run.total_review }} 条</template>
+                    <template v-else-if="run.total_review === 0 && run.total_found > 0">全部重复</template>
+                  </span>
                   <span>已入库 {{ run.total_saved }}</span>
                   <span class="run-group-label">{{ runGroupLabel(run) }}</span>
                   <span>{{ formatDate(run.started_at) }}</span>
@@ -927,7 +937,15 @@ function reviewOptionsSummary(payload: ReviewPayload) {
       </section>
       <p v-if="reviewMessage" class="success">{{ reviewMessage }}</p>
       <p v-if="reviewError" class="error">{{ reviewError }}</p>
-      <div v-if="!store.reviewItems.length" class="empty">暂无待确认结果</div>
+      <div v-if="!store.reviewItems.length" class="empty">
+        <template v-if="recentRunWithDuplicates">
+          暂无待确认结果 — 最近一次抓取的 {{ recentRunWithDuplicates.total_found }} 条均为重复内容，已自动跳过。
+          <br /><small>如需重新导入，请先在题库中删除对应题目后再运行爬虫。</small>
+        </template>
+        <template v-else>
+          暂无待确认结果
+        </template>
+      </div>
       <div v-else class="review-list">
         <div v-if="reviewSelectionMode || selectedReviewCount" class="review-selection-bar">
           <span>已选 {{ selectedReviewCount }} / {{ pendingCount }}</span>
@@ -1164,9 +1182,10 @@ function reviewOptionsSummary(payload: ReviewPayload) {
 .existing-group-grid .wide-select { min-width: 0; }
 .input { width: 100%; border: 1px solid var(--c-input-border); background: var(--c-input); color: var(--c-text); border-radius: 6px; padding: 7px 9px; min-height: 34px; }
 .runs, .review-list { display: flex; flex-direction: column; gap: 8px; }
-.run-row { display: grid; grid-template-columns: 72px 72px 86px 130px 112px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
+.run-row { display: grid; grid-template-columns: 72px 72px 72px 86px 130px 112px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12px; }
 .run-row.editing { grid-template-columns: 1fr; padding: 12px; }
 .run-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-review-col { font-size: 11px; color: var(--c-text-2); }
 .run-group-label { color: var(--c-brand); font-size: 11px; }
 .run-edit-form { display: flex; flex-direction: column; gap: 4px; max-width: 400px; }
 .run-actions { display: flex; justify-content: flex-end; gap: 6px; white-space: nowrap; }

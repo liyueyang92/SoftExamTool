@@ -16,6 +16,7 @@ export interface Question {
   difficulty: number
   source_type: 'manual' | 'ai_generated' | 'crawled' | 'imported'
   source_url: string | null
+  content_hash: string | null
   is_favorite: number
   group_name?: string | null
   group_type?: QuestionGroupType | null
@@ -37,6 +38,7 @@ export interface QuestionInput {
   difficulty?: number
   source_type?: Question['source_type']
   source_url?: string | null
+  content_hash?: string | null
   exam_year?: number | null
   exam_period?: ExamPeriod | null
 }
@@ -269,8 +271,8 @@ export function insertQuestion(db: Database.Database, input: QuestionInput): Que
   const prepared = attachQuestionSets(db, [input])[0]
   db.prepare(`
     INSERT INTO questions
-      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, exam_year, exam_period, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, content_hash, exam_year, exam_period, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     prepared.group_id ?? null,
@@ -285,6 +287,7 @@ export function insertQuestion(db: Database.Database, input: QuestionInput): Que
     prepared.difficulty ?? 3,
     prepared.source_type ?? 'manual',
     prepared.source_url ?? null,
+    prepared.content_hash ?? null,
     prepared.exam_year ?? null,
     prepared.exam_period ?? null,
     now
@@ -303,8 +306,8 @@ export function insertQuestion(db: Database.Database, input: QuestionInput): Que
 export function batchInsertQuestions(db: Database.Database, inputs: QuestionInput[]): number {
   const stmt = db.prepare(`
     INSERT INTO questions
-      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, exam_year, exam_period, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, group_id, question_set_id, question_set_order, type, content, options, answer, explanation, knowledge_tags, difficulty, source_type, source_url, content_hash, exam_year, exam_period, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insert = db.transaction((items: QuestionInput[]) => {
     for (const input of attachQuestionSets(db, items)) {
@@ -322,6 +325,7 @@ export function batchInsertQuestions(db: Database.Database, inputs: QuestionInpu
         input.difficulty ?? 3,
         input.source_type ?? 'manual',
         input.source_url ?? null,
+        input.content_hash ?? null,
         input.exam_year ?? null,
         input.exam_period ?? null,
         new Date().toISOString()
@@ -356,6 +360,13 @@ export function updateQuestion(db: Database.Database, id: string, changes: Parti
 
 export function deleteQuestion(db: Database.Database, id: string): void {
   db.prepare('DELETE FROM questions WHERE id = ?').run(id)
+}
+
+export function batchDeleteQuestions(db: Database.Database, ids: string[]): number {
+  if (!ids.length) return 0
+  const placeholders = ids.map(() => '?').join(',')
+  const result = db.prepare(`DELETE FROM questions WHERE id IN (${placeholders})`).run(...ids)
+  return result.changes
 }
 
 export function toggleFavorite(db: Database.Database, id: string): number {

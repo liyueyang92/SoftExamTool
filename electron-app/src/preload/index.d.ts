@@ -74,6 +74,7 @@ declare global {
       batchInsertQuestions: (args: { questions: unknown[] }) => Promise<IpcResponse<{ count: number }>>
       updateQuestion: (args: { id: string; changes: unknown }) => Promise<IpcResponse<void>>
       deleteQuestion: (id: string) => Promise<IpcResponse<void>>
+      batchDeleteQuestions: (ids: string[]) => Promise<IpcResponse<{ deleted: number }>>
       toggleFavorite: (id: string) => Promise<IpcResponse<{ is_favorite: number }>>
       getQuestionStats: () => Promise<IpcResponse<Record<string, unknown>>>
       exportQuestions: (args: { filter?: Record<string, unknown> }) => Promise<IpcResponse<{ count: number; filePath: string; imageCount?: number }>>

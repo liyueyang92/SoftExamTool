@@ -2,6 +2,8 @@ import re
 from urllib.parse import urljoin
 from urllib.parse import parse_qs, urlparse
 
+from loguru import logger
+
 from modules.crawler.schemas import CrawlRuleModel, RawItem
 from modules.crawler.utils.selectors import attr_from, list_from, text_from
 from modules.crawler.utils.image_downloader import extract_image_refs, rich_text_from
@@ -42,6 +44,10 @@ def extract_raw_item(
 
     # Collect image references from the item element
     image_refs = extract_image_refs(item, url)
+    if image_refs:
+        logger.info('[Crawler:Extract] {} image ref(s) in item url={}: {}',
+                    len(image_refs), url[:100],
+                    [r.src_url[:80] for r in image_refs[:5]])
 
     detail_href = attr_from(item, detail_link_selector, 'href') if detail_link_selector else ''
     source_url = urljoin(url, detail_href) if detail_href else url

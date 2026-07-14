@@ -146,9 +146,28 @@ async def _do_crawl(req: RunCrawlRequest) -> None:
                 session_state=req.session_state,
                 manual_input=req.manual_input,
             ))
+            # Log image_ref status before push
+            items_with_local = 0
+            items_with_refs = 0
+            for r in results:
+                refs = r.image_refs or []
+                if refs:
+                    items_with_refs += 1
+                    if any(rf.local_path for rf in refs):
+                        items_with_local += 1
+            logger.info('[Crawler:Router] push_complete: {} items, {} with image_refs, {} with local_path',
+                        len(results), items_with_refs, items_with_local)
+
+            dumped = [item.model_dump() for item in results]
+            # Spot-check: log the image_refs field of the first item that has them
+            for d in dumped:
+                if d.get('image_refs'):
+                    logger.info('[Crawler:Router] Sample image_refs: {}', d['image_refs'][:2])
+                    break
+
             await push_progress(req.task_id, 95, 'Finalizing results')
             await push_complete(req.task_id, {
-                'questions': [item.model_dump() for item in results],
+                'questions': dumped,
                 'total_found': len(results),
                 'rule_id': req.rule_id,
                 'target_group_id': req.target_group_id,

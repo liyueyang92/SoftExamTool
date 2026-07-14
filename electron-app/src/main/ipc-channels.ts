@@ -31,6 +31,7 @@ export const IPC = {
   QUESTION_BATCH_INSERT: 'question:batchInsert',
   QUESTION_UPDATE: 'question:update',
   QUESTION_DELETE: 'question:delete',
+  QUESTION_BATCH_DELETE: 'question:batchDelete',
   QUESTION_TOGGLE_FAVORITE: 'question:toggleFavorite',
   QUESTION_GET_STATS: 'question:getStats',
   QUESTION_UPLOAD_IMAGE: 'question:uploadImage',

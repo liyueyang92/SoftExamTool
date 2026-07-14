@@ -48,6 +48,47 @@ const exportError = ref('')
 // Pending images for new questions (not yet saved)
 const pendingImages = ref<Array<{ field_name: string; source_path: string }>>([])
 
+// Batch selection
+const selectedIds = ref<Set<string>>(new Set())
+const batchDeleting = ref(false)
+
+const allSelected = computed(() => {
+  const list = displayList.value
+  return list.length > 0 && list.every(q => selectedIds.value.has(q.id))
+})
+const anySelected = computed(() => selectedIds.value.size > 0)
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedIds.value = new Set()
+  } else {
+    selectedIds.value = new Set(displayList.value.map(q => q.id))
+  }
+}
+
+function toggleSelect(id: string) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  selectedIds.value = next
+}
+
+async function batchDelete() {
+  const count = selectedIds.value.size
+  if (!count) return
+  if (!confirm(`确认删除选中的 ${count} 道题目？删除后可通过爬虫重新获取。`)) return
+  batchDeleting.value = true
+  try {
+    await store.batchRemove(Array.from(selectedIds.value))
+    selectedIds.value = new Set()
+  } finally {
+    batchDeleting.value = false
+  }
+}
+
 const typeLabels: Record<string, string> = { single: '单选', multiple: '多选', case: '案例', essay: '论文' }
 const diffLabel = (d: number) => ['', '★☆☆☆☆', '★★☆☆☆', '★★★☆☆', '★★★★☆', '★★★★★'][d] ?? d
 
@@ -87,10 +128,11 @@ async function doSearch() {
   }
 }
 
-function clearSearch() { searchQ.value = ''; searchResults.value = [] }
+function clearSearch() { searchQ.value = ''; searchResults.value = []; selectedIds.value = new Set() }
 
 async function applyFilter(f: Record<string, unknown>) {
   store.setFilter(f)
+  selectedIds.value = new Set()
   await store.fetchPage()
 }
 
@@ -478,6 +520,9 @@ function setLabel(q: Question): string {
         <button class="btn-sm" @click="openGroupManage">管理分组</button>
         <button class="btn-sm" @click="showImport = true">批量导入</button>
         <button class="btn-sm" @click="openExport">导出题目</button>
+        <button v-if="anySelected" class="btn-sm btn-danger" @click="batchDelete" :disabled="batchDeleting">
+          {{ batchDeleting ? '删除中…' : `批量删除 (${selectedIds.size})` }}
+        </button>
       </div>
     </div>
 
@@ -488,6 +533,7 @@ function setLabel(q: Question): string {
       <table v-else class="q-table">
         <thead>
           <tr>
+            <th style="width:36px"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" title="全选/取消" /></th>
             <th style="width:50px">题型</th>
             <th>题目</th>
             <th style="width:150px">分组</th>
@@ -497,7 +543,8 @@ function setLabel(q: Question): string {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="q in displayList" :key="q.id">
+          <tr v-for="q in displayList" :key="q.id" :class="{ 'row-selected': selectedIds.has(q.id) }">
+            <td><input type="checkbox" :checked="selectedIds.has(q.id)" @change="toggleSelect(q.id)" /></td>
             <td><span class="type-badge" :class="q.type">{{ typeLabels[q.type] }}</span></td>
             <td class="content-cell">
               <span v-if="setLabel(q)" class="set-badge">{{ setLabel(q) }}</span>
@@ -833,12 +880,16 @@ function setLabel(q: Question): string {
 .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary { background: #1d4ed8 !important; }
 .btn-primary:hover:not(:disabled) { background: #2563eb !important; }
+.btn-danger { background: #b91c1c !important; color: #fff !important; }
+.btn-danger:hover:not(:disabled) { background: #dc2626 !important; }
 
 .table-wrap { flex: 1; overflow: auto; background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 8px; }
 .q-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .q-table th { position: sticky; top: 0; background: var(--c-bg); padding: 10px 12px; text-align: left; color: var(--c-text-2); font-weight: 600; border-bottom: 1px solid var(--c-border); }
 .q-table td { padding: 10px 12px; border-bottom: 1px solid var(--c-panel); color: var(--c-text); vertical-align: middle; }
 .q-table tr:hover td { background: #1a2740; }
+.q-table tr.row-selected td { background: #1e3a5f; }
+.q-table tr.row-selected:hover td { background: #1e3a6f; }
 .mini-meta { font-size: 11px; color: var(--c-text-2); margin-top: 2px; }
 
 .type-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }

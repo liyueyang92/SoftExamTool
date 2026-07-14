@@ -33,6 +33,7 @@ export interface CrawlerRun {
   status: string
   total_found: number
   total_saved: number
+  total_review: number
   target_group_id: string | null
   exam_year: number | null
   exam_period: string | null

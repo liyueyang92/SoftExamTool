@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Tag
+from loguru import logger
 
 from modules.crawler.schemas import ImageRef
 
@@ -22,14 +23,17 @@ def extract_image_refs(
     refs: list[ImageRef] = []
     seen: set[str] = set()
 
-    for img in soup_element.find_all('img'):
+    all_imgs = soup_element.find_all('img')
+    logger.debug('[Crawler:ExtractImg] Found {} <img> tags in element (base_url={})',
+                 len(all_imgs), base_url[:80])
+
+    for img in all_imgs:
         src = (img.get('src') or '').strip()
         if not src:
             continue
-        # Skip inline data URIs (they stay embedded in content)
         if src.startswith('data:'):
+            logger.debug('[Crawler:ExtractImg] Skipping data URI: {}...', src[:60])
             continue
-        # Resolve relative URLs
         try:
             absolute = urljoin(base_url, src)
         except Exception:
@@ -42,6 +46,8 @@ def extract_image_refs(
         alt = (img.get('alt') or '').strip()
         refs.append(ImageRef(src_url=absolute, alt=alt))
 
+    if refs:
+        logger.info('[Crawler:ExtractImg] Extracted {} unique image refs', len(refs))
     return refs
 
 
@@ -57,6 +63,8 @@ async def download_images(
     """
     if not image_refs:
         return image_refs
+
+    logger.info('[Crawler:Download] Downloading {} image(s) to {}', len(image_refs), output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -111,8 +119,11 @@ async def download_images(
                     content_type=content_type,
                     file_size=len(content),
                 ))
-            except Exception:
+                logger.info('[Crawler:Download] OK {} -> {} ({} bytes)',
+                            ref.src_url[:100], filepath, len(content))
+            except Exception as e:
                 # Failed downloads are skipped
+                logger.warning('[Crawler:Download] FAIL {} -> {}', ref.src_url[:100], e)
                 updated.append(ref)
 
         return updated

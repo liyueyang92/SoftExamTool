@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3-multiple-ciphers'
 import { randomUUID } from 'crypto'
+import { existsSync } from 'fs'
 import type { QuestionInput } from './questions'
 import type { QuestionGroup } from './question-groups'
 
@@ -34,6 +35,7 @@ export interface CrawlerRun {
   status: string
   total_found: number
   total_saved: number
+  total_review: number
   target_group_id: string | null
   exam_year: number | null
   exam_period: string | null
@@ -75,10 +77,19 @@ export interface CrawlerSessionPublic {
   updated_at: string
 }
 
+export interface CrawlerImageRef {
+  src_url: string
+  alt?: string
+  local_path?: string | null
+  content_type?: string | null
+  file_size?: number
+}
+
 export interface NormalizedCrawlerPayload extends QuestionInput {
   title?: string | null
   content_hash?: string
   source_site?: string | null
+  image_refs?: CrawlerImageRef[]
   raw?: unknown
 }
 
@@ -90,6 +101,7 @@ export interface CrawlerReviewItem {
   normalized_payload: string
   target_group_id: string | null
   target_group_snapshot: string | null
+  imported_question_id: string | null
   review_status: ReviewStatus
   review_notes: string
   created_at: string
@@ -213,6 +225,7 @@ export function updateCrawlerRun(
     status?: string
     total_found?: number
     total_saved?: number
+    total_review?: number
     ended_at?: string
     error_code?: string
     error_stage?: string
@@ -251,6 +264,13 @@ export function addCrawledCount(db: Database, ruleId: string, count: number): vo
   ).run(count, new Date().toISOString(), ruleId)
 }
 
+export interface SaveReviewResult {
+  saved: number
+  imagesSupplemented: number
+  /** content_hashes of already-imported items that have new images needing processing */
+  importedWithNewImages: string[]
+}
+
 export function saveCrawlerReviewItems(
   db: Database,
   args: {
@@ -259,7 +279,7 @@ export function saveCrawlerReviewItems(
     items: NormalizedCrawlerPayload[]
     targetGroupId?: string | null
   }
-): number {
+): SaveReviewResult {
   const targetGroup = args.targetGroupId
     ? db.prepare('SELECT id, name, group_type, exam_year, exam_period FROM question_groups WHERE id=?')
         .get(args.targetGroupId) as ParsedCrawlerReviewItem['target_group_snapshot']
@@ -271,11 +291,22 @@ export function saveCrawlerReviewItems(
       (id, rule_id, run_id, content_hash, normalized_payload, target_group_id, target_group_snapshot, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
+
   const insert = db.transaction((items: NormalizedCrawlerPayload[]) => {
     let inserted = 0
+    let imagesSupplemented = 0
+    const importedWithNewImages: string[] = []
+    let totalWithRefs = 0
+    let totalWithLocal = 0
+
     for (const item of items) {
       const hash = item.content_hash
       if (!hash) continue
+      const hasRefs = (item.image_refs?.length ?? 0) > 0
+      const hasLocal = (item.image_refs?.filter(r => r.local_path)?.length ?? 0) > 0
+      if (hasRefs) totalWithRefs++
+      if (hasLocal) totalWithLocal++
+
       const result = stmt.run(
         randomUUID(),
         args.ruleId,
@@ -287,11 +318,69 @@ export function saveCrawlerReviewItems(
         now,
         now
       )
-      inserted += result.changes
+      if (result.changes > 0) {
+        inserted++
+        if (hasLocal) {
+          console.log(`[Crawler:Save] NEW item hash=${hash.slice(0,12)} with ${item.image_refs!.filter(r => r.local_path).length} local image(s)`)
+        }
+      } else {
+        // Duplicate — check if new crawl has images the existing item is missing
+        const newImages = (item.image_refs ?? []).filter(r => {
+          if (!r.local_path || typeof r.local_path !== 'string') return false
+          try { return existsSync(r.local_path) } catch { return false }
+        })
+        if (newImages.length === 0) continue
+
+        const existing = db.prepare(
+          'SELECT * FROM crawler_review_items WHERE rule_id = ? AND content_hash = ?'
+        ).get(args.ruleId, hash) as CrawlerReviewItem | undefined
+        if (!existing) {
+          console.log(`[Crawler:Save] DUPLICATE hash=${hash.slice(0,12)} but existing not found — SKIPPING`)
+          continue
+        }
+
+        const existingPayload = JSON.parse(existing.normalized_payload) as NormalizedCrawlerPayload
+        // Check if existing images' local_path files actually exist on disk
+        // (temp dir may have been cleaned since the last crawl)
+        const existingImagesReal = (existingPayload.image_refs ?? []).filter(r => {
+          if (!r.local_path || typeof r.local_path !== 'string') return false
+          try { return existsSync(r.local_path) } catch { return false }
+        })
+        const staleCount = (existingPayload.image_refs ?? []).filter(r => r.local_path).length - existingImagesReal.length
+        if (existingImagesReal.length > 0) {
+          console.log(`[Crawler:Save] DUPLICATE hash=${hash.slice(0,12)} already has ${existingImagesReal.length} valid image(s) on disk — SKIPPING`)
+          continue
+        }
+
+        // Existing images are dead (temp files gone). Update with fresh image_refs.
+        if (staleCount > 0) {
+          console.log(`[Crawler:Save] DUPLICATE hash=${hash.slice(0,12)} had ${staleCount} stale local_path(s) (files deleted) — refreshing`)
+        }
+
+        console.log(`[Crawler:Save] DUPLICATE hash=${hash.slice(0,12)} status="${existing.review_status}" missing images — ${newImages.length} new image(s) available`)
+        if (existing.review_status === 'pending' || existing.review_status === 'approved') {
+          const mergedPayload = { ...existingPayload, image_refs: item.image_refs }
+          db.prepare(
+            'UPDATE crawler_review_items SET normalized_payload = ?, updated_at = ? WHERE id = ?'
+          ).run(JSON.stringify(mergedPayload), now, existing.id)
+          imagesSupplemented++
+          console.log(`[Crawler:Save] IMAGES SUPPLEMENTED for pending item hash=${hash.slice(0,12)}`)
+        } else if (existing.review_status === 'imported') {
+          importedWithNewImages.push(hash)
+          console.log(`[Crawler:Save] QUEUED for import supplement hash=${hash.slice(0,12)} imported_question_id=${existing.imported_question_id || 'NULL'}`)
+        }
+      }
     }
-    return inserted
+    console.log(`[Crawler:Save] Summary: ${items.length} items, ${totalWithRefs} with image_refs, ${totalWithLocal} with local_path, ${inserted} inserted, ${imagesSupplemented} supplemented, ${importedWithNewImages.length} queued for import`)
+    return { inserted, imagesSupplemented, importedWithNewImages }
   })
-  return insert(args.items) as number
+
+  const resultData = insert(args.items)
+  return {
+    saved: resultData.inserted as number,
+    imagesSupplemented: resultData.imagesSupplemented as number,
+    importedWithNewImages: resultData.importedWithNewImages as string[],
+  }
 }
 
 export function listCrawlerReviewItems(
@@ -344,6 +433,29 @@ export function getCrawlerReviewItemsByIds(db: Database, ids: string[]): ParsedC
   return rows
     .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
     .map(parseReviewItem)
+}
+
+/** Write the question ID back to the review item after successful import. */
+export function setCrawlerReviewImportedQuestionId(
+  db: Database,
+  reviewItemId: string,
+  questionId: string,
+): void {
+  db.prepare(`
+    UPDATE crawler_review_items
+    SET imported_question_id = ?, updated_at = ?
+    WHERE id = ?
+  `).run(questionId, new Date().toISOString(), reviewItemId)
+}
+
+/** Find a review item by its imported question ID. */
+export function getCrawlerReviewItemByQuestionId(
+  db: Database,
+  questionId: string,
+): CrawlerReviewItem | undefined {
+  return db.prepare(`
+    SELECT * FROM crawler_review_items WHERE imported_question_id = ? LIMIT 1
+  `).get(questionId) as CrawlerReviewItem | undefined
 }
 
 export function upsertCrawlerSiteSession(

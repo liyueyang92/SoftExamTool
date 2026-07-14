@@ -76,6 +76,8 @@ const customAPI = {
     invokeWithTimeout<void>('question:update', args),
   deleteQuestion: (id: string) =>
     invokeWithTimeout<void>('question:delete', id),
+  batchDeleteQuestions: (ids: string[]) =>
+    invokeWithTimeout<{ deleted: number }>('question:batchDelete', ids),
   toggleFavorite: (id: string) =>
     invokeWithTimeout<{ is_favorite: number }>('question:toggleFavorite', id),
   getQuestionStats: () =>

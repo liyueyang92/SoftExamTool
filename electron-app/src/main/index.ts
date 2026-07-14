@@ -14,7 +14,7 @@ import { WsProgressClient } from './ws-client'
 import { registerHandler } from './ipc-handler'
 import {
   queryQuestions, searchQuestions, insertQuestion, batchInsertQuestions,
-  updateQuestion, deleteQuestion, toggleFavorite, getQuestionStats, getWrongQuestions,
+  updateQuestion, deleteQuestion, batchDeleteQuestions, toggleFavorite, getQuestionStats, getWrongQuestions,
   exportQuestions
 } from './db/questions'
 import {
@@ -32,7 +32,8 @@ import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
   createCrawlerRun, updateCrawlerRun, listCrawlerRuns, deleteCrawlerRun, addCrawledCount,
   saveCrawlerReviewItems, listCrawlerReviewItems, updateCrawlerReviewStatus,
-  getCrawlerReviewItemsByIds,
+  getCrawlerReviewItemsByIds, setCrawlerReviewImportedQuestionId,
+  getCrawlerReviewItemByQuestionId,
   upsertCrawlerSiteSession, listCrawlerSiteSessions, getCrawlerSiteSession,
   touchCrawlerSiteSessionValidation, deleteCrawlerSiteSession,
   type NormalizedCrawlerPayload,
@@ -2285,6 +2286,14 @@ function registerIpcHandlers(): void {
     deleteImagesForQuestion(db, questionId, getStoragePaths().imageDir)
     deleteQuestion(db, questionId)
   })
+  registerHandler(IPC.QUESTION_BATCH_DELETE, async (ids) => {
+    const questionIds = ids as string[]
+    const imageDir = getStoragePaths().imageDir
+    for (const id of questionIds) {
+      deleteImagesForQuestion(db, id, imageDir)
+    }
+    return { deleted: batchDeleteQuestions(db, questionIds) }
+  })
   registerHandler(IPC.QUESTION_TOGGLE_FAVORITE, async (id) => ({ is_favorite: toggleFavorite(db, id as string) }))
   registerHandler(IPC.QUESTION_GET_STATS, async () => getQuestionStats(db))
 
@@ -2909,6 +2918,208 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
+  /**
+   * When a duplicate crawl has new images but the original import lacked them,
+   * find the already-imported question and add the images to permanent storage.
+   */
+  function supplementImportedQuestionImages(
+    dbImpl: typeof db,
+    ruleId: string,
+    questions: NormalizedCrawlerPayload[],
+    contentHashes: string[],
+    reportError: (msg: string) => void,
+  ): number {
+    let count = 0
+    const imageDir = getStoragePaths().imageDir
+    console.log(`[Crawler:Suppl] Starting with ${contentHashes.length} contentHashes, ${questions.length} questions, imageDir=${imageDir}`)
+    // Build maps for quick lookup
+    const newItemByHash = new Map<string, NormalizedCrawlerPayload>()
+    let qWithLocals = 0
+    for (const q of questions) {
+      if (q.content_hash) newItemByHash.set(q.content_hash, q)
+      if ((q.image_refs?.filter(r => r.local_path)?.length ?? 0) > 0) qWithLocals++
+    }
+    console.log(`[Crawler:Suppl] Question map: ${newItemByHash.size} entries, ${qWithLocals} with local_path images`)
+
+    for (const hash of contentHashes) {
+      console.log(`[Crawler:Suppl] Processing hash=${hash.slice(0,12)}`)
+      try {
+        const reviewItem = dbImpl.prepare(
+          'SELECT * FROM crawler_review_items WHERE rule_id = ? AND content_hash = ? AND review_status = ?'
+        ).get(ruleId, hash, 'imported') as CrawlerReviewItem | undefined
+        if (!reviewItem) {
+          console.log(`[Crawler:Suppl] hash=${hash.slice(0,12)} no 'imported' review item — SKIP`)
+          continue
+        }
+
+        const freshItem = newItemByHash.get(hash)
+        if (!freshItem) {
+          console.log(`[Crawler:Suppl] hash=${hash.slice(0,12)} not found in questions map — SKIP`)
+          continue
+        }
+        const newImages = freshItem?.image_refs?.filter(r => r.local_path) ?? []
+        if (newImages.length === 0) {
+          console.log(`[Crawler:Suppl] hash=${hash.slice(0,12)} fresh item has no local_path images — SKIP`)
+          continue
+        }
+        console.log(`[Crawler:Suppl] hash=${hash.slice(0,12)} has ${newImages.length} new image(s) with local_path`)
+
+        // Find the matching question — use the direct imported_question_id link
+        let question: { id: string; content: string } | null = null
+
+        if (reviewItem.imported_question_id) {
+          question = dbImpl.prepare(
+            'SELECT id, content FROM questions WHERE id = ?'
+          ).get(reviewItem.imported_question_id) as { id: string; content: string } | undefined ?? null
+          console.log(`[Crawler:Suppl] lookup by imported_question_id="${reviewItem.imported_question_id}": ${question ? 'FOUND' : 'NOT FOUND'}`)
+        }
+
+        // Fallback: for old review items without the link, try content_hash on questions
+        if (!question && hash) {
+          question = dbImpl.prepare(
+            'SELECT id, content FROM questions WHERE content_hash = ? LIMIT 1'
+          ).get(hash) as { id: string; content: string } | undefined ?? null
+          console.log(`[Crawler:Suppl] lookup by content_hash="${hash.slice(0,12)}": ${question ? 'FOUND' : 'NOT FOUND'}`)
+          if (question && reviewItem.id) {
+            setCrawlerReviewImportedQuestionId(dbImpl, reviewItem.id, question.id)
+          }
+        }
+
+        // Last-resort fallback
+        if (!question) {
+          const payload = JSON.parse(reviewItem.normalized_payload) as NormalizedCrawlerPayload
+          if (payload.source_url && payload.answer) {
+            question = dbImpl.prepare(
+              `SELECT id, content FROM questions
+               WHERE source_url = ? AND answer = ? AND type = ?
+               ORDER BY created_at DESC LIMIT 1`
+            ).get(payload.source_url, payload.answer, payload.type) as { id: string; content: string } | undefined ?? null
+            console.log(`[Crawler:Suppl] lookup by (source_url,answer,type): ${question ? 'FOUND' : 'NOT FOUND'}`)
+            if (question && reviewItem.id) {
+              setCrawlerReviewImportedQuestionId(dbImpl, reviewItem.id, question.id)
+            }
+          } else {
+            console.log(`[Crawler:Suppl] no source_url+answer in payload — cannot fallback-match`)
+          }
+        }
+
+        if (!question) {
+          const payload = JSON.parse(reviewItem.normalized_payload) as NormalizedCrawlerPayload
+          const msg = `Cannot find imported question for "${(payload.content ?? '').slice(0, 60)}..."`
+          console.warn('[Crawler:Suppl]', msg)
+          reportError(msg)
+          continue
+        }
+        console.log(`[Crawler:Suppl] question.id=${question.id} has ${question.content.length} chars content`)
+
+        // Build a set of src_urls already covered by existing question_images
+        // (original_name stores the source filename, matching against src_url tail)
+        const existingImages = getImagesForQuestion(dbImpl, question.id)
+        // Clean up stale DB records whose disk files are gone
+        const staleIds: string[] = []
+        const coveredSrcUrls = new Set<string>()
+        for (const img of existingImages) {
+          const fullPath = join(imageDir, img.file_name)
+          if (!existsSync(fullPath)) {
+            staleIds.push(img.id)
+          } else {
+            // The original_name is the last segment of src_url, use it as a heuristic key
+            coveredSrcUrls.add(img.original_name)
+          }
+        }
+        for (const staleId of staleIds) {
+          console.log(`[Crawler:Suppl]   cleaning stale record ${staleId.slice(0,8)}`)
+          deleteImageById(dbImpl, staleId, imageDir)
+        }
+        console.log(`[Crawler:Suppl] question has ${existingImages.length} image DB records, ${staleIds.length} stale, ${coveredSrcUrls.size} covered src filenames`)
+
+        // Also check question content for already-replaced exam-image:// refs
+        const alreadyReplacedUrls = new Set<string>()
+        const examImageRx = /<img[^>]*src=["']exam-image:\/\/([a-f0-9-]+)["'][^>]*>/gi
+        let m: RegExpExecArray | null
+        while ((m = examImageRx.exec(question.content)) !== null) {
+          alreadyReplacedUrls.add(m[1])
+        }
+
+        // Process each image reference from the fresh crawl
+        let imagesAdded = 0
+        for (const ref of newImages) {
+          if (!ref.local_path || !existsSync(ref.local_path)) {
+            console.log(`[Crawler:Suppl]   ref ${ref.src_url.slice(0,80)} — local_path missing or file gone, SKIP`)
+            continue
+          }
+
+          // Check if this src_url is already covered
+          const srcFilename = ref.src_url.split('/').pop() || ''
+          if (coveredSrcUrls.has(srcFilename) || coveredSrcUrls.has(ref.original_name || srcFilename)) {
+            console.log(`[Crawler:Suppl]   ref ${ref.src_url.slice(0,80)} — already covered by existing image, SKIP`)
+            continue
+          }
+
+          // Check if content already has an exam-image:// tag for this src_url
+          const escapedUrl = ref.src_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          const oldImgPattern = new RegExp(`<img[^>]*src=["']${escapedUrl}["'][^>]*>`, 'gi')
+          if (!oldImgPattern.test(question.content) && !question.content.includes(ref.src_url)) {
+            // Content doesn't reference this URL anymore — may have been replaced by an earlier hash
+            // Check if any exam-image tag exists that might have replaced it
+            if (alreadyReplacedUrls.size > 0) {
+              console.log(`[Crawler:Suppl]   ref ${ref.src_url.slice(0,80)} — URL not found in content (already replaced?), SKIP`)
+              continue
+            }
+          }
+
+          // OK — this ref needs to be added. Process it.
+          try {
+            const imageId = randomUUID()
+            const mimeType = ref.content_type || guessMimeType(ref.src_url)
+            const srcFilename = ref.src_url.split('/').pop() || 'image.png'
+            const fileSize = ref.file_size || getFileSize(ref.local_path)
+            if (fileSize > 5 * 1024 * 1024 || fileSize === 0) continue
+
+            const fileName = copyImageToStorage(ref.local_path, imageDir, imageId)
+            console.log(`[Crawler:Suppl]   COPIED ${ref.src_url.slice(0,80)} -> ${fileName} (${fileSize}B)`)
+
+            insertImage(dbImpl, {
+              question_id: question.id,
+              field_name: 'content',
+              file_name: fileName,
+              original_name: srcFilename,
+              mime_type: mimeType,
+              file_size: fileSize,
+            })
+
+            // Mark as covered so subsequent refs/hashes don't duplicate
+            coveredSrcUrls.add(srcFilename)
+            try { unlinkSync(ref.local_path) } catch { /* ignore */ }
+
+            // Replace original src_url in content with exam-image:// reference
+            const imgTag = `<img src="exam-image://${imageId}" alt="${ref.alt || ''}" />`
+            if (oldImgPattern.test(question.content)) {
+              const newContent = question.content.replace(oldImgPattern, imgTag)
+              updateQuestion(dbImpl, question.id, { content: newContent })
+              question.content = newContent
+            } else if (question.content.includes(ref.src_url)) {
+              const newContent = question.content.replace(ref.src_url, `exam-image://${imageId}`)
+              updateQuestion(dbImpl, question.id, { content: newContent })
+              question.content = newContent
+            }
+            imagesAdded++
+          } catch (e) {
+            console.warn(`[Crawler:Suppl] Failed to supplement image ${ref.src_url}:`, e)
+          }
+        }
+        if (imagesAdded > 0) {
+          console.log(`[Crawler:Suppl] hash=${hash.slice(0,12)} added ${imagesAdded} image(s) to question ${question.id}`)
+          count++
+        }
+      } catch (e) {
+        console.error('[Crawler] Failed to supplement images for hash:', hash, e)
+        reportError(`Image supplementation failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    return count
+  }
+
   registerHandler(IPC.CRAWLER_RUN, async (args) => {
     const { ruleId, account_alias = null } = args as {
       ruleId: string
@@ -2929,20 +3140,67 @@ function registerIpcHandlers(): void {
         rule_id: string
       }
       try {
-        const saved = saveCrawlerReviewItems(db, {
+        // Log what we received from Python
+        const withRefs = questions.filter(q => (q.image_refs?.length ?? 0) > 0)
+        const withLocal = questions.filter(q => (q.image_refs?.filter(r => r.local_path)?.length ?? 0) > 0)
+        console.log(`[Crawler:OnComplete] Received ${questions.length} questions, ${withRefs.length} have image_refs, ${withLocal.length} have local_path`)
+        if (withLocal.length > 0) {
+          console.log(`[Crawler:OnComplete] First item with local_path images:`, JSON.stringify(withLocal[0].image_refs?.slice(0, 2)))
+        } else if (withRefs.length > 0) {
+          console.log(`[Crawler:OnComplete] First item image_refs (no local_path):`, JSON.stringify(withRefs[0].image_refs?.slice(0, 2)))
+        }
+
+        const saveResult = saveCrawlerReviewItems(db, {
           ruleId,
           runId: run.id,
           items: questions,
           targetGroupId: null,
         })
+        const { saved, imagesSupplemented, importedWithNewImages } = saveResult
+        const duplicateCount = total_found - saved
+
+        // Supplement images for already-imported items that previously lacked images
+        let importedImagesAdded = 0
+        const supplementErrors: string[] = []
+        if (importedWithNewImages.length > 0) {
+          importedImagesAdded = supplementImportedQuestionImages(
+            db, ruleId, questions, importedWithNewImages,
+            (err) => supplementErrors.push(err)
+          )
+        }
+
         updateCrawlerRun(db, run.id, {
           status: 'completed',
           total_found,
           total_saved: 0,
+          total_review: saved,
           ended_at: new Date().toISOString(),
         })
         addCrawledCount(db, ruleId, saved)
-        taskManager!.updateTask(taskId, 'completed', { saved })
+        taskManager!.updateTask(taskId, 'completed', {
+          saved,
+          total_found,
+          duplicate: duplicateCount,
+          imagesSupplemented,
+          importedImagesAdded,
+        })
+
+        // Build progress message with details
+        const parts: string[] = []
+        if (saved > 0) parts.push(`${saved} new`)
+        if (duplicateCount > 0) parts.push(`${duplicateCount} duplicates`)
+        if (imagesSupplemented > 0) parts.push(`${imagesSupplemented} images supplemented`)
+        if (importedImagesAdded > 0) parts.push(`${importedImagesAdded} imported images added`)
+        const msg = parts.length > 0 ? `Done (${parts.join(', ')})` : 'Done'
+        // Append supplement errors to the message so user can see what went wrong
+        const fullMsg = supplementErrors.length > 0
+          ? `${msg} — ${supplementErrors.join('; ')}`
+          : msg
+        mainWindow.webContents.send(IPC.TASK_PROGRESS, {
+          taskId,
+          progress: 100,
+          message: fullMsg,
+        })
       } catch (e) {
         console.error('[Crawler] Failed to save questions:', e)
       }
@@ -3145,32 +3403,24 @@ function registerIpcHandlers(): void {
 
     const imageDir = getStoragePaths().imageDir
 
-    // Separate items with and without image_refs
-    const itemsWithImages: typeof items = []
-    const questionsForBatch: Parameters<typeof batchInsertQuestions>[1] = []
+    // Separate items: filter image_refs to only those with actual disk files first
+    const imageDir_ = imageDir
+    let totalSaved = 0
 
     for (const item of items) {
       const payload = item.normalized_payload as NormalizedCrawlerPayload & { image_refs?: Array<{ src_url: string; alt?: string; local_path?: string | null; content_type?: string | null; file_size?: number }> }
-      const hasImages = payload.image_refs && payload.image_refs.length > 0 &&
-        payload.image_refs.some(ref => ref.local_path)
-
-      if (hasImages) {
-        itemsWithImages.push(item)
-      } else {
-        questionsForBatch.push({
-          ...payload,
-          source_type: 'crawled' as const,
-          group_id: fallbackGroupId,
-          ...(exam_year ? { exam_year } : {}),
-          ...(exam_period ? { exam_period } : {}),
-        })
+      // Filter to only refs with actual files on disk (temp files may have been cleaned)
+      const validRefs = (payload.image_refs ?? []).filter(ref => {
+        if (!ref.local_path || typeof ref.local_path !== 'string') return false
+        try { return existsSync(ref.local_path) } catch { return false }
+      })
+      const staleCount = (payload.image_refs ?? []).length - validRefs.length
+      if (staleCount > 0) {
+        console.log(`[Crawler:Import] item hash=${(payload.content_hash ?? '').slice(0,12)} has ${staleCount} stale local_path(s) out of ${payload.image_refs!.length} total refs`)
       }
-    }
 
-    // Insert items with images individually to track question IDs
-    const imageDir_ = imageDir
-    for (const item of itemsWithImages) {
-      const payload = item.normalized_payload as NormalizedCrawlerPayload & { image_refs?: Array<{ src_url: string; alt?: string; local_path?: string | null; content_type?: string | null; file_size?: number }> }
+      const hasImages = validRefs.length > 0
+
       const question = insertQuestion(db, {
         ...payload,
         source_type: 'crawled' as const,
@@ -3178,20 +3428,24 @@ function registerIpcHandlers(): void {
         ...(exam_year ? { exam_year } : {}),
         ...(exam_period ? { exam_period } : {}),
       })
+      setCrawlerReviewImportedQuestionId(db, item.id, question.id)
 
-      // Process image references
-      if (payload.image_refs) {
-        for (const ref of payload.image_refs) {
-          if (!ref.local_path || !existsSync(ref.local_path)) continue
-
+      if (hasImages) {
+        console.log(`[Crawler:Import] Processing ${validRefs.length} valid image(s) for question ${question.id}`)
+        for (const ref of validRefs) {
           try {
             const imageId = randomUUID()
             const mimeType = ref.content_type || guessMimeType(ref.src_url)
             const originalName = ref.src_url.split('/').pop() || 'image.png'
-            const fileSize = ref.file_size || getFileSize(ref.local_path)
-            if (fileSize > 5 * 1024 * 1024) continue
+            const fileSize = ref.file_size || getFileSize(ref.local_path!)
+            if (fileSize > 5 * 1024 * 1024 || fileSize === 0) {
+              console.log(`[Crawler:Import] SKIP ${ref.src_url.slice(0,80)} — file_size=${fileSize}`)
+              continue
+            }
 
-            const fileName = copyImageToStorage(ref.local_path, imageDir_, imageId)
+            const fileName = copyImageToStorage(ref.local_path!, imageDir_, imageId)
+            console.log(`[Crawler:Import] COPIED ${ref.local_path!} -> ${join(imageDir_, fileName)} (${fileSize} bytes)`)
+
             insertImage(db, {
               question_id: question.id,
               field_name: 'content',
@@ -3202,7 +3456,7 @@ function registerIpcHandlers(): void {
             })
 
             // Clean up the temporary source file after successful copy
-            try { unlinkSync(ref.local_path) } catch { /* ignore */ }
+            try { unlinkSync(ref.local_path!) } catch { /* ignore */ }
 
             // Replace the original src_url in content with exam-image:// reference
             const imgTag = `<img src="exam-image://${imageId}" alt="${ref.alt || ''}" />`
@@ -3211,28 +3465,20 @@ function registerIpcHandlers(): void {
             if (oldImgPattern.test(question.content)) {
               const newContent = question.content.replace(oldImgPattern, imgTag)
               updateQuestion(db, question.id, { content: newContent })
-            } else {
-              // URL may appear as plain text or in different markup
-              if (question.content.includes(ref.src_url)) {
-                updateQuestion(db, question.id, {
-                  content: question.content.replace(ref.src_url, `exam-image://${imageId}`)
-                })
-              }
+              question.content = newContent
+            } else if (question.content.includes(ref.src_url)) {
+              const newContent = question.content.replace(ref.src_url, `exam-image://${imageId}`)
+              updateQuestion(db, question.id, { content: newContent })
+              question.content = newContent
             }
           } catch (e) {
-            console.warn(`[CrawlerImport] Failed to process image ${ref.src_url}:`, e)
+            console.warn(`[Crawler:Import] Failed to process image ${ref.src_url.slice(0,80)}:`, e)
           }
         }
       }
+      totalSaved++
     }
 
-    // Batch insert items without images
-    let batchCount = 0
-    if (questionsForBatch.length > 0) {
-      batchCount = batchInsertQuestions(db, questionsForBatch)
-    }
-
-    const totalSaved = itemsWithImages.length + batchCount
     updateCrawlerReviewStatus(db, items.map((item) => item.id), 'imported')
 
     const byRun = new Map<string, number>()

@@ -527,4 +527,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_question_groups_unique
   ON question_groups(name, group_type, COALESCE(exam_year, -1), COALESCE(exam_period, ''));
 `,
   },
+  {
+    version: 14,
+    sql: `
+ALTER TABLE crawler_runs ADD COLUMN total_review INTEGER NOT NULL DEFAULT 0;
+`,
+  },
+  {
+    version: 15,
+    sql: `
+ALTER TABLE questions ADD COLUMN content_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_questions_content_hash ON questions(content_hash);
+`,
+  },
+  {
+    version: 16,
+    sql: `
+ALTER TABLE crawler_review_items ADD COLUMN imported_question_id TEXT REFERENCES questions(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_crawler_review_imported_q
+  ON crawler_review_items(imported_question_id);
+`,
+  },
 ]
