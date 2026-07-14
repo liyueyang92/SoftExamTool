@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { usePracticeStore, type PracticeConfig } from '../stores/practice'
 import { useQuestionStore } from '../stores/question'
 
@@ -14,6 +14,15 @@ const starting = ref(false)
 
 onMounted(async () => {
   await questionStore.fetchGroups()
+})
+
+// Report image references in current question at info level
+watch(() => store.currentQuestion, (q) => {
+  if (!q) return
+  const imgMatches = q.content.match(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi)
+  if (imgMatches?.length) {
+    console.log(`[PracticeView] Q ${q.id.slice(0,8)} has ${imgMatches.length} image(s)`)
+  }
 })
 
 async function startSession() {

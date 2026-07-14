@@ -85,6 +85,7 @@ declare global {
       deleteQuestionImage: (args: { id: string }) => Promise<IpcResponse<boolean>>
       listQuestionImages: (args: { question_id: string }) => Promise<IpcResponse<unknown[]>>
       cleanupOrphanImages: () => Promise<IpcResponse<{ count: number }>>
+      ensureLocalImage: (args: { url: string }) => Promise<IpcResponse<{ localUrl: string }>>
 
       startPractice: (config: unknown) => Promise<IpcResponse<{ sessionId: string; questions: unknown[] }>>
       submitAnswer: (args: { sessionId: string; questionId: string; chosen: string; timeMs: number }) => Promise<IpcResponse<{ isCorrect: boolean; answer: string | null; explanation: string | null; nextIndex: number }>>

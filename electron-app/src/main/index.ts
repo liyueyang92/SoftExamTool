@@ -1,6 +1,6 @@
-import { app, shell, BrowserWindow, dialog, safeStorage, Notification, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, dialog, safeStorage, Notification, protocol } from 'electron'
 import { spawn } from 'child_process'
-import { randomUUID } from 'crypto'
+import { randomUUID, createHash } from 'crypto'
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Database from 'better-sqlite3-multiple-ciphers'
@@ -2608,6 +2608,67 @@ function registerIpcHandlers(): void {
     return { count }
   })
 
+  // Download and localize a remote image — returns exam-image:// URL
+  registerHandler(IPC.IMAGE_ENSURE_LOCAL, async (args) => {
+    const { url } = args as { url: string }
+    console.log(`[image:ensureLocal] Requested: "${url}"`)
+
+    // Already local
+    if (url.startsWith('exam-image://') || url.startsWith('data:')) {
+      console.log(`[image:ensureLocal] Already local/data URL, return as-is`)
+      return { localUrl: url }
+    }
+
+    // Build a deterministic ID from the URL so we don't re-download the same image
+    const contentHash = createHash('sha256').update(url).digest('hex')
+    const imageIdUUID = [
+      contentHash.slice(0, 8),
+      contentHash.slice(8, 12),
+      '4' + contentHash.slice(13, 16), // version 4 UUID
+      ((parseInt(contentHash.slice(16, 20), 16) & 0x3fff) | 0x8000).toString(16),
+      contentHash.slice(20, 32),
+    ].join('-')
+
+    // Check if already downloaded (by guessing any extension)
+    const imageDir = getStoragePaths().imageDir
+    try {
+      const existing = readdirSync(imageDir).find(f => f.startsWith(imageIdUUID))
+      if (existing) {
+        console.log(`[image:ensureLocal] Already cached: ${existing}`)
+        return { localUrl: `exam-image://${imageIdUUID}` }
+      }
+    } catch { /* dir may not exist */ }
+
+    // Download
+    try {
+      console.log(`[image:ensureLocal] Downloading from: ${url}`)
+      const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+      if (!resp.ok) {
+        console.warn(`[image:ensureLocal] Download failed: HTTP ${resp.status}`)
+        return { localUrl: url } // fall back to original
+      }
+
+      const buffer = Buffer.from(await resp.arrayBuffer())
+      const contentType = resp.headers.get('content-type') || ''
+      const mimeType = contentType.startsWith('image/') ? contentType : guessMimeType(url)
+      const ext = ({
+        'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg',
+        'image/gif': '.gif', 'image/webp': '.webp', 'image/bmp': '.bmp',
+        'image/svg+xml': '.svg',
+      })[mimeType] || '.png'
+
+      const fileName = `${imageIdUUID}${ext}`
+      const filePath = join(imageDir, fileName)
+      writeFileSync(filePath, buffer)
+      console.log(`[image:ensureLocal] Saved: ${fileName} (${buffer.length} bytes)`)
+
+      return { localUrl: `exam-image://${imageIdUUID}` }
+    } catch (e) {
+      console.error(`[image:ensureLocal] Error downloading:`, e)
+      return { localUrl: url } // fall back to original
+    }
+  })
+
   // Phase 2 - Practice
   registerHandler(IPC.PRACTICE_START, async (args) => startPractice(db, args as Parameters<typeof startPractice>[1]))
   registerHandler(IPC.PRACTICE_SUBMIT_ANSWER, async (args) => {
@@ -3402,24 +3463,11 @@ function registerIpcHandlers(): void {
     }
 
     const imageDir = getStoragePaths().imageDir
-
-    // Separate items: filter image_refs to only those with actual disk files first
-    const imageDir_ = imageDir
     let totalSaved = 0
 
     for (const item of items) {
       const payload = item.normalized_payload as NormalizedCrawlerPayload & { image_refs?: Array<{ src_url: string; alt?: string; local_path?: string | null; content_type?: string | null; file_size?: number }> }
-      // Filter to only refs with actual files on disk (temp files may have been cleaned)
-      const validRefs = (payload.image_refs ?? []).filter(ref => {
-        if (!ref.local_path || typeof ref.local_path !== 'string') return false
-        try { return existsSync(ref.local_path) } catch { return false }
-      })
-      const staleCount = (payload.image_refs ?? []).length - validRefs.length
-      if (staleCount > 0) {
-        console.log(`[Crawler:Import] item hash=${(payload.content_hash ?? '').slice(0,12)} has ${staleCount} stale local_path(s) out of ${payload.image_refs!.length} total refs`)
-      }
-
-      const hasImages = validRefs.length > 0
+      const refs = payload.image_refs ?? []
 
       const question = insertQuestion(db, {
         ...payload,
@@ -3430,50 +3478,116 @@ function registerIpcHandlers(): void {
       })
       setCrawlerReviewImportedQuestionId(db, item.id, question.id)
 
-      if (hasImages) {
-        console.log(`[Crawler:Import] Processing ${validRefs.length} valid image(s) for question ${question.id}`)
-        for (const ref of validRefs) {
-          try {
-            const imageId = randomUUID()
-            const mimeType = ref.content_type || guessMimeType(ref.src_url)
-            const originalName = ref.src_url.split('/').pop() || 'image.png'
-            const fileSize = ref.file_size || getFileSize(ref.local_path!)
+      if (refs.length > 0) {
+        console.log(`[Crawler:Import] Processing ${refs.length} image ref(s) for question ${question.id}`)
+      }
+      for (const ref of refs) {
+        try {
+          const imageId = randomUUID()
+          const mimeType = ref.content_type || guessMimeType(ref.src_url)
+          const originalName = ref.src_url.split('/').pop()?.split('?')[0] || 'image.png'
+          let fileName: string
+          let fileSize: number
+
+          // Try path 1: copy from temp local_path if available
+          const localPathValid = ref.local_path
+            && typeof ref.local_path === 'string'
+            && (() => { try { return existsSync(ref.local_path!) } catch { return false } })()
+          if (localPathValid) {
+            fileSize = ref.file_size || getFileSize(ref.local_path!)
             if (fileSize > 5 * 1024 * 1024 || fileSize === 0) {
               console.log(`[Crawler:Import] SKIP ${ref.src_url.slice(0,80)} — file_size=${fileSize}`)
               continue
             }
-
-            const fileName = copyImageToStorage(ref.local_path!, imageDir_, imageId)
-            console.log(`[Crawler:Import] COPIED ${ref.local_path!} -> ${join(imageDir_, fileName)} (${fileSize} bytes)`)
-
-            insertImage(db, {
-              question_id: question.id,
-              field_name: 'content',
-              file_name: fileName,
-              original_name: originalName,
-              mime_type: mimeType,
-              file_size: fileSize,
-            })
-
-            // Clean up the temporary source file after successful copy
+            fileName = copyImageToStorage(ref.local_path!, imageDir, imageId)
+            console.log(`[Crawler:Import] COPIED from temp: ${ref.local_path!} -> ${join(imageDir, fileName)} (${fileSize}B)`)
+            // Clean up temp file
             try { unlinkSync(ref.local_path!) } catch { /* ignore */ }
-
-            // Replace the original src_url in content with exam-image:// reference
-            const imgTag = `<img src="exam-image://${imageId}" alt="${ref.alt || ''}" />`
-            const escapedUrl = ref.src_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-            const oldImgPattern = new RegExp(`<img[^>]*src=["']${escapedUrl}["'][^>]*>`, 'gi')
-            if (oldImgPattern.test(question.content)) {
-              const newContent = question.content.replace(oldImgPattern, imgTag)
-              updateQuestion(db, question.id, { content: newContent })
-              question.content = newContent
-            } else if (question.content.includes(ref.src_url)) {
-              const newContent = question.content.replace(ref.src_url, `exam-image://${imageId}`)
-              updateQuestion(db, question.id, { content: newContent })
-              question.content = newContent
+          } else {
+            // Path 2: temp file gone or never existed — download directly from src_url
+            console.log(`[Crawler:Import] DOWNLOADING ${ref.src_url.slice(0,80)} (temp file unavailable)`)
+            try {
+              const resp = await fetch(ref.src_url, { signal: AbortSignal.timeout(30_000) })
+              if (!resp.ok) {
+                console.warn(`[Crawler:Import] Download failed: HTTP ${resp.status} for ${ref.src_url.slice(0,80)}`)
+                continue
+              }
+              const buffer = Buffer.from(await resp.arrayBuffer())
+              if (buffer.length === 0 || buffer.length > 5 * 1024 * 1024) {
+                console.warn(`[Crawler:Import] Download size=${buffer.length} — skipping`)
+                continue
+              }
+              fileSize = buffer.length
+              const ext = ({
+                'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg',
+                'image/gif': '.gif', 'image/webp': '.webp', 'image/bmp': '.bmp',
+                'image/svg+xml': '.svg',
+              })[mimeType] || '.png'
+              fileName = `${imageId}${ext}`
+              writeFileSync(join(imageDir, fileName), buffer)
+              console.log(`[Crawler:Import] DOWNLOADED ${ref.src_url.slice(0,80)} -> ${fileName} (${fileSize}B)`)
+            } catch (downloadErr) {
+              console.warn(`[Crawler:Import] Download error for ${ref.src_url.slice(0,80)}:`, downloadErr)
+              continue
             }
-          } catch (e) {
-            console.warn(`[Crawler:Import] Failed to process image ${ref.src_url.slice(0,80)}:`, e)
           }
+
+          insertImage(db, {
+            question_id: question.id,
+            field_name: 'content',
+            file_name: fileName,
+            original_name: originalName,
+            mime_type: mimeType,
+            file_size: fileSize,
+          })
+
+          // Replace in content: build the new img tag
+          const imgTag = `<img src="exam-image://${imageId}" alt="${ref.alt || ''}" />`
+
+          // Strategy: find the <img> tag in content that corresponds to this ref.
+          // Try multiple matching approaches since content URLs may differ from ref.src_url.
+          const contentImgs = [...question.content.matchAll(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi)]
+          let matched = false
+
+          for (const match of contentImgs) {
+            const fullTag = match[0]
+            const contentSrc = match[1]
+            // Skip already-localized images
+            if (contentSrc.startsWith('exam-image://') || contentSrc.startsWith('data:')) continue
+
+            // Match check 1: exact src_url match
+            if (contentSrc === ref.src_url) {
+              question.content = question.content.replace(fullTag, imgTag)
+              matched = true
+              break
+            }
+            // Match check 2: same filename (last path component, ignoring query strings)
+            const contentFile = contentSrc.split('/').pop()?.split('?')[0] || ''
+            const refFile = ref.src_url.split('/').pop()?.split('?')[0] || ''
+            if (contentFile && refFile && contentFile === refFile) {
+              question.content = question.content.replace(fullTag, imgTag)
+              matched = true
+              break
+            }
+          }
+
+          // Fallback: plain string replace of src_url in content
+          if (!matched) {
+            const escapedUrl = ref.src_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            if (question.content.includes(ref.src_url)) {
+              question.content = question.content.replace(ref.src_url, `exam-image://${imageId}`)
+              matched = true
+            }
+          }
+
+          if (matched) {
+            updateQuestion(db, question.id, { content: question.content })
+            console.log(`[Crawler:Import] Content updated: exam-image://${imageId}`)
+          } else {
+            console.warn(`[Crawler:Import] Could not find matching <img> for ${ref.src_url.slice(0,80)} in content`)
+          }
+        } catch (e) {
+          console.warn(`[Crawler:Import] Failed to process image ${ref.src_url.slice(0,80)}:`, e)
         }
       }
       totalSaved++
@@ -3800,6 +3914,11 @@ function registerIpcHandlers(): void {
   })
 }
 
+// Register custom image protocol before app is ready (required by Electron 39+)
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'exam-image', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true } },
+])
+
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.softexam')
 
@@ -3822,11 +3941,59 @@ app.whenReady().then(async () => {
 
     // Register custom protocol for serving question images
     protocol.handle('exam-image', (request) => {
-      const imageId = request.url.replace('exam-image://', '')
+      const rawUrl = request.url
+      const imageId = rawUrl.replace('exam-image://', '').replace(/\/+$/, '')
+      console.log(`[exam-image] Request: rawUrl="${rawUrl}" → imageId="${imageId}"`)
+
+      const imageDir = getStoragePaths().imageDir
+      let filePath: string | null = null
+      let mimeType = 'image/png'
+
+      // Path 1: Look up the image record in DB
       const image = getImageById(db, imageId)
-      if (!image) return new Response('Not Found', { status: 404 })
-      const filePath = join(getStoragePaths().imageDir, image.file_name)
-      return net.fetch(`file://${filePath}`)
+      if (image) {
+        const candidate = join(imageDir, image.file_name)
+        console.log(`[exam-image] DB record: file_name="${image.file_name}" mime="${image.mime_type}" path="${candidate}" exists=${existsSync(candidate)}`)
+        if (existsSync(candidate)) {
+          filePath = candidate
+          mimeType = image.mime_type || guessMimeType(candidate)
+        }
+      } else {
+        console.warn(`[exam-image] imageId="${imageId}" not found in DB — searching disk by prefix`)
+      }
+
+      // Path 2: Fallback — scan image directory for files starting with this UUID
+      if (!filePath) {
+        try {
+          const candidates = readdirSync(imageDir).filter(f => f.startsWith(imageId))
+          console.log(`[exam-image] Disk scan: found ${candidates.length} file(s) matching prefix "${imageId}":`, candidates)
+          if (candidates.length > 0) {
+            filePath = join(imageDir, candidates[0])
+            mimeType = guessMimeType(filePath)
+          }
+        } catch (e) {
+          console.error(`[exam-image] Failed to scan imageDir:`, e)
+        }
+      }
+
+      if (!filePath) {
+        console.warn(`[exam-image] 404 — no file found for imageId="${imageId}"`)
+        return new Response('Not Found', { status: 404 })
+      }
+
+      try {
+        const data = readFileSync(filePath)
+        console.log(`[exam-image] 200 — serving ${data.length} bytes, type=${mimeType}, path=${filePath}`)
+        return new Response(data, {
+          headers: {
+            'Content-Type': mimeType,
+            'Cache-Control': 'public, max-age=31536000',
+          },
+        })
+      } catch (e) {
+        console.error(`[exam-image] 500 — read error for "${filePath}":`, e)
+        return new Response('Not Found', { status: 404 })
+      }
     })
 
     registerIpcHandlers()

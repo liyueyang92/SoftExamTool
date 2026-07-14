@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Question } from './question'
 import { toIpcPayload } from '../utils/ipc'
+import { localizeRemoteImages } from '../utils/imageLocalizer'
 
 export interface PracticeConfig {
   mode: 'random' | 'sequential' | 'wrong' | 'favorites'
@@ -59,8 +60,26 @@ export const usePracticeStore = defineStore('practice', () => {
     const res = await window.electronAPI.startPractice(payload)
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const data = res.data as { sessionId: string; questions: Question[] }
+
+    // Localize remote images in all question content before displaying
+    const localizedQuestions = await Promise.all(
+      data.questions.map(async (q) => {
+        try {
+          const { html } = await localizeRemoteImages(q.content)
+          if (html !== q.content) {
+            return { ...q, content: html }
+          }
+        } catch { /* keep original */ }
+        return q
+      })
+    )
+    const replacedCount = localizedQuestions.filter((q, i) => q.content !== data.questions[i].content).length
+    if (replacedCount > 0) {
+      console.log(`[PracticeStore] Localized images in ${replacedCount}/${localizedQuestions.length} questions`)
+    }
+
     sessionId.value = data.sessionId
-    questions.value = data.questions
+    questions.value = localizedQuestions
     currentIndex.value = 0
     answers.value = {}
     lastAnswer.value = null

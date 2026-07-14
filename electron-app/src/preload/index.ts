@@ -98,6 +98,8 @@ const customAPI = {
     invokeWithTimeout<unknown[]>('question:listImages', args),
   cleanupOrphanImages: () =>
     invokeWithTimeout<{ count: number }>('image:cleanupOrphans'),
+  ensureLocalImage: (args: { url: string }) =>
+    invokeWithTimeout<{ localUrl: string }>('image:ensureLocal', args, 30_000),
 
   // Phase 2 — Practice
   startPractice: (config: unknown) =>

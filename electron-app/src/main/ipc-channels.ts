@@ -121,6 +121,7 @@ export const IPC = {
   BACKUP_DELETE: 'backup:delete',
 
   IMAGE_CLEANUP_ORPHANS: 'image:cleanupOrphans',
+  IMAGE_ENSURE_LOCAL: 'image:ensureLocal',
 
   QUESTION_EXPORT: 'question:export',
   QUESTION_IMPORT_FILE: 'question:importFile',

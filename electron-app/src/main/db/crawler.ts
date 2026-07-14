@@ -303,9 +303,18 @@ export function saveCrawlerReviewItems(
       const hash = item.content_hash
       if (!hash) continue
       const hasRefs = (item.image_refs?.length ?? 0) > 0
-      const hasLocal = (item.image_refs?.filter(r => r.local_path)?.length ?? 0) > 0
+      const hasLocalPath = hasRefs ? (item.image_refs ?? []).filter(r => r.local_path).length : 0
+      const hasRealFiles = hasRefs ? (item.image_refs ?? []).filter(r => {
+        if (!r.local_path || typeof r.local_path !== 'string') return false
+        try { return existsSync(r.local_path) } catch { return false }
+      }).length : 0
       if (hasRefs) totalWithRefs++
-      if (hasLocal) totalWithLocal++
+      if (hasRealFiles > 0) totalWithLocal++
+
+      // Warn when local_path is set but file doesn't exist (temp dir cleaned?)
+      if (hasLocalPath > 0 && hasRealFiles === 0) {
+        console.warn(`[Crawler:Save] item hash=${hash.slice(0,12)} has ${hasLocalPath} local_path(s) set but 0 files exist on disk — temp dir likely cleaned`)
+      }
 
       const result = stmt.run(
         randomUUID(),
@@ -320,8 +329,10 @@ export function saveCrawlerReviewItems(
       )
       if (result.changes > 0) {
         inserted++
-        if (hasLocal) {
-          console.log(`[Crawler:Save] NEW item hash=${hash.slice(0,12)} with ${item.image_refs!.filter(r => r.local_path).length} local image(s)`)
+        if (hasRealFiles > 0) {
+          console.log(`[Crawler:Save] NEW item hash=${hash.slice(0,12)} with ${hasRealFiles} real image file(s)`)
+        } else if (hasRefs) {
+          console.log(`[Crawler:Save] NEW item hash=${hash.slice(0,12)} has ${hasLocalPath} image ref(s) but 0 files on disk`)
         }
       } else {
         // Duplicate — check if new crawl has images the existing item is missing
