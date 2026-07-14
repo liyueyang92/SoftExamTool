@@ -182,7 +182,8 @@ async function saveQuestion() {
               field_name: pending.field_name as 'content' | 'options' | 'explanation',
               source_path: pending.source_path,
             })
-            const imgTag = `<img src="exam-image://${result.imageId}" alt="" />`
+            if (!result.success) continue
+            const imgTag = `<img src="exam-image://${result.data.imageId}" alt="" />`
             // Replace placeholder in the corresponding field
             const placeholder = `<!-- pending-image:${pending.source_path} -->`
             if (pending.field_name === 'content') {

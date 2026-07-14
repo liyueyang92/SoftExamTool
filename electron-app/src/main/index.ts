@@ -26,7 +26,7 @@ import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
   deleteDocument, getDocumentById, insertChunks, deleteDocChunks, getDocChunkCount,
-  getChunks, remapManagedDocumentPaths, insertAssets, deleteDocAssets, getDocAssets,
+  getChunks, remapManagedDocumentPaths, insertAssets, getDocAssets,
   searchDocChunks, updateChunkContent
 } from './db/documents'
 import {
@@ -34,11 +34,11 @@ import {
   createCrawlerRun, updateCrawlerRun, listCrawlerRuns, deleteCrawlerRun, addCrawledCount,
   saveCrawlerReviewItems, listCrawlerReviewItems, updateCrawlerReviewStatus,
   getCrawlerReviewItemsByIds, setCrawlerReviewImportedQuestionId,
-  getCrawlerReviewItemByQuestionId,
   upsertCrawlerSiteSession, listCrawlerSiteSessions, getCrawlerSiteSession,
   touchCrawlerSiteSessionValidation, deleteCrawlerSiteSession,
   type NormalizedCrawlerPayload,
   type CrawlerRule,
+  type CrawlerReviewItem,
 } from './db/crawler'
 import {
   listEssays, createEssay, getEssay, updateEssaySection, updateEssayMeta,
@@ -67,9 +67,8 @@ import {
 import {
   insertImage, getImagesForQuestion, getImageById,
   deleteImageById, deleteImagesForQuestion,
-  getOrphanedImages, deleteOrphanedImages,
+  deleteOrphanedImages,
   copyImageToStorage, guessMimeType, getFileSize,
-  type InsertImageArgs,
 } from './db/images'
 import {
   copyFileSync,
@@ -3193,7 +3192,7 @@ function registerIpcHandlers(): void {
 
           // Check if this src_url is already covered
           const srcFilename = ref.src_url.split('/').pop() || ''
-          if (coveredSrcUrls.has(srcFilename) || coveredSrcUrls.has(ref.original_name || srcFilename)) {
+          if (coveredSrcUrls.has(srcFilename)) {
             console.log(`[Crawler:Suppl]   ref ${ref.src_url.slice(0,80)} — already covered by existing image, SKIP`)
             continue
           }
@@ -3338,7 +3337,7 @@ function registerIpcHandlers(): void {
         const fullMsg = supplementErrors.length > 0
           ? `${msg} — ${supplementErrors.join('; ')}`
           : msg
-        mainWindow.webContents.send(IPC.TASK_PROGRESS, {
+        mainWindow?.webContents.send(IPC.TASK_PROGRESS, {
           taskId,
           progress: 100,
           message: fullMsg,
@@ -3555,7 +3554,7 @@ function registerIpcHandlers(): void {
         source_type: 'crawled' as const,
         group_id: fallbackGroupId,
         ...(exam_year ? { exam_year } : {}),
-        ...(exam_period ? { exam_period } : {}),
+        ...(exam_period ? { exam_period: exam_period as ExamPeriod } : {}),
       })
       setCrawlerReviewImportedQuestionId(db, item.id, question.id)
 
@@ -3654,7 +3653,6 @@ function registerIpcHandlers(): void {
 
           // Fallback: plain string replace of src_url in content
           if (!matched) {
-            const escapedUrl = ref.src_url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
             if (question.content.includes(ref.src_url)) {
               question.content = question.content.replace(ref.src_url, `exam-image://${imageId}`)
               matched = true

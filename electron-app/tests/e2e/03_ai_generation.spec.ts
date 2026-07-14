@@ -3,15 +3,15 @@
  * 配置 AI 指向 mock 服务器，触发出题，验证题目格式正确并可保存。
  */
 import { test, expect } from '@playwright/test'
-import { launchApp, waitForPythonReady, closeApp, seedAiConfig } from './helpers/app'
+import { launchApp, waitForPythonReady, closeApp, seedAiConfig, ensureMockServer } from './helpers/app'
 import os from 'os'
 import path from 'path'
 import crypto from 'crypto'
 
 test.describe('AI 智能出题（mock）', () => {
   test('配置 mock AI 后测试连接成功', async () => {
-    const mockPort = parseInt(process.env.MOCK_AI_PORT ?? '0', 10)
-    if (!mockPort) test.skip()
+    const mockPort = await ensureMockServer()
+    if (!mockPort) { test.skip(); return }
 
     const userDataDir = path.join(
       os.tmpdir(),
@@ -45,8 +45,8 @@ test.describe('AI 智能出题（mock）', () => {
   })
 
   test('AI 生成 5 道单选题，格式正确，可保存至题库', async () => {
-    const mockPort = parseInt(process.env.MOCK_AI_PORT ?? '0', 10)
-    if (!mockPort) test.skip()
+    const mockPort = await ensureMockServer()
+    if (!mockPort) { test.skip(); return }
 
     const userDataDir = path.join(
       os.tmpdir(),

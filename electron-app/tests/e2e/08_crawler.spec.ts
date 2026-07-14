@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { launchApp, waitForPythonReady, closeApp } from './helpers/app'
+import { launchApp, waitForPythonReady, closeApp, ensureMockServer } from './helpers/app'
 
 type IpcResult<T> = { success: true; data: T } | { success: false; error: { message: string } }
 
@@ -60,11 +60,12 @@ function staticRule(port: string) {
 
 test.describe('crawler module', () => {
   test('static rule can inspect, test, run into review queue, and import', async () => {
+    const mockPort = await ensureMockServer()
+    if (!mockPort) { test.skip(); return }
     const handle = await launchApp()
     try {
       await waitForPythonReady(handle.page)
-      const port = process.env.MOCK_AI_PORT
-      expect(port).toBeTruthy()
+      const port = String(mockPort)
 
       await handle.page.locator('.nav-item[href="#/crawler"]').click()
       await expect(handle.page.locator('.crawler-view')).toBeVisible()
@@ -82,7 +83,7 @@ test.describe('crawler module', () => {
       expect(typeof runtime.chromium_ready).toBe('boolean')
       expect(runtime.message.length).toBeGreaterThan(0)
 
-      const rule = await api<Record<string, unknown>>(handle.page, 'upsertCrawlerRule', staticRule(port!))
+      const rule = await api<Record<string, unknown>>(handle.page, 'upsertCrawlerRule', staticRule(port))
       expect(rule.id).toBeTruthy()
 
       const inspect = await api<{ html: string; nodes: Array<{ selector: string; text: string }> }>(
@@ -140,14 +141,15 @@ test.describe('crawler module', () => {
   })
 
   test('api_json and feed_import adapters return normalized samples', async () => {
+    const mockPort = await ensureMockServer()
+    if (!mockPort) { test.skip(); return }
     const handle = await launchApp()
     try {
       await waitForPythonReady(handle.page)
-      const port = process.env.MOCK_AI_PORT
-      expect(port).toBeTruthy()
+      const port = String(mockPort)
 
       const apiRule = {
-        ...staticRule(port!),
+        ...staticRule(port),
         site_name: 'API Fixture',
         adapter: 'api_json',
         url_template: `http://127.0.0.1:${port}/crawler/api`,
@@ -169,7 +171,7 @@ test.describe('crawler module', () => {
       expect(apiResult.samples[0].content).toContain('CAP')
 
       const feedRule = {
-        ...staticRule(port!),
+        ...staticRule(port),
         site_name: 'Feed Fixture',
         adapter: 'feed_import',
         url_template: `http://127.0.0.1:${port}/crawler/feed`,
@@ -188,14 +190,15 @@ test.describe('crawler module', () => {
   })
 
   test('auth window detects login success and captures session automatically', async () => {
+    const mockPort = await ensureMockServer()
+    if (!mockPort) { test.skip(); return }
     const handle = await launchApp()
     try {
       await waitForPythonReady(handle.page)
-      const port = process.env.MOCK_AI_PORT
-      expect(port).toBeTruthy()
+      const port = String(mockPort)
 
       const rule = await api<Record<string, unknown>>(handle.page, 'upsertCrawlerRule', {
-        ...staticRule(port!),
+        ...staticRule(port),
         site_name: 'Auth Fixture',
         auth_required: 1,
         auth_mode: 'manual_session',

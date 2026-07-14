@@ -96,7 +96,7 @@ export function upsertQuestionGroup(
           AND COALESCE(exam_period, '') = COALESCE(?, '')
       `).get(input.name, groupType, examYear, examPeriod) as { id: string } | undefined
       if (conflictId) {
-        id = conflictId
+        id = conflictId.id
         db.prepare(`
           UPDATE question_groups
           SET name = ?, group_type = ?, exam_year = ?, exam_period = ?, description = ?, updated_at = ?

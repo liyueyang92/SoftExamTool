@@ -14,9 +14,9 @@ const uploading = ref(false)
 
 async function handleClick() {
   try {
-    const filePath = await window.electronAPI.pickImageFile()
-    if (!filePath) return
-    await uploadAndInsert(filePath)
+    const res = await window.electronAPI.pickImageFile()
+    if (!res.success || !res.data) return
+    await uploadAndInsert(res.data)
   } catch (e) {
     console.error('[ImageInsert] pick failed:', e)
   }
@@ -35,7 +35,9 @@ async function uploadAndInsert(sourcePath: string) {
       field_name: props.fieldName,
       source_path: sourcePath,
     })
-    emit('insert', `<img src="exam-image://${result.imageId}" alt="" />`)
+    if (result.success) {
+      emit('insert', `<img src="exam-image://${result.data.imageId}" alt="" />`)
+    }
   } catch (e) {
     console.error('[ImageInsert] upload failed:', e)
   } finally {
@@ -43,29 +45,8 @@ async function uploadAndInsert(sourcePath: string) {
   }
 }
 
-// Listen for paste events containing images
-function onPaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items
-  if (!items) return
-  for (const item of items) {
-    if (item.type.startsWith('image/')) {
-      e.preventDefault()
-      // For clipboard images, we need the main process to handle the save
-      const file = item.getAsFile()
-      if (!file) continue
-      // In Electron, File from clipboard may not have a path
-      // We'd need to handle this via a separate IPC that accepts base64 data
-      // For now, use the file path if available
-      if ((file as any).path) {
-        uploadAndInsert((file as any).path)
-      }
-      break
-    }
-  }
-}
-
-// Only apply paste listener when questionId is available (editing existing question)
-// Otherwise we just emit pending markers
+// NOTE: paste listener is not active yet; apply when questionId is available (editing existing question).
+// Otherwise we just emit pending markers.
 </script>
 
 <template>

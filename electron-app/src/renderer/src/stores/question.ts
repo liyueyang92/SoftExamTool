@@ -169,7 +169,7 @@ export const useQuestionStore = defineStore('question', () => {
   }
 
   async function exportData(exportFilter?: QuestionFilter): Promise<{ count: number; filePath: string; imageCount?: number } | null> {
-    const res = await window.electronAPI.exportQuestions(toIpcPayload({ filter: exportFilter ?? filter }))
+    const res = await window.electronAPI.exportQuestions(toIpcPayload({ filter: (exportFilter ?? filter) as Record<string, unknown> }))
     if (res.success) return res.data as { count: number; filePath: string; imageCount?: number }
     return null
   }

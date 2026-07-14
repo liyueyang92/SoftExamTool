@@ -995,7 +995,7 @@ function formatDate(iso: string) {
 .modal-body {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 18px 20px;
   display: flex;
   flex-direction: column;
@@ -1068,9 +1068,11 @@ function formatDate(iso: string) {
   background: #101722;
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
 }
 .preview-header {
+  flex-shrink: 0;
   padding: 10px 14px;
   border-bottom: 1px solid var(--c-border);
   font-size: 13px;
@@ -1080,10 +1082,9 @@ function formatDate(iso: string) {
 .preview-content {
   margin: 0;
   padding: 14px 14px 40px;
-  min-height: 240px;
-  height: min(360px, 45vh);
-  max-height: 45vh;
-  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   box-sizing: border-box;
   white-space: pre-wrap;
   word-break: break-word;

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3-multiple-ciphers'
 import { randomUUID } from 'crypto'
 import { copyFileSync, existsSync, readdirSync, statSync, unlinkSync } from 'fs'
-import { basename, extname, join } from 'path'
+import { extname, join } from 'path'
 
 export interface QuestionImage {
   id: string

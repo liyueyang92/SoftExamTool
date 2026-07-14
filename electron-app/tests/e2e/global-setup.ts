@@ -9,5 +9,5 @@ export default async function globalSetup(): Promise<void> {
   const { port, close } = await startMockAIServer()
   process.env.MOCK_AI_PORT = String(port)
   global.__MOCK_AI_CLOSE__ = close
-  console.log(`[E2E] Mock AI server started on port ${port}`)
+  console.log(`[E2E] Mock AI server started on port ${port} (global-setup)`)
 }

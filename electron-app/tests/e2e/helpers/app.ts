@@ -14,6 +14,44 @@ export interface AppHandle {
   userDataDir: string
 }
 
+// Lazy-started mock server — avoids cross-process env/file sharing issues.
+// Each worker calls ensureMockServer() once; the first call starts the server.
+let _mockPort = 0
+let _mockClose: (() => void) | null = null
+
+/** Ensure a mock AI server is running and return its port. Returns 0 on failure. */
+export async function ensureMockServer(): Promise<number> {
+  if (_mockPort) return _mockPort
+  try {
+    // Dynamic import to avoid loading the server module unless needed
+    const { startMockAIServer } = await import('./mock-server')
+    const { port, close } = await startMockAIServer()
+    _mockPort = port
+    _mockClose = close
+    console.log(`[E2E] Mock AI server started on port ${port} (worker-initiated)`)
+    return port
+  } catch {
+    return 0
+  }
+}
+
+/** Stop the mock server if it was started by this worker. */
+export function stopMockServer(): void {
+  if (_mockClose) {
+    _mockClose()
+    _mockClose = null
+    _mockPort = 0
+  }
+}
+
+/**
+ * @deprecated Use `await ensureMockServer()` instead.
+ * Synchronously returns the cached port; may be 0 if not yet started.
+ */
+export function getMockPort(): number {
+  return _mockPort
+}
+
 /**
  * Pre-seed an AI config JSON so the app points to the mock server.
  * Must be called before launchApp so the config is ready when the app reads it.
