@@ -48,25 +48,24 @@ if (-not $SkipPython) {
     Write-Host "[build-all] Skipping Python build (-SkipPython)" -ForegroundColor Yellow
 }
 
-# ── Step 2: Electron app ─────────────────────────────────────────────────────
-Step 'Build Electron app' {
-    $args = @("-Target $Target")
-    if ($SkipTypecheck) { $args += '-SkipTypecheck' }
-    & (Join-Path $ScriptsDir 'build-electron.ps1') -Target $Target -SkipTypecheck:$SkipTypecheck
+# ── Step 2: JS bundles (vite build only) ─────────────────────────────────────
+# Run before E2E tests so they can use the compiled bundles.
+# Also needed for the subsequent electron-builder packaging.
+$AppDir = Join-Path $Root 'electron-app'
+Step 'Build JS bundles' {
+    Push-Location $AppDir
+    try {
+        npx electron-vite build
+        if ($LASTEXITCODE -ne 0) { throw "electron-vite build failed" }
+    } finally {
+        Pop-Location
+    }
 }
 
-# ── Step 3: E2E tests ────────────────────────────────────────────────────────
+# ── Step 3: E2E tests (in clean env before native rebuild + packaging) ───────
 if (-not $SkipE2E) {
     Step 'E2E tests' {
-        $appDir = Join-Path $Root 'electron-app'
-
-        # Verify the compiled main entry exists before running tests
-        $mainEntry = Join-Path $appDir 'out\main\index.js'
-        if (-not (Test-Path $mainEntry)) {
-            throw "Compiled main entry not found at $mainEntry. Run build first."
-        }
-
-        Push-Location $appDir
+        Push-Location $AppDir
         try {
             npm run test:e2e
             if ($LASTEXITCODE -ne 0) {
@@ -78,6 +77,12 @@ if (-not $SkipE2E) {
     }
 } else {
     Write-Host "[build-all] Skipping E2E tests (-SkipE2E)" -ForegroundColor Yellow
+}
+
+# ── Step 4: Electron packaging (native rebuild + electron-builder) ────────────
+# Uses the bundles already built in Step 2 (skips typecheck and vite build).
+Step 'Package Electron app' {
+    & (Join-Path $ScriptsDir 'build-electron.ps1') -Target $Target -SkipTypecheck:$SkipTypecheck -SkipViteBuild
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────────

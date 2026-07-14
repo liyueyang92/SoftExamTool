@@ -13,7 +13,8 @@
 param(
     [ValidateSet('nsis','portable','dir')]
     [string]$Target = 'nsis',
-    [switch]$SkipTypecheck
+    [switch]$SkipTypecheck,
+    [switch]$SkipViteBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,9 +86,13 @@ try {
     }
 
     # ── Vite build (main + preload + renderer) ───────────────────────────────
-    Write-Host "[build-electron] Building bundles..." -ForegroundColor Cyan
-    npx electron-vite build
-    if ($LASTEXITCODE -ne 0) { throw "electron-vite build failed" }
+    if (-not $SkipViteBuild) {
+        Write-Host "[build-electron] Building bundles..." -ForegroundColor Cyan
+        npx electron-vite build
+        if ($LASTEXITCODE -ne 0) { throw "electron-vite build failed" }
+    } else {
+        Write-Host "[build-electron] Skipping vite build (-SkipViteBuild)" -ForegroundColor Yellow
+    }
 
     # ── Native module rebuild for production target ──────────────────────────
     Write-Host "[build-electron] Rebuilding native modules for Electron..." -ForegroundColor Cyan

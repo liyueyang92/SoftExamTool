@@ -4124,6 +4124,12 @@ app.whenReady().then(async () => {
     if (!mainWindow || resourcesCleanedUp) return
     wsClient.init(pythonManager.port, pythonManager.token, mainWindow!)
     console.log('[App] Python ready, WS client initialized')
+
+    // Expose port and PID for E2E tests via Playwright app.evaluate()
+    if (process.env.E2E_TEST === '1') {
+      ;(global as any).__pythonPort = pythonManager.port
+      ;(global as any).__pythonPid = pythonManager.pythonPid
+    }
   }).catch((e) => {
     console.error('[Python] failed to start:', e)
   })

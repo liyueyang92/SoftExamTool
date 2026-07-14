@@ -25,6 +25,7 @@ export class PythonManager {
   token = ''
   private ready = false
   get isReady(): boolean { return this.ready }
+  get pythonPid(): number | null { return this.process?.pid ?? null }
   private pollTimer: ReturnType<typeof setTimeout> | null = null
 
   async start(mainWindow: BrowserWindow): Promise<void> {
