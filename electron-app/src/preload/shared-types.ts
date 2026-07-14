@@ -106,6 +106,10 @@ export interface PdfImportOptions {
   bottomMarginRatio?: number
   startPage?: number
   endPage?: number | null
+  extractTables?: boolean
+  savePageImages?: boolean
+  generateVisualSummary?: boolean
+  visionMode?: 'disabled' | 'remote' | 'local'
 }
 
 export interface PdfImportResult {
@@ -128,7 +132,10 @@ export interface PdfPreviewResult {
     x1: number
     bottom: number
   }
+  engine?: string
   text: string
+  detected_tables_count?: number
+  detected_figures_count?: number
 }
 
 export interface StoragePathsInfo {

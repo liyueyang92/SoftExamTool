@@ -26,7 +26,8 @@ import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
   deleteDocument, getDocumentById, insertChunks, deleteDocChunks, getDocChunkCount,
-  getChunks, remapManagedDocumentPaths
+  getChunks, remapManagedDocumentPaths, insertAssets, deleteDocAssets, getDocAssets,
+  searchDocChunks, updateChunkContent
 } from './db/documents'
 import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
@@ -2737,6 +2738,10 @@ function registerIpcHandlers(): void {
       bottomMarginRatio?: number
       startPage?: number
       endPage?: number | null
+      extractTables?: boolean
+      savePageImages?: boolean
+      generateVisualSummary?: boolean
+      visionMode?: 'disabled' | 'remote' | 'local'
     }
 
     let filePath = importArgs.filePath
@@ -2754,6 +2759,10 @@ function registerIpcHandlers(): void {
     const bottomMarginRatio = importArgs.bottomMarginRatio ?? 0.07
     const startPage = importArgs.startPage ?? 1
     const endPage = importArgs.endPage ?? null
+    const extractTables = importArgs.extractTables ?? true
+    const savePageImages = importArgs.savePageImages ?? true
+    const generateVisualSummary = importArgs.generateVisualSummary ?? false
+    const visionMode = importArgs.visionMode ?? 'disabled'
 
     const fileName = filePath.split(/[\\/]/).pop() ?? filePath
     const title = fileName.replace(/\.pdf$/i, '')
@@ -2770,15 +2779,34 @@ function registerIpcHandlers(): void {
       wsClient.connect(taskId)
 
       wsClient.onComplete(taskId, (_, result) => {
-        const { page_count, chunks } = result as {
+        const { page_count, chunks, assets, warnings } = result as {
           page_count: number
-          chunks: Array<{ doc_id: string; page_num: number; content: string; knowledge_tags: string[] }>
+          chunks: Array<{
+            doc_id: string; page_num: number; content: string
+            knowledge_tags: string[]
+            chunk_type?: string; asset_id?: string | null
+            confidence?: number; source_engine?: string
+            block_order?: number; bbox?: string | null
+          }>
+          assets?: Array<{
+            id: string; doc_id: string; page_num: number
+            asset_type: string; file_path: string
+            width: number; height: number; bbox: string; content_hash: string
+          }>
+          warnings?: Array<{ page_num: number; code: string; message: string }>
         }
         try {
           updateDocumentPageCount(db, doc.id, page_count)
           deleteDocChunks(db, doc.id)
           insertChunks(db, chunks)
-          taskManager!.updateTask(taskId, 'completed', { chunkCount: chunks.length })
+          if (assets?.length) {
+            insertAssets(db, assets)
+          }
+          taskManager!.updateTask(taskId, 'completed', {
+            chunkCount: chunks.length,
+            assetCount: assets?.length ?? 0,
+            warnings,
+          })
         } catch (e) {
           console.error('[DocImport] Failed to store chunks:', e)
         }
@@ -2798,6 +2826,12 @@ function registerIpcHandlers(): void {
           bottom_margin_ratio: bottomMarginRatio,
           start_page: startPage,
           end_page: endPage,
+          extract_tables: extractTables,
+          save_page_images: savePageImages,
+          output_dir: getStoragePaths().documentLibraryDir,
+          generate_visual_summary: generateVisualSummary,
+          vision_mode: visionMode,
+          ai_config: buildProviderConfig(),
         }),
       }).catch((e) => console.error('[DocImport] Python parse request failed:', e))
 
@@ -2839,11 +2873,58 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.DOC_DELETE, async (id) => {
     const doc = getDocumentById(db, id as string)
     deleteDocument(db, id as string)
-    if (doc && isPathInsideDirectory(doc.file_path, getStoragePaths().documentLibraryDir) && existsSync(doc.file_path)) {
-      try { unlinkSync(doc.file_path) } catch { /* non-critical */ }
+    if (doc) {
+      // 清理资产文件目录
+      const assetsDir = join(getStoragePaths().documentLibraryDir, doc.id, 'assets')
+      if (existsSync(assetsDir)) {
+        try { rmSync(assetsDir, { recursive: true, force: true }) } catch { /* non-critical */ }
+      }
+      // 清理托管 PDF 文件
+      if (isPathInsideDirectory(doc.file_path, getStoragePaths().documentLibraryDir) && existsSync(doc.file_path)) {
+        try { unlinkSync(doc.file_path) } catch { /* non-critical */ }
+      }
     }
   })
+  registerHandler('app:openPath', async (filePath) => {
+    const p = filePath as string
+    if (!existsSync(p)) {
+      throw Object.assign(new Error(`File not found: ${p}`), { code: 'FILE_NOT_FOUND' })
+    }
+    await shell.openPath(p)
+  })
+  registerHandler(IPC.DOC_SEARCH_CHUNKS, async (args) => {
+    const { query, limit, docId } = args as { query: string; limit?: number; docId?: string }
+    return searchDocChunks(db, query, { limit, docId })
+  })
+  registerHandler(IPC.DOC_UPDATE_CHUNK, async (args) => {
+    const { chunkId, content } = args as { chunkId: string; content: string }
+    updateChunkContent(db, chunkId, content)
+  })
+  registerHandler(IPC.DOC_REPARSE_PAGE, async (args) => {
+    const { filePath, docId, pageNum, reTables, reVision, savePageImages } = args as {
+      filePath: string; docId: string; pageNum: number
+      reTables?: boolean; reVision?: boolean; savePageImages?: boolean
+    }
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/pdf/reparse-page`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({
+        file_path: filePath,
+        doc_id: docId,
+        page_num: pageNum,
+        re_tables: reTables ?? true,
+        re_vision: reVision ?? false,
+        save_page_images: savePageImages ?? true,
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string }
+      throw Object.assign(new Error(err.detail ?? `HTTP ${res.status}`), { code: 'PDF_REPARSE_FAILED' })
+    }
+    return res.json()
+  })
   registerHandler(IPC.DOC_GET_CHUNKS, async (docId) => getChunks(db, docId as string))
+  registerHandler(IPC.DOC_GET_ASSETS, async (docId) => getDocAssets(db, docId as string))
 
   // Phase 3 - AI config
   registerHandler(IPC.AI_GET_CONFIG, async () => {
@@ -3725,7 +3806,9 @@ function registerIpcHandlers(): void {
     const session = getAiChatSession(db, sessionId)
     if (!session) throw Object.assign(new Error('Chat session not found'), { code: 'AI_CHAT_SESSION_NOT_FOUND' })
 
-    let docChunks: unknown[] = []
+    let docChunks: Array<{
+      content: string; page_num: number; doc_title: string; chunk_type?: string; asset_id?: string | null
+    }> = []
     const history = listAiChatMessages(db, sessionId, 12).map((item) => ({
       role: item.role,
       content: item.content,
@@ -3733,17 +3816,30 @@ function registerIpcHandlers(): void {
 
     if (useDocContext) {
       try {
-        const ftsQ = question.replace(/["']/g, ' ')
-        docChunks = db.prepare(`
-          SELECT dc.content, dc.page_num, d.title as doc_title
-          FROM doc_chunks dc
-          JOIN documents d ON d.id = dc.doc_id
-          JOIN doc_chunks_fts f ON dc.id = f.rowid
-          WHERE doc_chunks_fts MATCH ?
-          LIMIT 5
-        `).all(ftsQ) as unknown[]
+        const results = searchDocChunks(db, question, { limit: 5 })
+        docChunks = results.map(r => ({
+          content: r.content,
+          page_num: r.page_num,
+          doc_title: r.doc_title,
+          chunk_type: r.chunk_type,
+          asset_id: r.asset_id,
+        }))
       } catch {
-        // FTS not available or no results
+        // weighted search failed, try simple fallback
+        try {
+          const ftsQ = question.replace(/["']/g, ' ')
+          const rows = db.prepare(`
+            SELECT dc.content, dc.page_num, dc.chunk_type, dc.asset_id, d.title as doc_title
+            FROM doc_chunks dc
+            JOIN documents d ON d.id = dc.doc_id
+            JOIN doc_chunks_fts f ON dc.id = f.rowid
+            WHERE doc_chunks_fts MATCH ?
+            LIMIT 5
+          `).all(ftsQ) as Array<{ content: string; page_num: number; doc_title: string; chunk_type?: string; asset_id?: string | null }>
+          docChunks = rows
+        } catch {
+          // FTS not available or no results
+        }
       }
     }
 
@@ -3756,7 +3852,10 @@ function registerIpcHandlers(): void {
       const err = await res.json() as { detail?: string }
       throw Object.assign(new Error(err.detail ?? 'Chat failed'), { code: 'AI_CHAT_FAILED' })
     }
-    const payload = await res.json() as { answer: string; sources: Array<{ page_num: number | null; doc_title: string }> }
+    const payload = await res.json() as {
+      answer: string
+      sources: Array<{ page_num: number | null; doc_title: string; chunk_type?: string }>
+    }
     insertAiChatMessage(db, { session_id: sessionId, role: 'user', content: question })
     insertAiChatMessage(db, {
       session_id: sessionId,

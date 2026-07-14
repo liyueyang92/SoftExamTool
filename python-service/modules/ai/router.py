@@ -189,10 +189,14 @@ ESSAY_SUGGEST_PROMPT = """你是软考系统架构设计师论文写作辅导专
 RAG_SYSTEM_PROMPT = """你是软考系统架构设计师备考助手，擅长软件架构、系统设计相关知识。
 请根据提供的参考资料回答用户问题。如果参考资料与问题相关，优先使用参考资料的内容；
 如果参考资料不相关或不足，可以补充你自己的专业知识。
-回答时请：
-1. 用简洁清晰的中文
-2. 如果引用了参考资料，在末尾注明"（参考：第X页）"
-3. 结合软考考试的重点和考查方式"""
+
+注意：
+- Markdown 表格应按行列关系理解，可用于回答对比、分类、特点类问题
+- 图示摘要代表图片/流程图的内容，可用于回答结构、关系、层级类问题
+- 回答时引用页码和内容类型，例如"参考：第14页表格"
+- 如果参考资料不足以回答问题，请明确说明
+
+回答时请用简洁清晰的中文。"""
 
 
 class EssaySuggestRequest(BaseModel):
@@ -224,7 +228,7 @@ class ChatRequest(BaseModel):
     ai_config: dict
     question: str
     history: list[dict] = []
-    doc_chunks: list[dict] = []   # [{content, page_num, doc_title}]
+    doc_chunks: list[dict] = []   # [{content, page_num, doc_title, chunk_type?, asset_id?}]
 
 
 @router.post('/chat')
@@ -233,10 +237,20 @@ async def ai_chat(req: ChatRequest):
 
     context_text = ''
     if req.doc_chunks:
-        parts = [
-            f'【第{c.get("page_num", "?")}页 · {c.get("doc_title", "文档")}】\n{c["content"][:500]}'
-            for c in req.doc_chunks[:5]
-        ]
+        parts = []
+        for c in req.doc_chunks[:5]:
+            chunk_type = c.get("chunk_type", "text")
+            type_hint = {
+                "table": "（以下为Markdown表格，请按行列关系理解）",
+                "figure": "（以下为图片/流程图描述，可用于回答结构、分类、关系类问题）",
+                "page_summary": "（以下为页面摘要）",
+            }.get(chunk_type, "")
+
+            parts.append(
+                f'【第{c.get("page_num", "?")}页 · {c.get("doc_title", "文档")}'
+                f' · {chunk_type}】{type_hint}\n'
+                f'{c["content"][:800]}'
+            )
         context_text = '\n\n---\n\n'.join(parts)
 
     messages = [{'role': 'system', 'content': RAG_SYSTEM_PROMPT}]
@@ -253,7 +267,11 @@ async def ai_chat(req: ChatRequest):
     try:
         reply = await provider.chat(messages, temperature=0.5)
         sources = [
-            {'page_num': c.get('page_num'), 'doc_title': c.get('doc_title', '文档')}
+            {
+                'page_num': c.get('page_num'),
+                'doc_title': c.get('doc_title', '文档'),
+                'chunk_type': c.get('chunk_type', 'text'),
+            }
             for c in req.doc_chunks[:5]
         ] if req.doc_chunks else []
         return {'answer': reply.strip(), 'sources': sources}

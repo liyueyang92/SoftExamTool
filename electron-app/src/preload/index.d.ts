@@ -101,8 +101,16 @@ declare global {
         bottomMarginRatio?: number
       }) => Promise<IpcResponse<PdfPreviewResult>>
       importDocument: (args?: PdfImportOptions) => Promise<IpcResponse<PdfImportResult | null>>
+      openPath: (filePath: string) => Promise<IpcResponse<void>>
       deleteDocument: (id: string) => Promise<IpcResponse<void>>
       getDocChunks: (docId: string) => Promise<IpcResponse<unknown[]>>
+      getDocAssets: (docId: string) => Promise<IpcResponse<unknown[]>>
+      searchDocChunks: (args: { query: string; limit?: number; docId?: string }) => Promise<IpcResponse<unknown[]>>
+      updateDocChunk: (chunkId: string, content: string) => Promise<IpcResponse<void>>
+      reparsePage: (args: {
+        filePath: string; docId: string; pageNum: number
+        reTables?: boolean; reVision?: boolean; savePageImages?: boolean
+      }) => Promise<IpcResponse<unknown>>
 
       getAiConfig: () => Promise<IpcResponse<Record<string, unknown>>>
       setAiConfig: (args: unknown) => Promise<IpcResponse<void>>

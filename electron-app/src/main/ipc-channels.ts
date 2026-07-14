@@ -49,6 +49,10 @@ export const IPC = {
   DOC_PREVIEW: 'doc:preview',
   DOC_DELETE: 'doc:delete',
   DOC_GET_CHUNKS: 'doc:getChunks',
+  DOC_SEARCH_CHUNKS: 'doc:searchChunks',
+  DOC_UPDATE_CHUNK: 'doc:updateChunk',
+  DOC_REPARSE_PAGE: 'doc:reparsePage',
+  DOC_GET_ASSETS: 'doc:getAssets',
 
   AI_GENERATE_QUESTIONS: 'ai:generateQuestions',
   AI_GRADE_ESSAY: 'ai:gradeEssay',

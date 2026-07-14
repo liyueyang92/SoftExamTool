@@ -23,7 +23,7 @@ interface ChatMessage {
   session_id?: string
   role: 'user' | 'assistant'
   content: string
-  sources?: { page_num: number | null; doc_title: string }[]
+  sources?: { page_num: number | null; doc_title: string; chunk_type?: string }[]
   created_at?: string
 }
 const chatSessions = ref<ChatSession[]>([])
@@ -438,6 +438,9 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
               <div v-if="msg.sources && msg.sources.length" class="msg-sources">
                 <span v-for="(s, j) in msg.sources" :key="j" class="source-chip">
                   📄 {{ s.doc_title }} p.{{ s.page_num }}
+                  <span v-if="s.chunk_type && s.chunk_type !== 'text'" class="source-type-tag">
+                    {{ s.chunk_type === 'table' ? '表格' : s.chunk_type === 'figure' ? '图示' : s.chunk_type }}
+                  </span>
                 </span>
               </div>
             </div>
@@ -556,7 +559,8 @@ const typeLabels: Record<string, string> = { single: '单选', multiple: '多选
 .chat-msg.user .msg-bubble { background: #1e3a5f; border-color: #1d4ed8; }
 .msg-content { font-size: 13px; color: var(--c-text); line-height: 1.7; white-space: pre-wrap; }
 .msg-sources { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
-.source-chip { font-size: 11px; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 4px; padding: 2px 6px; color: var(--c-text-3); }
+.source-chip { font-size: 11px; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 4px; padding: 2px 6px; color: var(--c-text-3); display: inline-flex; align-items: center; gap: 3px; }
+.source-type-tag { font-size: 9px; background: #14532d; color: #86efac; border-radius: 2px; padding: 0 3px; line-height: 14px; }
 .msg-bubble.loading { display: flex; align-items: center; justify-content: center; padding: 12px 16px; }
 .chat-input-row { flex-shrink: 0; border-top: 1px solid var(--c-border); padding-top: 10px; }
 .chat-error { margin-bottom: 6px; }

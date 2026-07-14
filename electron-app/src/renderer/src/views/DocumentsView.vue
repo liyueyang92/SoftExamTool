@@ -16,12 +16,21 @@ const pageJumpInput = ref('')
 const chunkViewError = ref('')
 const expandedChunkIds = ref(new Set<string>())
 
+// Edit mode
+const editingChunkId = ref<string | null>(null)
+const editContent = ref('')
+const editSaving = ref(false)
+
 const showImportModal = ref(false)
 const selectedFile = ref<PdfImportSelection | null>(null)
 const topMarginPercent = ref(7)
 const bottomMarginPercent = ref(7)
 const startPage = ref(1)
 const endPageInput = ref('')
+const extractTables = ref(true)
+const savePageImages = ref(true)
+const generateVisualSummary = ref(false)
+const visionMode = ref<'disabled' | 'remote' | 'local'>('disabled')
 const previewPage = ref(1)
 const previewPageCount = ref<number | null>(null)
 const previewText = ref('')
@@ -81,6 +90,10 @@ function resetImportState(file: PdfImportSelection | null) {
   bottomMarginPercent.value = 7
   startPage.value = 1
   endPageInput.value = ''
+  extractTables.value = true
+  savePageImages.value = true
+  generateVisualSummary.value = false
+  visionMode.value = 'disabled'
   previewPage.value = 1
   previewPageCount.value = null
   previewText.value = ''
@@ -109,6 +122,10 @@ function buildImportOptions() {
     bottomMarginRatio: bottom / 100,
     startPage: start,
     endPage: end,
+    extractTables: extractTables.value,
+    savePageImages: savePageImages.value,
+    generateVisualSummary: generateVisualSummary.value,
+    visionMode: generateVisualSummary.value ? visionMode.value : 'disabled',
   }
 }
 
@@ -172,6 +189,7 @@ async function openDoc(doc: Doc) {
   resetChunkViewState()
   try {
     chunks.value = await store.getChunks(doc.id)
+    assets.value = (await store.getDocAssets(doc.id)) as Array<{ id: string; file_path: string; asset_type: string }>
   } finally {
     loadingChunks.value = false
   }
@@ -223,6 +241,155 @@ function highlightText(text: string) {
 
   const pattern = new RegExp(`(${escapeRegExp(query)})`, 'gi')
   return escapedText.replace(pattern, '<mark class="chunk-highlight">$1</mark>')
+}
+
+function typeLabel(type: string): string {
+  const map: Record<string, string> = {
+    text: '文本', table: '表格', figure: '图示', page_summary: '摘要'
+  }
+  return map[type] ?? '文本'
+}
+
+const assets = ref<Array<{ id: string; file_path: string; asset_type: string }>>([])
+
+async function viewAsset(assetId: string) {
+  const asset = assets.value.find(a => a.id === assetId)
+  if (!asset) {
+    console.warn('[DocView] Asset not found:', assetId)
+    return
+  }
+  try {
+    await window.electronAPI.openPath(asset.file_path)
+  } catch (e) {
+    console.error('[DocView] Failed to open asset:', e)
+  }
+}
+
+function startEdit(chunk: DocChunk) {
+  editingChunkId.value = chunk.id
+  editContent.value = chunk.content
+}
+
+function cancelEdit() {
+  editingChunkId.value = null
+  editContent.value = ''
+}
+
+async function saveEdit(chunk: DocChunk) {
+  const newContent = editContent.value.trim()
+  if (!newContent || newContent === chunk.content) {
+    cancelEdit()
+    return
+  }
+  editSaving.value = true
+  try {
+    await window.electronAPI.updateDocChunk(chunk.id, newContent)
+    // Update local state
+    chunk.content = newContent
+    chunk.confidence = 1.0  // 人工确认
+    cancelEdit()
+  } catch (e) {
+    console.error('[DocView] Failed to save edit:', e)
+    alert('保存失败，请重试。')
+  } finally {
+    editSaving.value = false
+  }
+}
+
+async function reparseChunk(chunk: DocChunk) {
+  if (!selectedDoc.value) return
+  const confirmed = confirm(
+    `确认重新解析第 ${chunk.page_num} 页？\n这将重新提取该页的文本/表格/图示，并替换现有内容。`
+  )
+  if (!confirmed) return
+
+  chunkViewError.value = ''
+  try {
+    const res = await window.electronAPI.reparsePage({
+      filePath: selectedDoc.value.file_path,
+      docId: selectedDoc.value.id,
+      pageNum: chunk.page_num,
+      reTables: true,
+      reVision: false,
+      savePageImages: true,
+    })
+    if (!res.success) throw new Error((res.error as { message: string }).message)
+    const data = res.data as {
+      chunks: DocChunk[]
+      assets: Array<{ id: string; file_path: string; asset_type: string }>
+    }
+
+    // Remove old chunks of this page, add new ones
+    const otherChunks = chunks.value.filter(c => c.page_num !== chunk.page_num)
+    const newChunks = data.chunks.map((c, i) => ({
+      ...c,
+      id: c.id || `reparse-${Date.now()}-${i}`,
+    }))
+    chunks.value = [...otherChunks, ...newChunks].sort((a, b) =>
+      a.page_num - b.page_num || (a.block_order ?? 0) - (b.block_order ?? 0)
+    )
+    // Merge assets
+    if (data.assets?.length) {
+      for (const a of data.assets) {
+        if (!assets.value.find(ea => ea.id === a.id)) {
+          assets.value.push(a)
+        }
+      }
+    }
+    chunkViewError.value = `第 ${chunk.page_num} 页重新解析完成，共 ${newChunks.length} 个块。`
+  } catch (e) {
+    chunkViewError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+function renderContent(chunk: DocChunk): string {
+  if (chunk.chunk_type === 'table') {
+    return renderMarkdownTable(chunk.content)
+  }
+  return highlightText(chunk.content)
+}
+
+function renderMarkdownTable(content: string): string {
+  const lines = content.split('\n')
+  // 提取标题行（以 ## 开头）
+  const titleLines: string[] = []
+  const tableLines: string[] = []
+  let foundTable = false
+  for (const line of lines) {
+    if (!foundTable && line.startsWith('|')) {
+      foundTable = true
+    }
+    if (foundTable) {
+      tableLines.push(line)
+    } else {
+      titleLines.push(line)
+    }
+  }
+
+  const titleHtml = titleLines.length > 0
+    ? `<div class="table-title">${escapeHtml(titleLines.join('\n'))}</div>`
+    : ''
+
+  if (tableLines.length < 2) {
+    return titleHtml + `<pre>${escapeHtml(content)}</pre>`
+  }
+
+  // 去掉分隔行（|---|---|）
+  const dataLines = tableLines.filter((_, i) => i !== 1 || !/^\|[\s\-:|]+\|$/.test(tableLines[1]))
+
+  let html = '<table class="md-table"><tbody>'
+  for (let i = 0; i < dataLines.length; i++) {
+    const cells = dataLines[i].split('|').filter((_, j, arr) => j > 0 && j < arr.length - 1)
+    const tag = i === 0 ? 'th' : 'td'
+    html += '<tr>'
+    for (const cell of cells) {
+      html += `<${tag}>${escapeHtml(cell.trim())}</${tag}>`
+    }
+    html += '</tr>'
+  }
+  html += '</tbody></table>'
+
+  return titleHtml + html
 }
 
 async function jumpToPage() {
@@ -337,11 +504,39 @@ function formatDate(iso: string) {
               @click="toggleChunk(chunk.id)"
             >
               <div class="chunk-topline">
-                <div class="chunk-page">第 {{ chunk.page_num }} 页</div>
+                <div class="chunk-page">
+                  第 {{ chunk.page_num }} 页
+                  <span class="chunk-type-tag" :class="`tag-${chunk.chunk_type || 'text'}`">
+                    {{ typeLabel(chunk.chunk_type || 'text') }}
+                  </span>
+                  <span v-if="chunk.confidence != null && chunk.confidence < 0.7"
+                        class="chunk-low-conf" title="建议校对">
+                    ⚠️
+                  </span>
+                </div>
                 <div class="chunk-toggle">{{ isChunkExpanded(chunk.id) ? '收起' : '展开' }}</div>
               </div>
-              <div class="chunk-content" :class="{ collapsed: !isChunkExpanded(chunk.id) }">
-                <span v-html="highlightText(chunk.content)"></span>
+              <div
+                class="chunk-content"
+                :class="{ collapsed: !isChunkExpanded(chunk.id) }"
+                @dblclick.stop="startEdit(chunk)"
+              >
+                <template v-if="editingChunkId === chunk.id">
+                  <textarea
+                    v-model="editContent"
+                    class="chunk-edit-area"
+                    rows="8"
+                    @click.stop
+                  ></textarea>
+                  <div class="chunk-edit-actions">
+                    <button class="btn-save-edit" :disabled="editSaving" @click.stop="saveEdit(chunk)">
+                      {{ editSaving ? '保存中…' : '💾 保存' }}
+                    </button>
+                    <button class="btn-cancel-edit" @click.stop="cancelEdit">取消</button>
+                    <span class="edit-hint">编辑后 confidence 将标记为 1.0（人工确认）</span>
+                  </div>
+                </template>
+                <span v-else v-html="renderContent(chunk)"></span>
               </div>
               <div class="chunk-tags">
                 <span
@@ -350,6 +545,18 @@ function formatDate(iso: string) {
                   class="tag"
                   v-html="highlightText(tag)"
                 ></span>
+                <button v-if="chunk.asset_id && isChunkExpanded(chunk.id)"
+                        class="btn-asset-view"
+                        title="查看原图"
+                        @click.stop="viewAsset(chunk.asset_id)">
+                  🖼 查看原图
+                </button>
+                <button v-if="isChunkExpanded(chunk.id)"
+                        class="btn-reparse"
+                        title="重新解析此页"
+                        @click.stop="reparseChunk(chunk)">
+                  🔄 重新生成
+                </button>
               </div>
             </div>
           </div>
@@ -394,6 +601,32 @@ function formatDate(iso: string) {
               <span>结束页</span>
               <input v-model="endPageInput" type="number" min="1" step="1" placeholder="留空表示最后一页" />
             </label>
+          </div>
+
+          <div class="import-options">
+            <label class="checkbox-option">
+              <input v-model="extractTables" type="checkbox" />
+              <span>提取表格为 Markdown</span>
+            </label>
+            <label class="checkbox-option">
+              <input v-model="savePageImages" type="checkbox" />
+              <span>保存页面图片/图表资产</span>
+            </label>
+            <label class="checkbox-option">
+              <input v-model="generateVisualSummary" type="checkbox" />
+              <span>生成图片/流程图视觉摘要</span>
+            </label>
+            <label v-if="generateVisualSummary" class="field" style="margin-top: 4px;">
+              <span>视觉摘要模式</span>
+              <select v-model="visionMode" class="field-select">
+                <option value="disabled">关闭</option>
+                <option value="remote">远程模型</option>
+                <option value="local">本地模型 (Ollama)</option>
+              </select>
+            </label>
+            <p v-if="generateVisualSummary" class="hint-row" style="margin-top: 2px;">
+              <span>⚠️ 视觉摘要将调用 AI 模型，增加导入耗时和 API 成本。</span>
+            </p>
           </div>
 
           <div class="hint-row">
@@ -585,8 +818,21 @@ function formatDate(iso: string) {
   gap: 12px;
   margin-bottom: 6px;
 }
-.chunk-page { font-size: 11px; color: var(--c-text-3); }
+.chunk-page { font-size: 11px; color: var(--c-text-3); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .chunk-toggle { font-size: 11px; color: #93c5fd; }
+.chunk-type-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  line-height: 16px;
+  font-weight: 600;
+}
+.chunk-type-tag.tag-text { background: #334155; color: #94a3b8; }
+.chunk-type-tag.tag-table { background: #14532d; color: #86efac; }
+.chunk-type-tag.tag-figure { background: #4a044e; color: #e879f9; }
+.chunk-type-tag.tag-page_summary { background: #1e3a5f; color: #93c5fd; }
+.chunk-low-conf { font-size: 12px; cursor: help; }
 .chunk-content {
   font-size: 13px;
   color: #cbd5e1;
@@ -600,7 +846,105 @@ function formatDate(iso: string) {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.chunk-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.chunk-content :deep(.table-title) {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 8px;
+}
+.chunk-content :deep(.md-table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 6px 0 10px;
+  font-size: 12px;
+}
+.chunk-content :deep(.md-table th),
+.chunk-content :deep(.md-table td) {
+  border: 1px solid #334155;
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.chunk-content :deep(.md-table th) {
+  background: #1e293b;
+  color: #93c5fd;
+  font-weight: 600;
+}
+.chunk-content :deep(.md-table td) {
+  background: #0f172a;
+  color: #cbd5e1;
+}
+.chunk-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; align-items: center; }
+.btn-asset-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #1e293b;
+  color: #93c5fd;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-asset-view:hover { background: #334155; }
+.btn-reparse {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #1e293b;
+  color: #fbbf24;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-reparse:hover { background: #334155; }
+.chunk-edit-area {
+  width: 100%;
+  min-height: 120px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: inherit;
+  resize: vertical;
+}
+.chunk-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.btn-save-edit {
+  background: #1d4ed8;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-save-edit:hover:not(:disabled) { background: #2563eb; }
+.btn-save-edit:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-cancel-edit {
+  background: #334155;
+  color: #cbd5e1;
+  border: none;
+  border-radius: 5px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-cancel-edit:hover { background: #475569; }
+.edit-hint { font-size: 10px; color: #64748b; }
 .tag {
   display: inline-block;
   background: #1e3a5f;
@@ -679,6 +1023,34 @@ function formatDate(iso: string) {
 .field-inline { display: flex; align-items: center; gap: 8px; }
 .field-inline input { flex: 1; }
 .unit { color: var(--c-text-3); font-size: 12px; }
+.import-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 4px 0;
+}
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--c-text);
+  cursor: pointer;
+}
+.checkbox-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.field-select {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--c-input-bg, #1e293b);
+  color: var(--c-text, #e2e8f0);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  font-size: 13px;
+}
 .hint-row {
   display: flex;
   justify-content: space-between;

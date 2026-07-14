@@ -548,4 +548,64 @@ CREATE INDEX IF NOT EXISTS idx_crawler_review_imported_q
   ON crawler_review_items(imported_question_id);
 `,
   },
+  {
+    version: 17,
+    sql: `
+-- 扩展 doc_chunks 表：新增内容类型、资产关联、置信度、引擎、排序、坐标
+ALTER TABLE doc_chunks ADD COLUMN chunk_type TEXT NOT NULL DEFAULT 'text'
+  CHECK(chunk_type IN ('text','table','figure','page_summary'));
+ALTER TABLE doc_chunks ADD COLUMN asset_id TEXT;
+ALTER TABLE doc_chunks ADD COLUMN confidence REAL;
+ALTER TABLE doc_chunks ADD COLUMN source_engine TEXT NOT NULL DEFAULT '';
+ALTER TABLE doc_chunks ADD COLUMN block_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE doc_chunks ADD COLUMN bbox TEXT;
+
+-- doc_chunks 全文索引（FTS5）
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5(
+  content,
+  tokenize='unicode61',
+  content='doc_chunks',
+  content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
+  INSERT INTO doc_chunks_fts(rowid, content)
+  VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
+  INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content)
+  VALUES ('delete', old.rowid, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS doc_chunks_au AFTER UPDATE ON doc_chunks BEGIN
+  INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content)
+  VALUES ('delete', old.rowid, old.content);
+  INSERT INTO doc_chunks_fts(rowid, content)
+  VALUES (new.rowid, new.content);
+END;
+
+-- 历史数据回填 FTS
+INSERT INTO doc_chunks_fts(rowid, content)
+SELECT rowid, content FROM doc_chunks
+WHERE rowid NOT IN (SELECT rowid FROM doc_chunks_fts);
+
+-- 新增 doc_assets 表（图片/表格资产）
+CREATE TABLE IF NOT EXISTS doc_assets (
+  id             TEXT PRIMARY KEY,
+  doc_id         TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  page_num       INTEGER NOT NULL,
+  asset_type     TEXT NOT NULL CHECK(asset_type IN ('page_image','embedded_image','figure_crop','table_crop')),
+  file_path      TEXT NOT NULL,
+  width          INTEGER NOT NULL DEFAULT 0,
+  height         INTEGER NOT NULL DEFAULT 0,
+  bbox           TEXT NOT NULL DEFAULT '{}',
+  content_hash   TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_assets_doc_page ON doc_assets(doc_id, page_num);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_assets_hash ON doc_assets(doc_id, content_hash);
+`,
+  },
 ]

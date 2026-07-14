@@ -18,6 +18,12 @@ export interface DocChunk {
   page_num: number
   content: string
   knowledge_tags: string[]
+  chunk_type: 'text' | 'table' | 'figure' | 'page_summary'
+  asset_id: string | null
+  confidence: number | null
+  source_engine: string
+  block_order: number
+  bbox: string | null
 }
 
 export const useDocumentStore = defineStore('document', () => {
@@ -81,6 +87,12 @@ export const useDocumentStore = defineStore('document', () => {
     return []
   }
 
+  async function getDocAssets(docId: string): Promise<unknown[]> {
+    const res = await window.electronAPI.getDocAssets(docId)
+    if (res.success) return res.data as unknown[]
+    return []
+  }
+
   function onImportComplete() {
     importingTaskId.value = null
     // Refresh to get updated page_count
@@ -97,6 +109,7 @@ export const useDocumentStore = defineStore('document', () => {
     importPdf,
     remove,
     getChunks,
+    getDocAssets,
     onImportComplete,
   }
 })

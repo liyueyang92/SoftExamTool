@@ -128,7 +128,9 @@ const customAPI = {
       preview_page: number
       crop_ratios: { top_margin_ratio: number; bottom_margin_ratio: number }
       crop_bbox: { x0: number; top: number; x1: number; bottom: number }
+      engine?: string
       text: string
+      detected_tables_count?: number
     }>('doc:preview', args, 60_000),
   importDocument: (args?: {
     filePath?: string
@@ -136,10 +138,25 @@ const customAPI = {
     bottomMarginRatio?: number
     startPage?: number
     endPage?: number | null
+    extractTables?: boolean
+    savePageImages?: boolean
+    generateVisualSummary?: boolean
+    visionMode?: 'disabled' | 'remote' | 'local'
   }) =>
     invokeWithTimeout<{ document: unknown; taskId?: string; duplicate?: boolean; reparsing?: boolean } | null>('doc:import', args, 60_000),
+  openPath: (filePath: string) => invokeWithTimeout<void>('app:openPath', filePath),
   deleteDocument: (id: string) => invokeWithTimeout<void>('doc:delete', id),
   getDocChunks: (docId: string) => invokeWithTimeout<unknown[]>('doc:getChunks', docId),
+  getDocAssets: (docId: string) => invokeWithTimeout<unknown[]>('doc:getAssets', docId),
+  searchDocChunks: (args: { query: string; limit?: number; docId?: string }) =>
+    invokeWithTimeout<unknown[]>('doc:searchChunks', args),
+  updateDocChunk: (chunkId: string, content: string) =>
+    invokeWithTimeout<void>('doc:updateChunk', { chunkId, content }),
+  reparsePage: (args: {
+    filePath: string; docId: string; pageNum: number
+    reTables?: boolean; reVision?: boolean; savePageImages?: boolean
+  }) =>
+    invokeWithTimeout<unknown>('doc:reparsePage', args, 120_000),
 
   // Phase 3 — AI
   getAiConfig: () => invokeWithTimeout<Record<string, unknown>>('ai:getConfig'),
