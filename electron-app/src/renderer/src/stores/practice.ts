@@ -96,6 +96,26 @@ export const usePracticeStore = defineStore('practice', () => {
     }
   }
 
+  function skipQuestion() {
+    // Move to next question without submitting an answer
+    lastAnswer.value = null
+    currentIndex.value = Math.min(currentIndex.value + 1, questions.value.length)
+    if (currentIndex.value >= questions.value.length) {
+      phase.value = 'done'
+    }
+    // phase stays 'answering' — no answer to review
+  }
+
+  function goToQuestion(index: number) {
+    if (index < 0 || index >= questions.value.length) return
+    lastAnswer.value = null
+    currentIndex.value = index
+    // Stay in current phase (answering or reviewing is fine)
+    if (phase.value === 'reviewing') {
+      phase.value = 'answering'
+    }
+  }
+
   async function end(): Promise<SessionResult> {
     if (!sessionId.value) throw new Error('No active session')
     const res = await window.electronAPI.endPractice(sessionId.value)
@@ -119,6 +139,6 @@ export const usePracticeStore = defineStore('practice', () => {
   return {
     sessionId, questions, currentIndex, answers, lastAnswer, sessionResult, phase,
     currentQuestion, progress, isFinished,
-    start, submitAnswer, continueNext, end, reset,
+    start, submitAnswer, continueNext, skipQuestion, goToQuestion, end, reset,
   }
 })

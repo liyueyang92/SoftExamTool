@@ -46,8 +46,44 @@ function next() {
   submitted.value = false
 }
 
-async function finishSession() {
-  await store.end()
+function skipCurrent() {
+  store.skipQuestion()
+  chosenAnswer.value = ''
+  essayAnswer.value = ''
+  submitted.value = false
+}
+
+function goToPrev() {
+  if (store.currentIndex > 0) {
+    store.goToQuestion(store.currentIndex - 1)
+    chosenAnswer.value = ''
+    essayAnswer.value = ''
+    submitted.value = false
+  }
+}
+
+function goToNext() {
+  if (store.currentIndex < store.questions.length - 1) {
+    store.goToQuestion(store.currentIndex + 1)
+    chosenAnswer.value = ''
+    essayAnswer.value = ''
+    submitted.value = false
+  }
+}
+
+function jumpTo(index: number) {
+  store.goToQuestion(index)
+  chosenAnswer.value = ''
+  essayAnswer.value = ''
+  submitted.value = false
+}
+
+async function exitPractice() {
+  // End the session and return to config
+  if (store.sessionId) {
+    await store.end()
+  }
+  store.reset()
 }
 
 function restart() { store.reset() }
@@ -152,7 +188,19 @@ function toggleMultiple(letter: string) {
       <div class="progress-bar-wrap">
         <div class="progress-bar" :style="{ width: store.progress + '%' }"></div>
       </div>
-      <div class="progress-label">{{ store.currentIndex }} / {{ store.questions.length }} 题 &nbsp;|&nbsp; 正确 {{ correctCount }} 道</div>
+      <div class="top-bar">
+        <div class="progress-label">{{ store.currentIndex + 1 }} / {{ store.questions.length }} 题 &nbsp;|&nbsp; 正确 {{ correctCount }} 道</div>
+        <div class="top-actions">
+          <select class="jump-select" :value="store.currentIndex" @change="jumpTo(Number(($event.target as HTMLSelectElement).value))">
+            <option v-for="(_, i) in store.questions" :key="i" :value="i">
+              第 {{ i + 1 }} 题{{ store.answers[store.questions[i].id] ? ' ✓' : '' }}
+            </option>
+          </select>
+          <button class="btn-nav" @click="goToPrev" :disabled="store.currentIndex <= 0" title="上一题">◀</button>
+          <button class="btn-nav" @click="goToNext" :disabled="store.currentIndex >= store.questions.length - 1" title="下一题">▶</button>
+          <button class="btn-outline btn-exit" @click="exitPractice">退出练习</button>
+        </div>
+      </div>
 
       <div v-if="store.currentQuestion" class="question-card">
         <div class="question-main">
@@ -188,11 +236,12 @@ function toggleMultiple(letter: string) {
           </div>
 
           <div class="submit-row">
+            <button class="btn-nav" @click="goToPrev" :disabled="store.currentIndex <= 0">上一题</button>
             <button class="btn-primary submit-btn" @click="submitCurrent"
                     :disabled="store.currentQuestion.type !== 'essay' ? !chosenAnswer : !essayAnswer.trim()">
               提交答案
             </button>
-            <button v-if="store.currentIndex >= store.questions.length - 1" class="btn-outline" @click="finishSession">结束练习</button>
+            <button class="btn-nav" @click="skipCurrent" :disabled="store.currentIndex >= store.questions.length - 1">跳过</button>
           </div>
         </div>
       </div>
@@ -203,7 +252,17 @@ function toggleMultiple(letter: string) {
       <div class="progress-bar-wrap">
         <div class="progress-bar" :style="{ width: store.progress + '%' }"></div>
       </div>
-      <div class="progress-label">{{ store.currentIndex }} / {{ store.questions.length }} 题 &nbsp;|&nbsp; 正确 {{ correctCount }} 道</div>
+      <div class="top-bar">
+        <div class="progress-label">{{ store.currentIndex }} / {{ store.questions.length }} 题 &nbsp;|&nbsp; 正确 {{ correctCount }} 道</div>
+        <div class="top-actions">
+          <select class="jump-select" :value="store.currentIndex - 1" @change="jumpTo(Number(($event.target as HTMLSelectElement).value))">
+            <option v-for="(_, i) in store.questions" :key="i" :value="i">
+              第 {{ i + 1 }} 题{{ store.answers[store.questions[i].id] ? ' ✓' : '' }}
+            </option>
+          </select>
+          <button class="btn-outline btn-exit" @click="exitPractice">退出练习</button>
+        </div>
+      </div>
       <div v-if="store.lastAnswer" class="question-card">
         <div class="review-panel">
           <div class="review-result" :class="store.lastAnswer.isCorrect ? 'correct' : 'wrong'">
@@ -216,9 +275,12 @@ function toggleMultiple(letter: string) {
             <div class="exp-label">解析</div>
             <div class="exp-text" v-html="store.lastAnswer.explanation"></div>
           </div>
-          <button class="btn-primary next-btn" @click="next">
-            {{ store.isFinished ? '查看结果 →' : '下一题 →' }}
-          </button>
+          <div class="submit-row">
+            <button class="btn-nav" @click="goToPrev" :disabled="store.currentIndex <= 0">上一题</button>
+            <button class="btn-primary next-btn" @click="next">
+              {{ store.isFinished ? '查看结果 →' : '下一题 →' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -270,6 +332,13 @@ function toggleMultiple(letter: string) {
 .progress-bar-wrap { width: 100%; height: 4px; background: var(--c-border); border-radius: 2px; overflow: hidden; }
 .progress-bar { height: 100%; background: #1d4ed8; transition: width 0.3s; }
 .progress-label { font-size: 13px; color: var(--c-text-2); text-align: right; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.top-actions { display: flex; align-items: center; gap: 6px; }
+.jump-select { background: var(--c-panel); border: 1px solid var(--c-border-2); border-radius: 6px; color: var(--c-text); padding: 4px 8px; font-size: 12px; max-width: 130px; cursor: pointer; }
+.btn-nav { background: var(--c-panel); border: 1px solid var(--c-border-2); border-radius: 6px; color: var(--c-text); padding: 6px 12px; font-size: 13px; cursor: pointer; transition: border-color 0.15s; white-space: nowrap; }
+.btn-nav:hover:not(:disabled) { border-color: var(--c-brand); color: var(--c-brand); }
+.btn-nav:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-exit { font-size: 12px; padding: 5px 12px; white-space: nowrap; }
 .question-card { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px; padding: 24px; }
 .question-main { display: flex; flex-direction: column; gap: 16px; }
 .q-meta { display: flex; align-items: center; gap: 8px; }
