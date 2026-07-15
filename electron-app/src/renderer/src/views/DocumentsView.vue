@@ -108,7 +108,7 @@ function buildImportOptions() {
   const top = Number(topMarginPercent.value)
   const bottom = Number(bottomMarginPercent.value)
   const start = Number(startPage.value)
-  const end = endPageInput.value.trim() === '' ? null : Number(endPageInput.value)
+  const end = String(endPageInput.value).trim() === '' ? null : Number(endPageInput.value)
 
   if (Number.isNaN(top) || top < 0 || top >= 100) throw new Error('顶部裁剪比例需在 0 到 99 之间')
   if (Number.isNaN(bottom) || bottom < 0 || bottom >= 100) throw new Error('底部裁剪比例需在 0 到 99 之间')

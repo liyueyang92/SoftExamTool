@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import re
 from collections import Counter
 from pathlib import Path
@@ -460,7 +461,7 @@ def parse_pdf_pages(
                             "source_engine": tb["source_engine"],
                             "confidence": tb["confidence"],
                             "block_order": tb["block_order"],
-                            "bbox": tb["bbox"],
+                            "bbox": json.dumps(tb["bbox"], ensure_ascii=False),
                         })
 
                     # 视觉摘要

@@ -130,7 +130,7 @@ export function insertChunks(
         c.confidence ?? null,
         c.source_engine ?? '',
         c.block_order ?? 0,
-        c.bbox ?? null,
+        c.bbox != null ? (typeof c.bbox === 'string' ? c.bbox : JSON.stringify(c.bbox)) : null,
       )
     }
   })
