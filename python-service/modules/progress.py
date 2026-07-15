@@ -60,6 +60,35 @@ async def push_complete(task_id: str, result: dict) -> bool:
         return False
 
 
+async def push_partial(
+    task_id: str,
+    page_num: int,
+    total_pages: int,
+    chunks: list[dict],
+    assets: list[dict],
+    warnings: list[dict],
+) -> bool:
+    """推送单页解析完成的中间结果"""
+    ws = _connections.get(task_id)
+    if ws is None:
+        return False
+    try:
+        await ws.send_json({
+            'type': 'partial',
+            'taskId': task_id,
+            'pageNum': page_num,
+            'totalPages': total_pages,
+            'chunks': chunks,
+            'assets': assets,
+            'warnings': warnings,
+        })
+        return True
+    except Exception as e:
+        logger.warning('Failed to push partial to task {}: {}', task_id, e)
+        _connections.pop(task_id, None)
+        return False
+
+
 async def push_error(task_id: str, error: str) -> bool:
     ws = _connections.get(task_id)
     if ws is None:

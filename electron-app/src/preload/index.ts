@@ -39,6 +39,17 @@ const customAPI = {
     ipcRenderer.on('task:progress', handler)
     return () => ipcRenderer.removeListener('task:progress', handler)
   },
+  onTaskPartial: (cb: (data: {
+    taskId: string; pageNum: number; totalPages: number
+    chunks: unknown[]; assets: unknown[]; warnings: unknown[]
+  }) => void) => {
+    const handler = (_: unknown, data: {
+      taskId: string; pageNum: number; totalPages: number
+      chunks: unknown[]; assets: unknown[]; warnings: unknown[]
+    }) => cb(data)
+    ipcRenderer.on('task:partial', handler)
+    return () => ipcRenderer.removeListener('task:partial', handler)
+  },
 
   // Phase 1 — App settings
   getSettings: () => invokeWithTimeout<Record<string, unknown>>('app:getSettings'),

@@ -18,7 +18,7 @@ from modules.pdf.extractors.visual import (
     build_figure_chunk_content,
 )
 from modules.pdf.vision import build_vision_provider
-from modules.progress import push_complete, push_error, push_progress
+from modules.progress import push_complete, push_error, push_partial, push_progress
 
 router = APIRouter(prefix="/pdf", tags=["pdf"])
 
@@ -367,6 +367,7 @@ def parse_pdf_pages(
     generate_visual_summary: bool = False,
     vision_mode: str = "disabled",
     ai_config: Optional[dict] = None,
+    on_page_done: Optional[callable] = None,
 ) -> dict:
     pdfplumber, pypdfium2 = get_extractor_backends()
     validate_margin_ratios(top_margin_ratio, bottom_margin_ratio)
@@ -409,9 +410,15 @@ def parse_pdf_pages(
             page_count = len(pdf.pages)
             effective_start_page, effective_end_page = normalize_page_range(page_count, start_page, end_page)
             selected_pages = range(effective_start_page - 1, effective_end_page)
+            total_selected = effective_end_page - effective_start_page + 1
 
             for page_index in selected_pages:
                 page_num = page_index + 1
+                # 记录处理前的长度，用于提取本页新增内容
+                chunks_before = len(all_chunks)
+                assets_before = len(assets)
+                warnings_before = len(warnings)
+
                 pdfium_page = pdfium_doc.get_page(page_index) if pdfium_doc is not None else None
                 try:
                     text, engine = extract_page_text(
@@ -509,6 +516,21 @@ def parse_pdf_pages(
                         if page_asset_id:
                             tc["asset_id"] = page_asset_id
                     all_chunks.extend(text_chunks)
+
+                # 提取本页新增的 chunks / assets / warnings
+                page_chunks = all_chunks[chunks_before:]
+                page_assets = assets[assets_before:]
+                page_warnings = warnings[warnings_before:]
+
+                if on_page_done is not None:
+                    try:
+                        on_page_done(page_num, total_selected, {
+                            "chunks": page_chunks,
+                            "assets": page_assets,
+                            "warnings": page_warnings,
+                        })
+                    except Exception as exc:
+                        logger.warning("on_page_done callback failed for page {}: {}", page_num, exc)
 
         return {
             "doc_id": doc_id,
@@ -625,19 +647,42 @@ async def process_pdf(
     )
 
     try:
-        result = parse_pdf_pages(
-            file_path=file_path,
-            doc_id=doc_id,
-            top_margin_ratio=top_margin_ratio,
-            bottom_margin_ratio=bottom_margin_ratio,
-            start_page=start_page,
-            end_page=end_page,
-            extract_tables=extract_tables,
-            save_page_images=save_page_images,
-            output_dir=output_dir,
-            generate_visual_summary=generate_visual_summary,
-            vision_mode=vision_mode,
-            ai_config=ai_config,
+        loop = asyncio.get_event_loop()
+
+        def on_page_done(page_num: int, total_pages: int, partial: dict) -> None:
+            """在后台线程中回调，安排异步推送中间结果"""
+            asyncio.run_coroutine_threadsafe(
+                push_partial(
+                    task_id,
+                    page_num,
+                    total_pages,
+                    partial.get("chunks", []),
+                    partial.get("assets", []),
+                    partial.get("warnings", []),
+                ),
+                loop,
+            )
+
+        # 在线程池中执行同步解析，避免阻塞事件循环
+        # 这样每个页面的 on_page_done 回调可以通过 asyncio.run_coroutine_threadsafe
+        # 将中间结果推送到 WebSocket
+        result = await loop.run_in_executor(
+            None,
+            lambda: parse_pdf_pages(
+                file_path=file_path,
+                doc_id=doc_id,
+                top_margin_ratio=top_margin_ratio,
+                bottom_margin_ratio=bottom_margin_ratio,
+                start_page=start_page,
+                end_page=end_page,
+                extract_tables=extract_tables,
+                save_page_images=save_page_images,
+                output_dir=output_dir,
+                generate_visual_summary=generate_visual_summary,
+                vision_mode=vision_mode,
+                ai_config=ai_config,
+                on_page_done=on_page_done,
+            ),
         )
 
         page_count = int(result["page_count"])

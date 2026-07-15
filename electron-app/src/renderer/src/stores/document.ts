@@ -26,10 +26,20 @@ export interface DocChunk {
   bbox: string | null
 }
 
+export interface DocParsingProgress {
+  taskId: string
+  docId: string
+  totalPages: number
+  parsedPages: number[]
+  chunkCount: number
+}
+
 export const useDocumentStore = defineStore('document', () => {
   const documents = ref<Doc[]>([])
   const loading = ref(false)
   const importingTaskId = ref<string | null>(null)
+  // 记录每个文档的解析进度（key 为 docId）
+  const parsingProgress = ref<Record<string, DocParsingProgress>>({})
 
   async function fetchAll() {
     loading.value = true
@@ -58,7 +68,7 @@ export const useDocumentStore = defineStore('document', () => {
     return res.data as PdfPreviewResult
   }
 
-  async function importPdf(args?: PdfImportOptions): Promise<{ taskId?: string; duplicate?: boolean; reparsing?: boolean } | null> {
+  async function importPdf(args?: PdfImportOptions): Promise<{ taskId?: string; duplicate?: boolean; reparsing?: boolean; docId?: string } | null> {
     const res = await window.electronAPI.importDocument(args ? toIpcPayload(args) : undefined)
     if (!res.success) throw new Error((res.error as { message: string }).message)
     const data = res.data as (PdfImportResult & { document: Doc }) | null
@@ -72,8 +82,21 @@ export const useDocumentStore = defineStore('document', () => {
     } else {
       documents.value.unshift(data.document)
     }
-    if (data.taskId) importingTaskId.value = data.taskId
-    return { taskId: data.taskId, reparsing: data.reparsing }
+    if (data.taskId) {
+      importingTaskId.value = data.taskId
+      // 初始化解析进度跟踪
+      parsingProgress.value = {
+        ...parsingProgress.value,
+        [data.document.id]: {
+          taskId: data.taskId,
+          docId: data.document.id,
+          totalPages: 0,
+          parsedPages: [],
+          chunkCount: 0,
+        },
+      }
+    }
+    return { taskId: data.taskId, reparsing: data.reparsing, docId: data.document.id }
   }
 
   async function remove(id: string) {
@@ -93,16 +116,59 @@ export const useDocumentStore = defineStore('document', () => {
     return []
   }
 
+  function updateParsingProgress(taskId: string, pageNum: number, totalPages: number, chunkCount: number) {
+    // 找到对应 docId
+    for (const [docId, prog] of Object.entries(parsingProgress.value)) {
+      if (prog.taskId === taskId) {
+        const pages = [...prog.parsedPages]
+        if (!pages.includes(pageNum)) {
+          pages.push(pageNum)
+        }
+        parsingProgress.value = {
+          ...parsingProgress.value,
+          [docId]: {
+            ...prog,
+            totalPages,
+            parsedPages: pages,
+            chunkCount: prog.chunkCount + chunkCount,
+          },
+        }
+        return docId
+      }
+    }
+    return null
+  }
+
   function onImportComplete() {
+    if (importingTaskId.value) {
+      // 清理该 task 对应的解析进度
+      for (const [docId, prog] of Object.entries(parsingProgress.value)) {
+        if (prog.taskId === importingTaskId.value) {
+          const rest = { ...parsingProgress.value }
+          delete rest[docId]
+          parsingProgress.value = rest
+          break
+        }
+      }
+    }
     importingTaskId.value = null
     // Refresh to get updated page_count
     fetchAll()
+  }
+
+  function clearParsingProgress(docId: string) {
+    if (parsingProgress.value[docId]) {
+      const rest = { ...parsingProgress.value }
+      delete rest[docId]
+      parsingProgress.value = rest
+    }
   }
 
   return {
     documents,
     loading,
     importingTaskId,
+    parsingProgress,
     fetchAll,
     pickImportFile,
     previewImport,
@@ -110,6 +176,8 @@ export const useDocumentStore = defineStore('document', () => {
     remove,
     getChunks,
     getDocAssets,
+    updateParsingProgress,
     onImportComplete,
+    clearParsingProgress,
   }
 })

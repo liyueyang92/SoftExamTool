@@ -2,12 +2,28 @@ import { BrowserWindow } from 'electron'
 import { IPC } from './ipc-channels'
 
 interface WsMessage {
-  type?: 'progress' | 'complete' | 'error'
+  type?: 'progress' | 'complete' | 'error' | 'partial'
   taskId: string
   progress?: number
   message?: string
   result?: unknown
   error?: unknown
+  // partial page data
+  pageNum?: number
+  totalPages?: number
+  chunks?: Array<{
+    doc_id: string; page_num: number; content: string
+    knowledge_tags: string[]
+    chunk_type?: string; asset_id?: string | null
+    confidence?: number; source_engine?: string
+    block_order?: number; bbox?: string | null
+  }>
+  assets?: Array<{
+    id: string; doc_id: string; page_num: number
+    asset_type: string; file_path: string
+    width: number; height: number; bbox: string; content_hash: string
+  }>
+  warnings?: Array<{ page_num: number; code: string; message: string }>
 }
 
 interface Connection {
@@ -20,6 +36,8 @@ interface Connection {
 
 type CompleteCallback = (taskId: string, result: unknown) => void
 type ErrorCallback = (taskId: string, error: unknown) => void
+type PartialCallback = (taskId: string, pageNum: number, totalPages: number,
+  chunks: WsMessage['chunks'], assets: WsMessage['assets'], warnings: WsMessage['warnings']) => void
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error) {
@@ -32,6 +50,7 @@ export class WsProgressClient {
   private connections = new Map<string, Connection>()
   private completeCallbacks = new Map<string, CompleteCallback>()
   private errorCallbacks = new Map<string, ErrorCallback>()
+  private partialCallbacks = new Map<string, PartialCallback>()
   private port = 0
   private token = ''
   private mainWindow: BrowserWindow | null = null
@@ -53,6 +72,10 @@ export class WsProgressClient {
 
   onError(taskId: string, cb: ErrorCallback): void {
     this.errorCallbacks.set(taskId, cb)
+  }
+
+  onPartial(taskId: string, cb: PartialCallback): void {
+    this.partialCallbacks.set(taskId, cb)
   }
 
   private openConnection(taskId: string, retryDelay: number): void {
@@ -98,6 +121,24 @@ export class WsProgressClient {
             this.errorCallbacks.delete(taskId)
           }
           this.disconnect(taskId)
+          return
+        }
+
+        if (type === 'partial') {
+          // 转发页面中间结果到渲染进程
+          this.mainWindow?.webContents.send(IPC.TASK_PARTIAL, {
+            taskId: msg.taskId,
+            pageNum: msg.pageNum,
+            totalPages: msg.totalPages,
+            chunks: msg.chunks ?? [],
+            assets: msg.assets ?? [],
+            warnings: msg.warnings ?? [],
+          })
+          const cb = this.partialCallbacks.get(taskId)
+          if (cb) {
+            cb(msg.taskId, msg.pageNum ?? 0, msg.totalPages ?? 0,
+              msg.chunks, msg.assets, msg.warnings)
+          }
           return
         }
 

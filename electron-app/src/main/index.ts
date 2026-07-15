@@ -26,7 +26,7 @@ import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
   deleteDocument, getDocumentById, insertChunks, deleteDocChunks, getDocChunkCount,
-  getChunks, remapManagedDocumentPaths, insertAssets, getDocAssets,
+  getChunks, remapManagedDocumentPaths, insertAssets, getDocAssets, deleteDocAssets,
   searchDocChunks, updateChunkContent
 } from './db/documents'
 import {
@@ -2767,6 +2767,10 @@ function registerIpcHandlers(): void {
     const title = fileName.replace(/\.pdf$/i, '')
 
     const startPdfParse = (doc: { id: string; file_path: string }, parseFilePath: string): string => {
+      // 先清空旧数据（处理重解析场景）
+      deleteDocChunks(db, doc.id)
+      deleteDocAssets(db, doc.id)
+
       const taskId = taskManager!.createTask('pdf_import', {
         docId: doc.id,
         filePath: parseFilePath,
@@ -2777,8 +2781,22 @@ function registerIpcHandlers(): void {
       })
       wsClient.connect(taskId)
 
+      // 每页解析完成时增量写入 DB
+      wsClient.onPartial(taskId, (_taskId, pageNum, totalPages, partialChunks, partialAssets, _partialWarnings) => {
+        try {
+          if (partialChunks && partialChunks.length > 0) {
+            insertChunks(db, partialChunks)
+          }
+          if (partialAssets && partialAssets.length > 0) {
+            insertAssets(db, partialAssets)
+          }
+        } catch (e) {
+          console.error('[DocImport] Failed to store partial results:', e)
+        }
+      })
+
       wsClient.onComplete(taskId, (_, result) => {
-        const { page_count, chunks, assets, warnings } = result as {
+        const { page_count, assets, warnings } = result as {
           page_count: number
           chunks: Array<{
             doc_id: string; page_num: number; content: string
@@ -2795,19 +2813,14 @@ function registerIpcHandlers(): void {
           warnings?: Array<{ page_num: number; code: string; message: string }>
         }
         try {
+          // chunks 已经通过 onPartial 增量写入，这里只需更新最终 page_count
           updateDocumentPageCount(db, doc.id, page_count)
-          deleteDocChunks(db, doc.id)
-          insertChunks(db, chunks)
-          if (assets?.length) {
-            insertAssets(db, assets)
-          }
           taskManager!.updateTask(taskId, 'completed', {
-            chunkCount: chunks.length,
             assetCount: assets?.length ?? 0,
             warnings,
           })
         } catch (e) {
-          console.error('[DocImport] Failed to store chunks:', e)
+          console.error('[DocImport] Failed to finalize import:', e)
         }
       })
       wsClient.onError(taskId, (_, error) => {

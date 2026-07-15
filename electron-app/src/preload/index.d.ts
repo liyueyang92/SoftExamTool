@@ -54,6 +54,10 @@ declare global {
       getTask: (id: string) => Promise<IpcResponse<Task | null>>
       cancelTask: (id: string) => Promise<IpcResponse<void>>
       onTaskProgress: (cb: (msg: ProgressMessage) => void) => () => void
+      onTaskPartial: (cb: (data: {
+        taskId: string; pageNum: number; totalPages: number
+        chunks: unknown[]; assets: unknown[]; warnings: unknown[]
+      }) => void) => () => void
 
       getSettings: () => Promise<IpcResponse<Record<string, unknown>>>
       setSetting: (args: { key: string; value: unknown }) => Promise<IpcResponse<void>>

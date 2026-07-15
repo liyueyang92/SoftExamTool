@@ -10,6 +10,7 @@ export const IPC = {
   TASK_GET: 'task:get',
   TASK_CANCEL: 'task:cancel',
   TASK_PROGRESS: 'task:progress',
+  TASK_PARTIAL: 'task:partial',
 
   APP_GET_SETTINGS: 'app:getSettings',
   APP_SET_SETTING: 'app:setSetting',

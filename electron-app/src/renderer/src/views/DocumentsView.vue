@@ -11,6 +11,9 @@ const loadingChunks = ref(false)
 const importError = ref('')
 const importing = ref(false)
 
+// 当前正被用户查看的"解析中"文档的 ID（用于订阅实时更新）
+const watchingDocId = ref<string | null>(null)
+
 const chunkSearchQuery = ref('')
 const pageJumpInput = ref('')
 const chunkViewError = ref('')
@@ -38,6 +41,7 @@ const previewLoading = ref(false)
 const previewError = ref('')
 
 let disposeTaskProgress: (() => void) | null = null
+let disposeTaskPartial: (() => void) | null = null
 
 const filteredChunks = computed(() => {
   const query = chunkSearchQuery.value.trim().toLowerCase()
@@ -52,6 +56,38 @@ const filteredChunks = computed(() => {
   })
 })
 
+const selectedDocParsePercent = computed(() => {
+  if (!selectedDoc.value) return 0
+  const p = store.parsingProgress[selectedDoc.value.id]
+  if (!p || !p.totalPages) return 0
+  return Math.min(100, Math.round((p.parsedPages.length / p.totalPages) * 100))
+})
+
+function docProgressText(docId: string): string {
+  const p = store.parsingProgress[docId]
+  if (!p) return '解析中…'
+  const parsed = p.parsedPages.length
+  const total = p.totalPages || '?'
+  return `解析中 ${parsed}/${total} 页 · ${p.chunkCount} 个块`
+}
+
+function docProgressDetail(docId: string): string {
+  const p = store.parsingProgress[docId]
+  if (!p) return ''
+  if (!p.totalPages) return '准备中…'
+  const pages = [...p.parsedPages].sort((a, b) => a - b)
+  if (pages.length === 0) return '尚未完成任何页面'
+  const ranges: string[] = []
+  let start = pages[0], end = pages[0]
+  for (let i = 1; i < pages.length; i++) {
+    if (pages[i] === end + 1) { end = pages[i]; continue }
+    ranges.push(start === end ? `${start}` : `${start}~${end}`)
+    start = pages[i]; end = pages[i]
+  }
+  ranges.push(start === end ? `${start}` : `${start}~${end}`)
+  return `已完成页码: ${ranges.join(', ')}`
+}
+
 async function refreshDocuments() {
   await store.fetchAll()
   if (selectedDoc.value) {
@@ -64,6 +100,7 @@ function resetChunkViewState() {
   pageJumpInput.value = ''
   chunkViewError.value = ''
   expandedChunkIds.value = new Set()
+  watchingDocId.value = null
 }
 
 onMounted(async () => {
@@ -72,16 +109,41 @@ onMounted(async () => {
     if (!store.importingTaskId || msg.taskId !== store.importingTaskId) return
     if (msg.progress >= 100) {
       store.onImportComplete()
+      importing.value = false
+      // 如果完成的是当前查看的文档，刷新 chunks
+      if (watchingDocId.value) {
+        await openDocById(watchingDocId.value)
+        watchingDocId.value = null
+      }
       await refreshDocuments()
     }
     if (msg.progress < 0) {
       store.importingTaskId = null
+      importing.value = false
+      watchingDocId.value = null
+    }
+  })
+  disposeTaskPartial = window.electronAPI.onTaskPartial(async (data) => {
+    if (!store.importingTaskId || data.taskId !== store.importingTaskId) return
+    // 更新 store 中的解析进度
+    const docId = store.updateParsingProgress(
+      data.taskId,
+      data.pageNum,
+      data.totalPages,
+      (data.chunks as unknown[]).length,
+    )
+    // 如果用户正在查看这个文档的解析进度，实时刷新 chunks
+    if (docId && watchingDocId.value === docId) {
+      chunks.value = await store.getChunks(docId)
+      assets.value = (await store.getDocAssets(docId)) as Array<{ id: string; file_path: string; asset_type: string }>
+      loadingChunks.value = false
     }
   })
 })
 
 onBeforeUnmount(() => {
   if (disposeTaskProgress) disposeTaskProgress()
+  if (disposeTaskPartial) disposeTaskPartial()
 })
 
 function resetImportState(file: PdfImportSelection | null) {
@@ -100,6 +162,7 @@ function resetImportState(file: PdfImportSelection | null) {
   previewLoading.value = false
   previewError.value = ''
   importError.value = ''
+  importing.value = false
 }
 
 function buildImportOptions() {
@@ -172,21 +235,32 @@ async function confirmImport() {
     if (!result) return
     if (result.duplicate) {
       importError.value = '该文档已导入，MD5 重复。'
+      importing.value = false
       return
     }
+    // 关闭模态框，文档已出现在列表中
     showImportModal.value = false
     resetImportState(null)
   } catch (e) {
     importError.value = e instanceof Error ? e.message : String(e)
-  } finally {
     importing.value = false
   }
+}
+
+async function openDocById(docId: string) {
+  const doc = store.documents.find(d => d.id === docId)
+  if (!doc) return
+  await openDoc(doc)
 }
 
 async function openDoc(doc: Doc) {
   selectedDoc.value = doc
   loadingChunks.value = true
   resetChunkViewState()
+  // 如果是解析中的文档，记录为 watching 以便接收实时更新
+  if (store.parsingProgress[doc.id]) {
+    watchingDocId.value = doc.id
+  }
   try {
     chunks.value = await store.getChunks(doc.id)
     assets.value = (await store.getDocAssets(doc.id)) as Array<{ id: string; file_path: string; asset_type: string }>
@@ -439,19 +513,24 @@ function formatDate(iso: string) {
         <div v-else-if="store.documents.length === 0" class="empty-tip">
           <div style="font-size:40px;margin-bottom:8px">PDF</div>
           <div>还没有导入文档</div>
-          <div style="font-size:12px;margin-top:4px;color:var(--c-text-3)">点击上方“导入 PDF”开始</div>
+          <div style="font-size:12px;margin-top:4px;color:var(--c-text-3)">点击上方"导入 PDF"开始</div>
         </div>
         <div
           v-for="doc in store.documents"
           :key="doc.id"
           class="doc-item"
-          :class="{ active: selectedDoc?.id === doc.id }"
+          :class="{ active: selectedDoc?.id === doc.id, parsing: !!store.parsingProgress[doc.id] }"
           @click="openDoc(doc)"
         >
-          <div class="doc-icon">PDF</div>
+          <div class="doc-icon">{{ store.parsingProgress[doc.id] ? '⏳' : 'PDF' }}</div>
           <div class="doc-info">
             <div class="doc-title">{{ doc.title }}</div>
-            <div class="doc-meta">{{ doc.page_count > 0 ? `${doc.page_count} 页` : '解析中…' }} · {{ formatDate(doc.imported_at) }}</div>
+            <div v-if="store.parsingProgress[doc.id]" class="doc-meta parsing">
+              <span class="parsing-label">解析中</span>
+              <span class="parsing-progress">{{ docProgressText(doc.id) }}</span>
+            </div>
+            <div v-else class="doc-meta">{{ doc.page_count > 0 ? `${doc.page_count} 页` : '待解析' }} · {{ formatDate(doc.imported_at) }}</div>
+            <div v-if="store.parsingProgress[doc.id]" class="doc-progress-detail">{{ docProgressDetail(doc.id) }}</div>
           </div>
           <button class="icon-btn danger" title="删除" @click.stop="deleteDoc(doc)">×</button>
         </div>
@@ -468,6 +547,13 @@ function formatDate(iso: string) {
           <div class="chunks-header">
             <h3>{{ selectedDoc.title }}</h3>
             <span class="chunk-count">{{ loadingChunks ? '…' : filteredChunks.length }} / {{ chunks.length }} 个内容块</span>
+          </div>
+          <!-- 解析中提示 -->
+          <div v-if="store.parsingProgress[selectedDoc.id]" class="parsing-bar">
+            <div class="parsing-bar-track">
+              <div class="parsing-bar-fill" :style="{ width: selectedDocParsePercent + '%' }"></div>
+            </div>
+            <span class="parsing-bar-text">{{ docProgressText(selectedDoc.id) }}</span>
           </div>
           <div class="chunks-toolbar">
             <div class="search-wrap">
@@ -650,7 +736,7 @@ function formatDate(iso: string) {
           <div class="preview-panel">
             <div class="preview-header">单页预览</div>
             <div v-if="previewLoading" class="preview-content empty-tip">加载预览中…</div>
-            <pre v-else class="preview-content">{{ previewText || '点击“预览提取结果”查看当前裁剪后的文本。' }}</pre>
+            <pre v-else class="preview-content">{{ previewText || '点击"预览提取结果"查看当前裁剪后的文本。' }}</pre>
           </div>
         </div>
 
@@ -732,6 +818,33 @@ function formatDate(iso: string) {
   text-overflow: ellipsis;
 }
 .doc-meta { font-size: 11px; color: var(--c-text-3); margin-top: 2px; }
+.doc-meta.parsing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #60a5fa;
+}
+.parsing-label {
+  background: #1e3a5f;
+  color: #60a5fa;
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.parsing-progress {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.doc-progress-detail {
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+.doc-item.parsing {
+  border-left: 3px solid #3b82f6;
+}
 .icon-btn {
   background: none;
   border: 1px solid var(--c-border-2);
@@ -1106,5 +1219,31 @@ function formatDate(iso: string) {
   .search-input,
   .jump-input,
   .preview-page-field { width: 100%; min-width: 0; }
+}
+
+/* 解析进度条（右侧面板内） */
+.parsing-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+.parsing-bar-track {
+  flex: 1;
+  height: 4px;
+  background: #1e293b;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.parsing-bar-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.parsing-bar-text {
+  font-size: 11px;
+  color: #60a5fa;
+  white-space: nowrap;
 }
 </style>
