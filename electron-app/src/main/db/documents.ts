@@ -142,6 +142,14 @@ export function deleteDocChunks(db: Database.Database, docId: string): void {
   db.prepare('DELETE FROM doc_chunks WHERE doc_id = ?').run(docId)
 }
 
+export function deleteDocChunksByPage(
+  db: Database.Database,
+  docId: string,
+  pageNum: number
+): void {
+  db.prepare('DELETE FROM doc_chunks WHERE doc_id = ? AND page_num = ?').run(docId, pageNum)
+}
+
 export function getDocChunkCount(db: Database.Database, docId: string): number {
   const row = db.prepare('SELECT COUNT(*) as count FROM doc_chunks WHERE doc_id = ?').get(docId) as { count: number }
   return row.count
@@ -190,6 +198,14 @@ export function insertAssets(
 
 export function deleteDocAssets(db: Database.Database, docId: string): void {
   db.prepare('DELETE FROM doc_assets WHERE doc_id = ?').run(docId)
+}
+
+export function deleteDocAssetsByPage(
+  db: Database.Database,
+  docId: string,
+  pageNum: number
+): void {
+  db.prepare('DELETE FROM doc_assets WHERE doc_id = ? AND page_num = ?').run(docId, pageNum)
 }
 
 export function getDocAssets(db: Database.Database, docId: string): DocAsset[] {

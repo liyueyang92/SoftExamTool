@@ -25,8 +25,9 @@ import {
 import { startPractice, submitAnswer, endPractice } from './db/practice'
 import {
   listDocuments, getDocumentByMd5, insertDocument, updateDocumentPageCount,
-  deleteDocument, getDocumentById, insertChunks, deleteDocChunks, getDocChunkCount,
-  getChunks, remapManagedDocumentPaths, insertAssets, getDocAssets, deleteDocAssets,
+  deleteDocument, getDocumentById, insertChunks, deleteDocChunks, deleteDocChunksByPage,
+  getDocChunkCount, getChunks, remapManagedDocumentPaths, insertAssets, getDocAssets,
+  deleteDocAssets, deleteDocAssetsByPage,
   searchDocChunks, updateChunkContent
 } from './db/documents'
 import {
@@ -2913,8 +2914,9 @@ function registerIpcHandlers(): void {
     updateChunkContent(db, chunkId, content)
   })
   registerHandler(IPC.DOC_REPARSE_PAGE, async (args) => {
-    const { filePath, docId, pageNum, reTables, reVision, savePageImages } = args as {
+    const { filePath, docId, pageNum, topMarginRatio, bottomMarginRatio, reTables, reVision, savePageImages } = args as {
       filePath: string; docId: string; pageNum: number
+      topMarginRatio?: number; bottomMarginRatio?: number
       reTables?: boolean; reVision?: boolean; savePageImages?: boolean
     }
     const res = await fetch(`http://127.0.0.1:${pythonManager.port}/pdf/reparse-page`, {
@@ -2924,6 +2926,8 @@ function registerIpcHandlers(): void {
         file_path: filePath,
         doc_id: docId,
         page_num: pageNum,
+        top_margin_ratio: topMarginRatio ?? 0.07,
+        bottom_margin_ratio: bottomMarginRatio ?? 0.07,
         re_tables: reTables ?? true,
         re_vision: reVision ?? false,
         save_page_images: savePageImages ?? true,
@@ -2933,7 +2937,18 @@ function registerIpcHandlers(): void {
       const err = await res.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string }
       throw Object.assign(new Error(err.detail ?? `HTTP ${res.status}`), { code: 'PDF_REPARSE_FAILED' })
     }
-    return res.json()
+    const body = await res.json()
+    const resultChunks = (body.chunks || []) as Array<Record<string, unknown>>
+    const resultAssets = (body.assets || []) as Array<Record<string, unknown>>
+
+    // Persist: delete old chunks/assets for this page, insert new ones
+    deleteDocChunksByPage(db, docId, pageNum)
+    if (resultChunks.length > 0) insertChunks(db, resultChunks as Parameters<typeof insertChunks>[1])
+
+    deleteDocAssetsByPage(db, docId, pageNum)
+    if (resultAssets.length > 0) insertAssets(db, resultAssets as Parameters<typeof insertAssets>[1])
+
+    return body
   })
   registerHandler(IPC.DOC_GET_CHUNKS, async (docId) => getChunks(db, docId as string))
   registerHandler(IPC.DOC_GET_ASSETS, async (docId) => getDocAssets(db, docId as string))

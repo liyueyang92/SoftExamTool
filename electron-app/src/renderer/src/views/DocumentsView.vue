@@ -40,6 +40,16 @@ const previewText = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
 
+// Reparse modal
+const showReparseModal = ref(false)
+const reparseTarget = ref<DocChunk | null>(null)
+const reparseTopPercent = ref(7)
+const reparseBottomPercent = ref(7)
+const reparsing = ref(false)
+const reparsePreviewText = ref('')
+const reparsePreviewLoading = ref(false)
+const reparsePreviewError = ref('')
+
 let disposeTaskProgress: (() => void) | null = null
 let disposeTaskPartial: (() => void) | null = null
 
@@ -372,17 +382,72 @@ async function saveEdit(chunk: DocChunk) {
 
 async function reparseChunk(chunk: DocChunk) {
   if (!selectedDoc.value) return
-  const confirmed = confirm(
-    `确认重新解析第 ${chunk.page_num} 页？\n这将重新提取该页的文本/表格/图示，并替换现有内容。`
-  )
-  if (!confirmed) return
+  reparseTarget.value = chunk
+  reparseTopPercent.value = 7
+  reparseBottomPercent.value = 7
+  chunkViewError.value = ''
+  reparsePreviewText.value = ''
+  reparsePreviewError.value = ''
+  showReparseModal.value = true
+}
 
+async function reparseLoadPreview() {
+  const target = reparseTarget.value
+  if (!target || !selectedDoc.value) return
+
+  reparsePreviewError.value = ''
+  reparsePreviewLoading.value = true
+  try {
+    const top = Number(reparseTopPercent.value)
+    const bottom = Number(reparseBottomPercent.value)
+    if (Number.isNaN(top) || top < 0 || top >= 100) throw new Error('顶部裁剪比例需在 0 到 99 之间')
+    if (Number.isNaN(bottom) || bottom < 0 || bottom >= 100) throw new Error('底部裁剪比例需在 0 到 99 之间')
+    if (top + bottom >= 100) throw new Error('顶部与底部裁剪比例之和必须小于 100')
+
+    const result = await store.previewImport({
+      filePath: selectedDoc.value.file_path,
+      previewPage: target.page_num,
+      topMarginRatio: top / 100,
+      bottomMarginRatio: bottom / 100,
+    })
+    reparsePreviewText.value = result.text || '当前裁剪配置下未提取到文本。'
+  } catch (e) {
+    reparsePreviewText.value = ''
+    reparsePreviewError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    reparsePreviewLoading.value = false
+  }
+}
+
+async function confirmReparse() {
+  const target = reparseTarget.value
+  if (!target || !selectedDoc.value) return
+
+  const top = Number(reparseTopPercent.value)
+  const bottom = Number(reparseBottomPercent.value)
+
+  if (Number.isNaN(top) || top < 0 || top >= 100) {
+    chunkViewError.value = '顶部裁剪比例需在 0 到 99 之间'
+    return
+  }
+  if (Number.isNaN(bottom) || bottom < 0 || bottom >= 100) {
+    chunkViewError.value = '底部裁剪比例需在 0 到 99 之间'
+    return
+  }
+  if (top + bottom >= 100) {
+    chunkViewError.value = '顶部与底部裁剪比例之和必须小于 100'
+    return
+  }
+
+  reparsing.value = true
   chunkViewError.value = ''
   try {
     const res = await window.electronAPI.reparsePage({
       filePath: selectedDoc.value.file_path,
       docId: selectedDoc.value.id,
-      pageNum: chunk.page_num,
+      pageNum: target.page_num,
+      topMarginRatio: top / 100,
+      bottomMarginRatio: bottom / 100,
       reTables: true,
       reVision: false,
       savePageImages: true,
@@ -394,7 +459,7 @@ async function reparseChunk(chunk: DocChunk) {
     }
 
     // Remove old chunks of this page, add new ones
-    const otherChunks = chunks.value.filter(c => c.page_num !== chunk.page_num)
+    const otherChunks = chunks.value.filter(c => c.page_num !== target.page_num)
     const newChunks = data.chunks.map((c, i) => ({
       ...c,
       id: c.id || `reparse-${Date.now()}-${i}`,
@@ -410,9 +475,13 @@ async function reparseChunk(chunk: DocChunk) {
         }
       }
     }
-    chunkViewError.value = `第 ${chunk.page_num} 页重新解析完成，共 ${newChunks.length} 个块。`
+    showReparseModal.value = false
+    reparseTarget.value = null
+    chunkViewError.value = `第 ${target.page_num} 页重新解析完成，共 ${newChunks.length} 个块。`
   } catch (e) {
     chunkViewError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    reparsing.value = false
   }
 }
 
@@ -631,18 +700,26 @@ function formatDate(iso: string) {
                   class="tag"
                   v-html="highlightText(tag)"
                 ></span>
-                <button v-if="chunk.asset_id && isChunkExpanded(chunk.id)"
-                        class="btn-asset-view"
-                        title="查看原图"
-                        @click.stop="viewAsset(chunk.asset_id)">
-                  🖼 查看原图
-                </button>
-                <button v-if="isChunkExpanded(chunk.id)"
-                        class="btn-reparse"
-                        title="重新解析此页"
-                        @click.stop="reparseChunk(chunk)">
-                  🔄 重新生成
-                </button>
+                <span class="chunk-actions-right">
+                  <button v-if="isChunkExpanded(chunk.id) && editingChunkId !== chunk.id"
+                          class="btn-edit"
+                          title="编辑内容"
+                          @click.stop="startEdit(chunk)">
+                    ✏️ 编辑
+                  </button>
+                  <button v-if="chunk.asset_id && isChunkExpanded(chunk.id)"
+                          class="btn-asset-view"
+                          title="查看原图"
+                          @click.stop="viewAsset(chunk.asset_id)">
+                    🖼 查看原图
+                  </button>
+                  <button v-if="isChunkExpanded(chunk.id)"
+                          class="btn-reparse"
+                          title="重新解析此页"
+                          @click.stop="reparseChunk(chunk)">
+                    🔄 重新生成
+                  </button>
+                </span>
               </div>
             </div>
           </div>
@@ -744,6 +821,79 @@ function formatDate(iso: string) {
           <button class="btn-secondary" @click="showImportModal = false">取消</button>
           <button class="btn-primary" :disabled="importing" @click="confirmImport">
             {{ importing ? '导入中…' : '确认导入' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reparse modal -->
+    <div v-if="showReparseModal" class="modal-backdrop">
+      <div class="modal reparse-modal">
+        <div class="modal-header">
+          <div>
+            <h3>重新生成</h3>
+            <div class="modal-subtitle">
+              第 {{ reparseTarget?.page_num }} 页
+              <button v-if="reparseTarget?.asset_id"
+                      class="btn-asset-view"
+                      style="margin-left: 8px;"
+                      title="查看原图"
+                      @click.stop="viewAsset(reparseTarget!.asset_id!)">
+                🖼 查看原图
+              </button>
+            </div>
+          </div>
+          <button class="icon-btn" @click="showReparseModal = false">×</button>
+        </div>
+
+        <div class="modal-body">
+          <p style="margin: 0 0 12px; color: var(--c-text-soft); font-size: 13px;">
+            将重新提取该页的文本/表格/图示，并替换现有内容。请设置裁剪比例：
+          </p>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>顶部裁剪</span>
+              <div class="field-inline">
+                <input v-model.number="reparseTopPercent" type="number" min="0" max="99" step="1" />
+                <span class="unit">%</span>
+              </div>
+            </label>
+
+            <label class="field">
+              <span>底部裁剪</span>
+              <div class="field-inline">
+                <input v-model.number="reparseBottomPercent" type="number" min="0" max="99" step="1" />
+                <span class="unit">%</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="hint-row">
+            <span>默认裁剪页面顶部和底部各 7% 区域（如页眉页脚）。</span>
+          </div>
+
+          <div class="preview-toolbar">
+            <button class="btn-secondary" :disabled="reparsePreviewLoading" @click="reparseLoadPreview">
+              {{ reparsePreviewLoading ? '预览中…' : '预览提取结果' }}
+            </button>
+          </div>
+
+          <p v-if="reparsePreviewError" class="error-text">{{ reparsePreviewError }}</p>
+
+          <div class="preview-panel">
+            <div class="preview-header">裁剪预览</div>
+            <div v-if="reparsePreviewLoading" class="preview-content empty-tip">加载预览中…</div>
+            <pre v-else class="preview-content">{{ reparsePreviewText || '点击"预览提取结果"查看当前裁剪配置下的文本。' }}</pre>
+          </div>
+
+          <p v-if="chunkViewError" class="error-text">{{ chunkViewError }}</p>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="showReparseModal = false">取消</button>
+          <button class="btn-primary" :disabled="reparsing" @click="confirmReparse">
+            {{ reparsing ? '生成中…' : '确认生成' }}
           </button>
         </div>
       </div>
@@ -988,6 +1138,21 @@ function formatDate(iso: string) {
   color: #cbd5e1;
 }
 .chunk-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; align-items: center; }
+.chunk-actions-right { display: flex; gap: 4px; margin-left: auto; align-items: center; }
+.btn-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #1e293b;
+  color: #34d399;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-edit:hover { background: #334155; }
 .btn-asset-view {
   display: inline-flex;
   align-items: center;
@@ -1093,6 +1258,11 @@ function formatDate(iso: string) {
 }
 .import-modal {
   width: min(920px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+}
+.reparse-modal {
+  width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
   overflow: hidden;
 }

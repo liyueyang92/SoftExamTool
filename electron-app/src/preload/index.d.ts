@@ -113,6 +113,7 @@ declare global {
       updateDocChunk: (chunkId: string, content: string) => Promise<IpcResponse<void>>
       reparsePage: (args: {
         filePath: string; docId: string; pageNum: number
+        topMarginRatio?: number; bottomMarginRatio?: number
         reTables?: boolean; reVision?: boolean; savePageImages?: boolean
       }) => Promise<IpcResponse<unknown>>
 

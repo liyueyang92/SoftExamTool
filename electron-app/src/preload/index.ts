@@ -165,6 +165,7 @@ const customAPI = {
     invokeWithTimeout<void>('doc:updateChunk', { chunkId, content }),
   reparsePage: (args: {
     filePath: string; docId: string; pageNum: number
+    topMarginRatio?: number; bottomMarginRatio?: number
     reTables?: boolean; reVision?: boolean; savePageImages?: boolean
   }) =>
     invokeWithTimeout<unknown>('doc:reparsePage', args, 120_000),
