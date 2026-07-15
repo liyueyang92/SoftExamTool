@@ -14,7 +14,7 @@ import { WsProgressClient } from './ws-client'
 import { registerHandler } from './ipc-handler'
 import {
   queryQuestions, searchQuestions, insertQuestion, batchInsertQuestions,
-  updateQuestion, deleteQuestion, batchDeleteQuestions, toggleFavorite, getQuestionStats, getWrongQuestions,
+  updateQuestion, deleteQuestion, batchDeleteQuestions, toggleFavorite, getQuestionStats, listKnowledgeTags, getWrongQuestions,
   exportQuestions
 } from './db/questions'
 import {
@@ -28,7 +28,7 @@ import {
   deleteDocument, getDocumentById, insertChunks, deleteDocChunks, deleteDocChunksByPage,
   getDocChunkCount, getChunks, remapManagedDocumentPaths, insertAssets, getDocAssets,
   deleteDocAssets, deleteDocAssetsByPage,
-  searchDocChunks, updateChunkContent
+  searchDocChunks, updateChunkContent, setDocumentOfficial
 } from './db/documents'
 import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
@@ -49,9 +49,27 @@ import {
 import {
   getActivePlan, createPlan, deletePlan, getPlanTasks, getTodayTasks,
   updatePlanTask, getCalendar, getPlanStats, adaptPlan,
-  startSession, endSession, getTodaySessions
+  startSession, endSession, getTodaySessions,
+  generatePhasedPlan, distributeSkippedTasks,
+  lockDays, unlockDays, addCustomTask, moveTask, resetPlan,
+  relinkPlanTasksToDocs, remapDocChunkTags, applyAiPlanSchedule,
+  listTemplates, createTemplate, deleteTemplate, applyTemplate,
+  getSprintStatus, activateSprintMode, generateDailyTopCards,
+  getFocusStats,
 } from './db/plan'
 import { listAchievements, checkAndUnlockAchievements } from './db/achievements'
+import { getExamConfig, saveExamConfig } from './db/exam-config'
+import {
+  getDomainTree, getDomainById, upsertDomain, deleteDomain,
+  importOutline, getDocMappingsForDomain,
+  getFlatDomainList, batchUpsertDomains, getChunksForDocuments
+} from './db/knowledge-domains'
+import {
+  createLog, getLogsByDateRange, getDailyStats, updateLog, deleteLog
+} from './db/learning-logs'
+import {
+  listNotifications, markRead, markAllRead, checkNotificationTriggers,
+} from './db/notifications'
 import {
   createAiChatSession,
   deleteAiChatSession,
@@ -383,6 +401,41 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // ─── Pomodoro focus tracking: detect window blur for interruption counting ───
+  let blurStart: number | null = null
+  let focusCheckInterval: ReturnType<typeof setInterval> | null = null
+
+  win.on('blur', () => {
+    blurStart = Date.now()
+    // Start polling to check if focus has been lost for > 30 seconds
+    if (!focusCheckInterval) {
+      focusCheckInterval = setInterval(() => {
+        if (blurStart && Date.now() - blurStart > 30_000) {
+          try {
+            const db = getDatabase()
+            const activeSession = db.prepare(
+              "SELECT id FROM study_sessions WHERE ended_at IS NULL AND type = 'pomodoro' ORDER BY started_at DESC LIMIT 1"
+            ).get() as { id: string } | undefined
+            if (activeSession) {
+              db.prepare(
+                'UPDATE study_sessions SET interruption_count = COALESCE(interruption_count, 0) + 1 WHERE id = ?'
+              ).run(activeSession.id)
+            }
+            blurStart = null // Reset to avoid double-counting
+          } catch { /* ignore */ }
+        }
+      }, 5_000) // Check every 5 seconds
+    }
+  })
+
+  win.on('focus', () => {
+    blurStart = null
+    if (focusCheckInterval) {
+      clearInterval(focusCheckInterval)
+      focusCheckInterval = null
+    }
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(normalizeDevRendererUrl(process.env['ELECTRON_RENDERER_URL']))
   } else {
@@ -472,7 +525,14 @@ function checkHealthReminder(): void {
 function setupNotificationTimer(): void {
   // Check shortly after startup, then every hour
   setTimeout(() => checkAndNotify(), 15_000)
-  setInterval(() => checkAndNotify(), 60 * 60 * 1000)
+  setInterval(() => checkAndNotify(), 30 * 60 * 1000)
+  // Run notification trigger checks every 30 minutes (starting after 5 min)
+  setTimeout(() => {
+    try { checkNotificationTriggers(getDatabase()) } catch { /* ignore */ }
+  }, 5 * 60 * 1000)
+  setInterval(() => {
+    try { checkNotificationTriggers(getDatabase()) } catch { /* ignore */ }
+  }, 30 * 60 * 1000)
   // Health reminder: check every 5 minutes
   setInterval(() => checkHealthReminder(), 5 * 60 * 1000)
 }
@@ -2297,6 +2357,7 @@ function registerIpcHandlers(): void {
   })
   registerHandler(IPC.QUESTION_TOGGLE_FAVORITE, async (id) => ({ is_favorite: toggleFavorite(db, id as string) }))
   registerHandler(IPC.QUESTION_GET_STATS, async () => getQuestionStats(db))
+  registerHandler(IPC.QUESTION_LIST_TAGS, async () => listKnowledgeTags(db))
 
   // Question export / import
   registerHandler(IPC.QUESTION_EXPORT, async (args) => {
@@ -2952,6 +3013,11 @@ function registerIpcHandlers(): void {
   })
   registerHandler(IPC.DOC_GET_CHUNKS, async (docId) => getChunks(db, docId as string))
   registerHandler(IPC.DOC_GET_ASSETS, async (docId) => getDocAssets(db, docId as string))
+  registerHandler(IPC.DOC_SET_OFFICIAL, async (args) => {
+    const { docId, isOfficial } = args as { docId: string; isOfficial: boolean }
+    setDocumentOfficial(db, docId, isOfficial)
+    return { is_official: isOfficial }
+  })
 
   // Phase 3 - AI config
   registerHandler(IPC.AI_GET_CONFIG, async () => {
@@ -3906,6 +3972,73 @@ function registerIpcHandlers(): void {
     return res.json()
   })
 
+  // ─── AI Study Plan Advice ─────────────────────────────────────────────────
+  registerHandler(IPC.AI_PLAN_ADVICE, async (args) => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/plan-advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
+    })
+    if (!res.ok) throw Object.assign(new Error('AI plan advice failed'), { code: 'AI_PLAN_ADVICE_FAILED' })
+    return res.json()
+  })
+
+  registerHandler(IPC.AI_GENERATE_PLAN_TEMPLATE, async (args) => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/generate-plan-template`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
+    })
+    if (!res.ok) throw Object.assign(new Error('AI template generation failed'), { code: 'AI_TEMPLATE_FAILED' })
+    return res.json()
+  })
+
+  registerHandler(IPC.AI_ESSAY_MATERIAL_MATCH, async (args) => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/essay-material-match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
+    })
+    if (!res.ok) throw Object.assign(new Error('AI material match failed'), { code: 'AI_MATERIAL_MATCH_FAILED' })
+    return res.json()
+  })
+
+  registerHandler(IPC.AI_DAILY_RECOMMENDATION, async (args) => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/daily-recommendation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
+    })
+    if (!res.ok) throw Object.assign(new Error('AI daily recommendation failed'), { code: 'AI_RECOMMENDATION_FAILED' })
+    return res.json()
+  })
+
+  registerHandler(IPC.AI_GENERATE_STUDY_PLAN, async (args) => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/generate-plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'AI plan generation failed' }))
+      throw Object.assign(new Error(err.detail ?? 'AI plan generation failed'), { code: 'AI_PLAN_GEN_FAILED' })
+    }
+    return res.json()
+  })
+
+  registerHandler(IPC.AI_OPTIMIZE_PLAN, async (args) => {
+    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/optimize-plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'AI plan optimization failed' }))
+      throw Object.assign(new Error(err.detail ?? 'AI plan optimization failed'), { code: 'AI_OPTIMIZE_FAILED' })
+    }
+    return res.json()
+  })
+
   // Phase 4 - Study Plans
   registerHandler(IPC.PLAN_GET_ACTIVE, async () => getActivePlan(db))
   registerHandler(IPC.PLAN_CREATE, async (args) => {
@@ -3956,6 +4089,248 @@ function registerIpcHandlers(): void {
     }
     return newly
   })
+
+  // ─── Study Plan Overhaul — Exam Config ────────────────────────────────────
+  registerHandler(IPC.EXAM_CONFIG_GET, async () => getExamConfig(db))
+  registerHandler(IPC.EXAM_CONFIG_SAVE, async (args) => saveExamConfig(db, args as Parameters<typeof saveExamConfig>[1]))
+
+  // ─── Study Plan Overhaul — Knowledge Domains ───────────────────────────────
+  registerHandler(IPC.KD_TREE, async () => getDomainTree(db))
+  registerHandler(IPC.KD_GET, async (id) => getDomainById(db, id as string))
+  registerHandler(IPC.KD_UPSERT, async (args) => upsertDomain(db, args as Parameters<typeof upsertDomain>[1]))
+  registerHandler(IPC.KD_DELETE, async (id) => deleteDomain(db, id as string))
+  registerHandler(IPC.KD_IMPORT_OUTLINE, async (args) => {
+    const { force } = (args ?? {}) as { force?: boolean }
+    return importOutline(db, force ?? false)
+  })
+  registerHandler(IPC.KD_MAP_DOC, async (args) => {
+    const { domainId } = args as { domainId: string }
+    return getDocMappingsForDomain(db, domainId)
+  })
+
+  registerHandler(IPC.KD_FLAT_LIST, async () => getFlatDomainList(db))
+
+  registerHandler(IPC.KD_BATCH_UPSERT, async (args) => {
+    const { domains } = args as { domains: Array<Parameters<typeof batchUpsertDomains>[1][number]> }
+    return batchUpsertDomains(db, domains)
+  })
+
+  registerHandler(IPC.KD_GET_CHUNKS_FOR_DOCS, async (args) => {
+    const { docIds } = args as { docIds: string[] }
+    return getChunksForDocuments(db, docIds)
+  })
+
+  registerHandler(IPC.AI_EXTRACT_KNOWLEDGE, async (args) => {
+    const { docIds } = args as { docIds: string[] }
+
+    const sendProgress = (message: string) => {
+      mainWindow?.webContents.send(IPC.AI_EXTRACT_PROGRESS, { message })
+    }
+
+    sendProgress(`正在加载 ${docIds.length} 个文档…`)
+    const fullTree = getDomainTree(db)
+    const allChunks = getChunksForDocuments(db, docIds)
+
+    // Slim tree: L1+L2 only
+    const slimTree = fullTree.map((n) => ({
+      id: n.id,
+      name: n.name,
+      level: n.level,
+      children: (n.children ?? []).map((c) => ({
+        id: c.id,
+        name: c.name,
+        level: c.level,
+      })),
+    }))
+
+    // Prepare chunks: sort by content length DESC (richer chunks first),
+    // truncate each to 350 chars, filter noise
+    const MAX_CHUNKS = 150  // safety cap (~15 rounds), covers most documents
+    const BATCH_SIZE = 10
+
+    const preparedChunks = allChunks
+      .map((c) => ({
+        id: c.id,
+        page_num: c.page_num,
+        content: (c.content ?? '').slice(0, 350).trim(),
+      }))
+      .filter((c) => c.content.length > 20)
+      .sort((a, b) => b.content.length - a.content.length)
+      .slice(0, MAX_CHUNKS)
+
+    const totalAvailable = allChunks.filter((c) => (c.content ?? '').trim().length > 20).length
+
+    // Partition into batches
+    const batches: Array<typeof preparedChunks> = []
+    for (let i = 0; i < preparedChunks.length; i += BATCH_SIZE) {
+      batches.push(preparedChunks.slice(i, i + BATCH_SIZE))
+    }
+
+    const truncated = totalAvailable > MAX_CHUNKS
+    sendProgress(
+      `已加载 ${totalAvailable} 个有效片段` +
+      (truncated ? `（取样前 ${preparedChunks.length}），` : '，') +
+      `分 ${batches.length} 轮 AI 分析…`
+    )
+
+    // Multi-round extraction
+    const allSuggestions: Array<{
+      name: string
+      suggested_parent_id: string
+      suggested_parent_name: string
+      summary: string
+      source_chunk_ids: string[]
+      confidence: number
+    }> = []
+
+    const seenNames = new Set<string>()
+
+    for (let round = 0; round < batches.length; round++) {
+      sendProgress(`第 ${round + 1}/${batches.length} 轮 AI 分析中…`)
+
+      const res = await fetch(
+        `http://127.0.0.1:${pythonManager.port}/ai/extract-knowledge`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+          body: JSON.stringify({
+            ai_config: buildProviderConfig(),
+            domain_tree: slimTree,
+            doc_chunks: batches[round],
+          }),
+        }
+      )
+
+      if (!res.ok) {
+        // Log but continue to next batch on individual round failure
+        console.warn(`[Extract] Round ${round + 1}/${batches.length} failed with HTTP ${res.status}`)
+        continue
+      }
+
+      const result = await res.json()
+      const roundSuggestions = (result?.suggestions ?? []) as typeof allSuggestions
+
+      // Deduplicate by name
+      for (const s of roundSuggestions) {
+        const key = s.name.toLowerCase()
+        if (!seenNames.has(key)) {
+          seenNames.add(key)
+          allSuggestions.push(s)
+        }
+      }
+    }
+
+    sendProgress(`完成 — ${batches.length} 轮分析共提取 ${allSuggestions.length} 条知识点建议`)
+    return { suggestions: allSuggestions }
+  })
+
+  // ─── Study Plan Overhaul — Learning Logs ───────────────────────────────────
+  registerHandler(IPC.LOG_CREATE, async (args) => createLog(db, args as Parameters<typeof createLog>[1]))
+  registerHandler(IPC.LOG_QUERY, async (args) => {
+    const { from, to } = args as { from: string; to: string }
+    return getLogsByDateRange(db, from, to)
+  })
+  registerHandler(IPC.LOG_STATS, async (args) => {
+    const { days } = (args ?? {}) as { days?: number }
+    return getDailyStats(db, days ?? 30)
+  })
+  registerHandler(IPC.LOG_UPDATE, async (args) => {
+    const { id, changes } = args as { id: string; changes: Parameters<typeof updateLog>[2] }
+    return updateLog(db, id, changes)
+  })
+  registerHandler(IPC.LOG_DELETE, async (id) => deleteLog(db, id as string))
+
+  // ─── Study Plan Overhaul — Enhanced Plan Operations ──────────────────────
+  registerHandler(IPC.PLAN_GENERATE_PHASED, async (args) => {
+    const { planId, examDate } = args as { planId: string; examDate: string }
+    return generatePhasedPlan(db, planId, examDate)
+  })
+  registerHandler(IPC.PLAN_LOCK_DAYS, async (args) => {
+    const { planId, fromDate, toDate } = args as { planId: string; fromDate: string; toDate: string }
+    return lockDays(db, planId, fromDate, toDate)
+  })
+  registerHandler(IPC.PLAN_UNLOCK_DAYS, async (args) => {
+    const { planId, fromDate, toDate } = args as { planId: string; fromDate: string; toDate: string }
+    return unlockDays(db, planId, fromDate, toDate)
+  })
+  registerHandler(IPC.PLAN_RESET, async (args) => {
+    const { planId, keepLogs } = args as { planId: string; keepLogs?: boolean }
+    resetPlan(db, planId, keepLogs)
+  })
+  registerHandler(IPC.PLAN_ADD_CUSTOM_TASK, async (args) => {
+    const { planId, task } = args as { planId: string; task: Parameters<typeof addCustomTask>[2] }
+    return addCustomTask(db, planId, task)
+  })
+  registerHandler(IPC.PLAN_MOVE_TASK, async (args) => {
+    const { taskId, newDate } = args as { taskId: string; newDate: string }
+    return moveTask(db, taskId, newDate)
+  })
+  registerHandler(IPC.PLAN_SKIP_DAY, async (args) => {
+    const { planId, skipDate } = args as { planId: string; skipDate: string }
+    return distributeSkippedTasks(db, planId, skipDate)
+  })
+  registerHandler(IPC.PLAN_RELINK_DOCS, async (planId) => {
+    return relinkPlanTasksToDocs(db, planId as string)
+  })
+  registerHandler(IPC.PLAN_REMAP_CHUNK_TAGS, async () => {
+    return remapDocChunkTags(db)
+  })
+  registerHandler(IPC.PLAN_APPLY_AI_SCHEDULE, async (args) => {
+    const { planId, dailySchedule } = args as {
+      planId: string
+      dailySchedule: Array<{
+        date: string
+        tasks: Array<{
+          knowledge_tag: string
+          task_type: string
+          estimated_min: number
+          suggested_count: number
+          priority: number
+        }>
+      }>
+    }
+    return { tasksCreated: applyAiPlanSchedule(db, planId, dailySchedule) }
+  })
+
+  // ─── Study Plan Overhaul — Plan Templates ────────────────────────────────
+  registerHandler(IPC.TEMPLATE_LIST, async () => listTemplates(db))
+  registerHandler(IPC.TEMPLATE_CREATE, async (args) => createTemplate(db, args as Parameters<typeof createTemplate>[1]))
+  registerHandler(IPC.TEMPLATE_DELETE, async (id) => deleteTemplate(db, id as string))
+  registerHandler(IPC.TEMPLATE_APPLY, async (args) => {
+    const { planId, templateId } = args as { planId: string; templateId: string }
+    return applyTemplate(db, planId, templateId)
+  })
+
+  // ─── Sprint Mode ─────────────────────────────────────────────────────────
+  registerHandler(IPC.SPRINT_STATUS, async () => getSprintStatus(db))
+  registerHandler(IPC.SPRINT_ACTIVATE, async (planId) => activateSprintMode(db, planId as string))
+  registerHandler(IPC.SPRINT_DAILY_CARD, async () => generateDailyTopCards(db))
+
+  // ─── Pomodoro Enhanced ───────────────────────────────────────────────────
+  registerHandler(IPC.SESSION_GET_FOCUS_STATS, async (args) => {
+    const { days } = (args ?? {}) as { days?: number }
+    return getFocusStats(db, days ?? 30)
+  })
+  registerHandler(IPC.SESSION_REPORT_INTERRUPTION, async (args) => {
+    const { sessionId } = args as { sessionId: string }
+    // Increment interruption count on the active session
+    db.prepare(`
+      UPDATE study_sessions SET interruption_count = COALESCE(interruption_count, 0) + 1
+      WHERE id = ?
+    `).run(sessionId)
+  })
+
+  // ─── Notifications ───────────────────────────────────────────────────────
+  registerHandler(IPC.NOTIFICATION_LIST, async (args) => {
+    const { isRead, limit } = (args ?? {}) as { isRead?: number; limit?: number }
+    return listNotifications(db, isRead, limit ?? 50)
+  })
+  registerHandler(IPC.NOTIFICATION_MARK_READ, async (args) => {
+    const { id } = (args ?? {}) as { id?: string }
+    if (id) markRead(db, id)
+    else markAllRead(db)
+  })
+  registerHandler(IPC.NOTIFICATION_CHECK_TRIGGERS, async () => checkNotificationTriggers(db))
 
   // Phase 6 - Backup & Restore
   registerHandler(IPC.BACKUP_LIST, async () => listBackups(db))
@@ -4063,6 +4438,16 @@ app.whenReady().then(async () => {
     taskManager = new TaskManager(db)
     taskManager.recoverOrphanedTasks()
     console.log('[App] Database ready')
+
+    // Auto-import outline data into knowledge_domains (no-op if already populated)
+    try {
+      const outlineResult = importOutline(db)
+      if (outlineResult.imported > 0) {
+        console.log(`[App] Outline imported: ${outlineResult.imported} domains`)
+      }
+    } catch (e) {
+      console.warn('[App] Outline import skipped:', (e as Error).message)
+    }
 
     // Register custom protocol for serving question images
     protocol.handle('exam-image', (request) => {

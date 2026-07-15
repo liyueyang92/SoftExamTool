@@ -1,0 +1,50 @@
+[
+  {
+    "id": "builtin-foundation-1",
+    "name": "标准基础阶段模板",
+    "description": "按大纲顺序逐章学习，每日阅读+练习组合，每7天预留1天弹性日",
+    "phase": "foundation",
+    "is_builtin": 1,
+    "task_rules_json": "{\"daily_tasks\":[{\"type\":\"reading\",\"estimated_min\":90},{\"type\":\"practice\",\"count\":15,\"estimated_min\":30}]}"
+  },
+  {
+    "id": "builtin-foundation-2",
+    "name": "高强度基础阶段模板",
+    "description": "每日阅读2章+双倍练习量，适合全职备考",
+    "phase": "foundation",
+    "is_builtin": 1,
+    "task_rules_json": "{\"daily_tasks\":[{\"type\":\"reading\",\"estimated_min\":180},{\"type\":\"practice\",\"count\":30,\"estimated_min\":60}]}"
+  },
+  {
+    "id": "builtin-reinforcement-1",
+    "name": "标准强化阶段模板",
+    "description": "弱项突破+案例专项+每周论文",
+    "phase": "reinforcement",
+    "is_builtin": 1,
+    "task_rules_json": "{\"daily_tasks\":[{\"type\":\"practice\",\"count\":10,\"estimated_min\":45},{\"type\":\"review\",\"estimated_min\":60,\"every_n_days\":3},{\"type\":\"essay\",\"estimated_min\":120,\"every_n_days\":7}]}"
+  },
+  {
+    "id": "builtin-reinforcement-2",
+    "name": "论文突击强化模板",
+    "description": "重点攻克案例分析+论文写作",
+    "phase": "reinforcement",
+    "is_builtin": 1,
+    "task_rules_json": "{\"daily_tasks\":[{\"type\":\"review\",\"estimated_min\":90},{\"type\":\"essay\",\"estimated_min\":120,\"every_n_days\":2}]}"
+  },
+  {
+    "id": "builtin-sprint-1",
+    "name": "标准冲刺阶段模板",
+    "description": "隔日全真模考+复盘循环",
+    "phase": "sprint",
+    "is_builtin": 1,
+    "task_rules_json": "{\"daily_tasks\":[{\"type\":\"mock_exam\",\"estimated_min\":180,\"every_n_days\":2},{\"type\":\"review\",\"estimated_min\":90,\"every_n_days\":2,\"offset_days\":1}]}"
+  },
+  {
+    "id": "builtin-sprint-2",
+    "name": "绝地反击冲刺模板",
+    "description": "高强度冲刺，每日模考+论文不间断",
+    "phase": "sprint",
+    "is_builtin": 1,
+    "task_rules_json": "{\"daily_tasks\":[{\"type\":\"mock_exam\",\"estimated_min\":180},{\"type\":\"essay\",\"estimated_min\":120},{\"type\":\"review\",\"estimated_min\":60}]}"
+  }
+]

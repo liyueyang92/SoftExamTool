@@ -608,4 +608,119 @@ CREATE INDEX IF NOT EXISTS idx_doc_assets_doc_page ON doc_assets(doc_id, page_nu
 CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_assets_hash ON doc_assets(doc_id, content_hash);
 `,
   },
+  {
+    version: 18,
+    sql: `
+-- 考试全局配置（单例记录）
+CREATE TABLE IF NOT EXISTS exam_config (
+  id                TEXT PRIMARY KEY DEFAULT 'singleton',
+  exam_name         TEXT NOT NULL DEFAULT '系统架构设计师',
+  exam_date         TEXT,
+  syllabus_version  TEXT NOT NULL DEFAULT '2024',
+  target_score      INTEGER NOT NULL DEFAULT 45,
+  daily_min_minutes INTEGER NOT NULL DEFAULT 60,
+  daily_max_minutes INTEGER NOT NULL DEFAULT 180,
+  study_start_time  TEXT NOT NULL DEFAULT '19:00',
+  created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- 知识域层级表（软考大纲三级结构）
+CREATE TABLE IF NOT EXISTS knowledge_domains (
+  id              TEXT PRIMARY KEY,
+  parent_id       TEXT REFERENCES knowledge_domains(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  level           INTEGER NOT NULL CHECK(level IN (1,2,3)),
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  suggested_min   INTEGER NOT NULL DEFAULT 60,
+  weight_pct      REAL NOT NULL DEFAULT 0,
+  is_required     INTEGER NOT NULL DEFAULT 1,
+  outline_ref     TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_kd_parent ON knowledge_domains(parent_id);
+CREATE INDEX IF NOT EXISTS idx_kd_level ON knowledge_domains(level, sort_order);
+
+-- 学习日志（每日按时段记录）
+CREATE TABLE IF NOT EXISTS learning_logs (
+  id                TEXT PRIMARY KEY,
+  log_date          TEXT NOT NULL,
+  time_slot         TEXT NOT NULL CHECK(time_slot IN ('morning','afternoon','evening')),
+  task_id           TEXT REFERENCES plan_tasks(id) ON DELETE SET NULL,
+  focus_minutes     INTEGER NOT NULL DEFAULT 0,
+  pomodoro_cycles   INTEGER NOT NULL DEFAULT 0,
+  interruption_count INTEGER NOT NULL DEFAULT 0,
+  self_rating       INTEGER CHECK(self_rating BETWEEN 1 AND 5),
+  notes             TEXT NOT NULL DEFAULT '',
+  created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_logs_date ON learning_logs(log_date);
+CREATE INDEX IF NOT EXISTS idx_learning_logs_task ON learning_logs(task_id);
+`,
+  },
+  {
+    version: 19,
+    sql: `
+-- 扩展 plan_tasks 表：增加任务类型、优先级、关联题目/文档
+ALTER TABLE plan_tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'practice'
+  CHECK(task_type IN ('reading','video','practice','review','essay','mock_exam','custom'));
+ALTER TABLE plan_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE plan_tasks ADD COLUMN estimated_min INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE plan_tasks ADD COLUMN actual_min INTEGER;
+ALTER TABLE plan_tasks ADD COLUMN doc_id TEXT REFERENCES documents(id) ON DELETE SET NULL;
+ALTER TABLE plan_tasks ADD COLUMN doc_page_range TEXT;
+ALTER TABLE plan_tasks ADD COLUMN linked_question_ids TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE plan_tasks ADD COLUMN linked_essay_id TEXT REFERENCES essays(id) ON DELETE SET NULL;
+ALTER TABLE plan_tasks ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;
+
+-- 计划模板表
+CREATE TABLE IF NOT EXISTS plan_templates (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  phase           TEXT NOT NULL CHECK(phase IN ('foundation','reinforcement','sprint')),
+  task_rules_json TEXT NOT NULL DEFAULT '{}',
+  is_builtin      INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+`,
+  },
+  {
+    version: 20,
+    sql: `
+-- 通知记录
+CREATE TABLE IF NOT EXISTS notifications (
+  id          TEXT PRIMARY KEY,
+  type        TEXT NOT NULL CHECK(type IN ('daily_plan','progress_warning','streak_milestone',
+              'countdown','pomodoro_end','achievement','system')),
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  action_url  TEXT,
+  is_read     INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read, created_at DESC);
+
+-- 专注会话扩展（记录中断详情）
+ALTER TABLE study_sessions ADD COLUMN interruption_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE study_sessions ADD COLUMN focus_rating INTEGER CHECK(focus_rating BETWEEN 1 AND 5);
+`,
+  },
+  {
+    version: 21,
+    sql: `
+-- plan_tasks: multi-document linking — JSON array of {doc_id, page_range, title, chunk_count}
+ALTER TABLE plan_tasks ADD COLUMN linked_doc_ids TEXT NOT NULL DEFAULT '[]';
+`,
+  },
+  {
+    version: 22,
+    sql: `
+-- documents: mark one as official textbook (全局唯一官方教材标记)
+ALTER TABLE documents ADD COLUMN is_official INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ]

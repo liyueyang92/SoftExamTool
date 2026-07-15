@@ -9,6 +9,7 @@ export interface Document {
   page_count: number
   md5: string
   imported_at: string
+  is_official: number
 }
 
 export interface DocChunk {
@@ -40,7 +41,7 @@ export interface DocAsset {
 }
 
 export function listDocuments(db: Database.Database): Document[] {
-  return db.prepare('SELECT * FROM documents ORDER BY imported_at DESC').all() as Document[]
+  return db.prepare('SELECT * FROM documents ORDER BY is_official DESC, imported_at DESC').all() as Document[]
 }
 
 export function getDocumentByMd5(db: Database.Database, md5: string): Document | null {
@@ -51,7 +52,7 @@ export function getDocumentById(db: Database.Database, id: string): Document | n
   return (db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as Document) ?? null
 }
 
-export function insertDocument(db: Database.Database, doc: Omit<Document, 'id' | 'imported_at'>): Document {
+export function insertDocument(db: Database.Database, doc: Omit<Document, 'id' | 'imported_at' | 'is_official'>): Document {
   const id = randomUUID()
   db.prepare(`
     INSERT INTO documents (id, title, file_path, page_count, md5)
@@ -66,6 +67,28 @@ export function updateDocumentPageCount(db: Database.Database, id: string, pageC
 
 export function deleteDocument(db: Database.Database, id: string): void {
   db.prepare('DELETE FROM documents WHERE id = ?').run(id)
+}
+
+/** 设置某文档为官方教材（全局唯一，其余自动取消） */
+export function setDocumentOfficial(db: Database.Database, id: string, isOfficial: boolean): void {
+  if (isOfficial) {
+    db.transaction(() => {
+      // 取消所有已有标记
+      db.prepare("UPDATE documents SET is_official = 0 WHERE is_official = 1").run()
+      // 设置目标文档
+      db.prepare("UPDATE documents SET is_official = 1 WHERE id = ?").run(id)
+    })()
+  } else {
+    db.prepare("UPDATE documents SET is_official = 0 WHERE id = ?").run(id)
+  }
+}
+
+/** 获取官方教材（如有） */
+export function getOfficialDocument(db: Database.Database): Document | null {
+  const row = db.prepare(
+    "SELECT * FROM documents WHERE is_official = 1 LIMIT 1"
+  ).get() as Document | undefined
+  return row ?? null
 }
 
 function isPathInsideDirectory(filePath: string, dirPath: string): boolean {

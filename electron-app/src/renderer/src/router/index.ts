@@ -10,10 +10,12 @@ const router = createRouter({
     { path: '/ai',         name: 'ai',        component: () => import('../views/AiView.vue') },
     { path: '/documents',       name: 'documents',  component: () => import('../views/DocumentsView.vue') },
     { path: '/crawler',         name: 'crawler',    component: () => import('../views/CrawlerView.vue') },
+    { path: '/knowledge-domains', name: 'knowledgeDomains', component: () => import('../views/KnowledgeDomainsView.vue') },
     { path: '/knowledge-graph', name: 'graph',      component: () => import('../views/KnowledgeGraphView.vue') },
     { path: '/essay',           name: 'essay',      component: () => import('../views/EssayView.vue') },
     { path: '/pomodoro',        name: 'pomodoro',   component: () => import('../views/PomodoroView.vue') },
     { path: '/achievements',    name: 'achievements', component: () => import('../views/AchievementsView.vue') },
+    { path: '/stats',           name: 'stats',        component: () => import('../views/StatsDashboardView.vue') },
     { path: '/settings',        name: 'settings',   component: () => import('../views/SettingsView.vue') },
   ],
 })

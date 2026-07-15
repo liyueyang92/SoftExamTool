@@ -10,6 +10,7 @@ export interface Doc {
   page_count: number
   md5: string
   imported_at: string
+  is_official: number
 }
 
 export interface DocChunk {
@@ -104,6 +105,21 @@ export const useDocumentStore = defineStore('document', () => {
     documents.value = documents.value.filter((d) => d.id !== id)
   }
 
+  async function setOfficial(docId: string, isOfficial: boolean) {
+    const res = await window.electronAPI.setDocumentOfficial(toIpcPayload({ docId, isOfficial }))
+    if (res.success) {
+      // 更新本地状态：全体取消，再设置目标
+      documents.value = documents.value.map((d) => ({
+        ...d,
+        is_official: d.id === docId && isOfficial ? 1 : (isOfficial ? 0 : d.is_official),
+      }))
+      if (res.data.is_official) {
+        // 官方教材排到列表最前面
+        documents.value.sort((a, b) => b.is_official - a.is_official)
+      }
+    }
+  }
+
   async function getChunks(docId: string): Promise<DocChunk[]> {
     const res = await window.electronAPI.getDocChunks(docId)
     if (res.success) return res.data as DocChunk[]
@@ -174,6 +190,7 @@ export const useDocumentStore = defineStore('document', () => {
     previewImport,
     importPdf,
     remove,
+    setOfficial,
     getChunks,
     getDocAssets,
     updateParsingProgress,

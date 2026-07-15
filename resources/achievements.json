@@ -82,5 +82,40 @@
     "desc": "成功导入第一份 PDF 文档",
     "icon": "📄",
     "condition": { "type": "total_docs", "value": 1 }
+  },
+  {
+    "id": "first_practice",
+    "title": "初次通关",
+    "desc": "完成第一次模拟考试",
+    "icon": "🏅",
+    "condition": { "type": "perfect_practice", "value": 75 }
+  },
+  {
+    "id": "essay_10",
+    "title": "笔耕不辍",
+    "desc": "完成 10 篇论文写作",
+    "icon": "✍️",
+    "condition": { "type": "total_essays", "value": 10 }
+  },
+  {
+    "id": "docs_3",
+    "title": "知识渊博",
+    "desc": "导入并阅读完 3 本教材",
+    "icon": "📚",
+    "condition": { "type": "total_docs", "value": 3 }
+  },
+  {
+    "id": "streak_21",
+    "title": "习惯养成",
+    "desc": "连续打卡 21 天",
+    "icon": "💪",
+    "condition": { "type": "streak_days", "value": 21 }
+  },
+  {
+    "id": "pomodoro_50",
+    "title": "番茄大师",
+    "desc": "累计完成 50 个番茄钟",
+    "icon": "🍅",
+    "condition": { "type": "total_pomodoros", "value": 50 }
   }
 ]

@@ -4,14 +4,24 @@ import type {
   AdaptAdjustment,
   BackupRecord,
   CalendarDay,
+  DailyLogStats,
+  ExamConfig,
+  FocusStats,
   IpcResponse,
+  KnowledgeDomain,
+  KnowledgeDomainTreeNode,
+  LearningLog,
+  Notification,
   PdfImportOptions,
   PdfImportResult,
   PdfImportSelection,
   PdfPreviewResult,
   PlanStats,
   PlanTask,
+  PlanTemplate,
   ProgressMessage,
+  SprintCard,
+  SprintStatus,
   StoragePathsInfo,
   StoragePathsUpdateResult,
   StudyPlan,
@@ -24,14 +34,24 @@ export type {
   AdaptAdjustment,
   BackupRecord,
   CalendarDay,
+  DailyLogStats,
+  ExamConfig,
+  FocusStats,
   IpcResponse,
+  KnowledgeDomain,
+  KnowledgeDomainTreeNode,
+  LearningLog,
+  Notification,
   PdfImportOptions,
   PdfImportResult,
   PdfImportSelection,
   PdfPreviewResult,
   PlanStats,
   PlanTask,
+  PlanTemplate,
   ProgressMessage,
+  SprintCard,
+  SprintStatus,
   StoragePathsInfo,
   StoragePathsUpdateResult,
   StudyPlan,
@@ -81,6 +101,7 @@ declare global {
       batchDeleteQuestions: (ids: string[]) => Promise<IpcResponse<{ deleted: number }>>
       toggleFavorite: (id: string) => Promise<IpcResponse<{ is_favorite: number }>>
       getQuestionStats: () => Promise<IpcResponse<Record<string, unknown>>>
+      listKnowledgeTags: () => Promise<IpcResponse<string[]>>
       exportQuestions: (args: { filter?: Record<string, unknown> }) => Promise<IpcResponse<{ count: number; filePath: string; imageCount?: number }>>
       importQuestionsFile: (args: { group_id?: string | null; new_group?: unknown | null; group_type?: string }) => Promise<IpcResponse<{ count: number; imageCount?: number }>>
 
@@ -109,6 +130,7 @@ declare global {
       deleteDocument: (id: string) => Promise<IpcResponse<void>>
       getDocChunks: (docId: string) => Promise<IpcResponse<unknown[]>>
       getDocAssets: (docId: string) => Promise<IpcResponse<unknown[]>>
+      setDocumentOfficial: (args: { docId: string; isOfficial: boolean }) => Promise<IpcResponse<{ is_official: boolean }>>
       searchDocChunks: (args: { query: string; limit?: number; docId?: string }) => Promise<IpcResponse<unknown[]>>
       updateDocChunk: (chunkId: string, content: string) => Promise<IpcResponse<void>>
       reparsePage: (args: {
@@ -122,6 +144,8 @@ declare global {
       testAiConnection: (args?: unknown) => Promise<IpcResponse<{ ok: boolean; reply: string }>>
       generateQuestions: (args: unknown) => Promise<IpcResponse<{ questions: unknown[]; target_group_id?: string | null; new_group?: unknown | null }>>
       gradeEssay: (args: unknown) => Promise<IpcResponse<unknown>>
+      aiGenerateStudyPlan: (args: unknown) => Promise<IpcResponse<{ plan_name: string; daily_schedule: unknown[]; total_days: number }>>
+      aiOptimizePlan: (args: unknown) => Promise<IpcResponse<{ daily_schedule: unknown[]; total_days: number }>>
 
       listCrawlerRules: () => Promise<IpcResponse<unknown[]>>
       upsertCrawlerRule: (args: unknown) => Promise<IpcResponse<unknown>>
@@ -198,6 +222,62 @@ declare global {
       createBackup: (args?: { note?: string }) => Promise<IpcResponse<BackupRecord>>
       restoreBackup: () => Promise<IpcResponse<{ restored: boolean }>>
       deleteBackup: (id: string) => Promise<IpcResponse<void>>
+
+      // ─── Study Plan Overhaul — Exam Config ──────────────────────────────
+      getExamConfig: () => Promise<IpcResponse<ExamConfig | null>>
+      saveExamConfig: (args: Omit<ExamConfig, 'id' | 'created_at' | 'updated_at'>) => Promise<IpcResponse<ExamConfig>>
+
+      // ─── Study Plan Overhaul — Knowledge Domains ─────────────────────────
+      getDomainTree: () => Promise<IpcResponse<KnowledgeDomainTreeNode[]>>
+      getDomain: (id: string) => Promise<IpcResponse<KnowledgeDomain | null>>
+      upsertDomain: (args: Omit<KnowledgeDomain, 'created_at'>) => Promise<IpcResponse<KnowledgeDomain>>
+      deleteDomain: (id: string) => Promise<IpcResponse<{ deleted: number }>>
+      importOutline: (args?: { force?: boolean }) => Promise<IpcResponse<{ imported: number; skipped: number }>>
+      mapDocToDomain: (args: { domainId: string; docId: string; pageRange: string }) => Promise<IpcResponse<Array<{ doc_id: string; page_range: string }>>>
+      getFlatDomainList: () => Promise<IpcResponse<Array<{ id: string; parent_id: string | null; name: string; level: number }>>>
+      batchUpsertDomains: (args: { domains: Array<Omit<KnowledgeDomain, 'created_at'>> }) => Promise<IpcResponse<{ inserted: number; updated: number }>>
+      getChunksForDocuments: (args: { docIds: string[] }) => Promise<IpcResponse<Array<{ id: string; doc_id: string; page_num: number; content: string; knowledge_tags: string }>>>
+      extractKnowledgePoints: (args: { docIds: string[] }) => Promise<IpcResponse<{ suggestions: Array<{ name: string; suggested_parent_id: string; suggested_parent_name: string; summary: string; source_chunk_ids: string[]; confidence: number }> }>>
+      onExtractKnowledgeProgress: (cb: (msg: { message: string }) => void) => () => void
+
+      // ─── Study Plan Overhaul — Learning Logs ─────────────────────────────
+      createLog: (args: Omit<LearningLog, 'id' | 'created_at'>) => Promise<IpcResponse<LearningLog>>
+      queryLogs: (args: { from: string; to: string }) => Promise<IpcResponse<LearningLog[]>>
+      getLogStats: (args?: { days?: number }) => Promise<IpcResponse<DailyLogStats[]>>
+      updateLog: (args: { id: string; changes: Partial<Omit<LearningLog, 'id' | 'created_at'>> }) => Promise<IpcResponse<LearningLog | null>>
+      deleteLog: (id: string) => Promise<IpcResponse<void>>
+
+      // ─── Enhanced Plan Operations ──────────────────────────────────────
+      generatePhasedPlan: (args: { planId: string; examDate: string }) => Promise<IpcResponse<{ tasksCreated: number }>>
+      lockDays: (args: { planId: string; fromDate: string; toDate: string }) => Promise<IpcResponse<{ locked: number }>>
+      unlockDays: (args: { planId: string; fromDate: string; toDate: string }) => Promise<IpcResponse<{ unlocked: number }>>
+      resetPlan: (args: { planId: string; keepLogs?: boolean }) => Promise<IpcResponse<void>>
+      addCustomTask: (args: { planId: string; task: unknown }) => Promise<IpcResponse<PlanTask>>
+      moveTask: (args: { taskId: string; newDate: string }) => Promise<IpcResponse<void>>
+      skipDay: (args: { planId: string; skipDate: string }) => Promise<IpcResponse<{ distributed: number }>>
+      relinkPlanDocs: (planId: string) => Promise<IpcResponse<{ scanned: number; linked: number }>>
+      remapChunkTags: () => Promise<IpcResponse<{ total: number; updated: number }>>
+      applyAiSchedule: (args: { planId: string; dailySchedule: unknown[] }) => Promise<IpcResponse<{ tasksCreated: number }>>
+
+      // ─── Plan Templates ────────────────────────────────────────────────
+      listTemplates: () => Promise<IpcResponse<PlanTemplate[]>>
+      createTemplate: (args: Omit<PlanTemplate, 'id' | 'created_at'>) => Promise<IpcResponse<PlanTemplate>>
+      deleteTemplate: (id: string) => Promise<IpcResponse<void>>
+      applyTemplate: (args: { planId: string; templateId: string }) => Promise<IpcResponse<{ tasksCreated: number }>>
+
+      // ─── Sprint Mode ────────────────────────────────────────────────────
+      getSprintStatus: () => Promise<IpcResponse<SprintStatus>>
+      activateSprintMode: (planId: string) => Promise<IpcResponse<void>>
+      getDailyCard: () => Promise<IpcResponse<SprintCard>>
+
+      // ─── Pomodoro Enhanced ──────────────────────────────────────────────
+      getFocusStats: (args?: { days?: number }) => Promise<IpcResponse<FocusStats>>
+      reportInterruption: (sessionId: string) => Promise<IpcResponse<void>>
+
+      // ─── Notifications ──────────────────────────────────────────────────
+      listNotifications: (args?: { isRead?: number; limit?: number }) => Promise<IpcResponse<Notification[]>>
+      markNotificationRead: (id?: string) => Promise<IpcResponse<void>>
+      checkNotificationTriggers: () => Promise<IpcResponse<Notification[]>>
     }
   }
 }

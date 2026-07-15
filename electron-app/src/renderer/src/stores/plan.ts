@@ -20,6 +20,17 @@ export interface PlanTask {
   actual_count: number
   status: 'pending' | 'in_progress' | 'completed'
   completed_at: string | null
+  // Migration 19 extended fields
+  task_type?: 'reading' | 'video' | 'practice' | 'review' | 'essay' | 'mock_exam' | 'custom'
+  priority?: number
+  estimated_min?: number
+  actual_min?: number | null
+  doc_id?: string | null
+  doc_page_range?: string | null
+  linked_doc_ids?: string
+  linked_question_ids?: string
+  linked_essay_id?: string | null
+  locked?: number
 }
 
 export interface CalendarDay {
@@ -61,6 +72,7 @@ export interface StudySession {
 export const usePlanStore = defineStore('plan', () => {
   const activePlan = ref<StudyPlan | null>(null)
   const todayTasks = ref<PlanTask[]>([])
+  const allTasks = ref<PlanTask[]>([])
   const stats = ref<PlanStats | null>(null)
   const calendarData = ref<CalendarDay[]>([])
   const adaptAdjustments = ref<AdaptAdjustment[]>([])
@@ -115,6 +127,14 @@ export const usePlanStore = defineStore('plan', () => {
     if (res.success) todayTasks.value = res.data
   }
 
+  async function loadAllTasks(): Promise<void> {
+    if (!activePlan.value) return
+    const res = await window.electronAPI.getPlanTasks(toIpcPayload({
+      planId: activePlan.value.id,
+    }))
+    if (res.success) allTasks.value = res.data
+  }
+
   async function loadStats(): Promise<void> {
     if (!activePlan.value) return
     const res = await window.electronAPI.getPlanStats(activePlan.value.id)
@@ -134,10 +154,106 @@ export const usePlanStore = defineStore('plan', () => {
       const res = await window.electronAPI.createPlan(toIpcPayload({ examDate, mode }))
       if (res.success) {
         activePlan.value = res.data
-        await Promise.all([loadTodayTasks(), loadStats()])
+        await Promise.all([loadTodayTasks(), loadAllTasks(), loadStats()])
       }
     } catch (e) {
       error.value = (e as Error).message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function createPlanWithAi(
+    examDate: string,
+    mode: 'normal' | 'sprint',
+    dailyHours: number,
+    domains: Array<{ name: string; weight_pct: number; suggested_min: number }>,
+    weakTags: string[],
+  ): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      // Step 1: Call AI to generate schedule
+      const aiRes = await window.electronAPI.aiGenerateStudyPlan({
+        exam_date: examDate,
+        mode,
+        domains,
+        daily_available_hours: dailyHours,
+        weak_tags: weakTags,
+      })
+      if (!aiRes.success) throw new Error((aiRes.error as { message?: string })?.message ?? 'AI 生成失败')
+
+      const { daily_schedule } = aiRes.data as { daily_schedule: unknown[] }
+
+      // Step 2: Create plan (with quick-dirty schedule first)
+      const createRes = await window.electronAPI.createPlan(toIpcPayload({ examDate, mode }))
+      if (!createRes.success) throw new Error((createRes.error as { message?: string })?.message ?? '创建计划失败')
+
+      const plan = createRes.data as StudyPlan
+
+      // Step 3: Replace with AI schedule
+      const applyRes = await window.electronAPI.applyAiSchedule({
+        planId: plan.id,
+        dailySchedule: daily_schedule,
+      })
+      if (!applyRes.success) throw new Error('应用 AI 计划失败')
+
+      activePlan.value = plan
+      await Promise.all([loadTodayTasks(), loadAllTasks(), loadStats()])
+    } catch (e) {
+      error.value = (e as Error).message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function optimizePlanWithAi(
+    domains: Array<{ name: string; weight_pct: number }>,
+    dailyHours: number,
+  ): Promise<void> {
+    if (!activePlan.value) return
+    loading.value = true
+    error.value = null
+    try {
+      // Build current plan snapshot from allTasks
+      const grouped = new Map<string, Array<Record<string, unknown>>>()
+      for (const task of allTasks.value) {
+        const list = grouped.get(task.date) ?? []
+        list.push({
+          knowledge_tag: task.knowledge_tag,
+          task_type: task.task_type ?? 'practice',
+          estimated_min: task.estimated_min ?? 30,
+          suggested_count: task.suggested_count ?? 10,
+          priority: task.priority ?? 0,
+        })
+        grouped.set(task.date, list)
+      }
+      const currentSchedule = Array.from(grouped.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, tasks]) => ({ date, tasks }))
+
+      // Call AI to optimize
+      const aiRes = await window.electronAPI.aiOptimizePlan({
+        daily_schedule: currentSchedule,
+        domains,
+        daily_available_hours: dailyHours,
+        exam_date: activePlan.value.exam_date,
+      })
+      if (!aiRes.success) throw new Error((aiRes.error as { message?: string })?.message ?? 'AI 优化失败')
+
+      const { daily_schedule } = aiRes.data as { daily_schedule: unknown[] }
+
+      // Apply optimized schedule
+      const applyRes = await window.electronAPI.applyAiSchedule({
+        planId: activePlan.value.id,
+        dailySchedule: daily_schedule,
+      })
+      if (!applyRes.success) throw new Error('应用优化计划失败')
+
+      await Promise.all([loadTodayTasks(), loadAllTasks(), loadStats()])
+    } catch (e) {
+      error.value = (e as Error).message
+      throw e
     } finally {
       loading.value = false
     }
@@ -196,6 +312,7 @@ export const usePlanStore = defineStore('plan', () => {
   return {
     activePlan,
     todayTasks,
+    allTasks,
     stats,
     calendarData,
     adaptAdjustments,
@@ -207,9 +324,12 @@ export const usePlanStore = defineStore('plan', () => {
     runningSession,
     loadPlan,
     loadTodayTasks,
+    loadAllTasks,
     loadStats,
     loadCalendar,
     createPlan,
+    createPlanWithAi,
+    optimizePlanWithAi,
     deletePlan,
     completeTask,
     startTaskProgress,

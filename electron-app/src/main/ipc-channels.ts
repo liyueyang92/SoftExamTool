@@ -35,6 +35,7 @@ export const IPC = {
   QUESTION_BATCH_DELETE: 'question:batchDelete',
   QUESTION_TOGGLE_FAVORITE: 'question:toggleFavorite',
   QUESTION_GET_STATS: 'question:getStats',
+  QUESTION_LIST_TAGS: 'question:listTags',
   QUESTION_UPLOAD_IMAGE: 'question:uploadImage',
   QUESTION_DELETE_IMAGE: 'question:deleteImage',
   QUESTION_LIST_IMAGES: 'question:listImages',
@@ -54,6 +55,7 @@ export const IPC = {
   DOC_UPDATE_CHUNK: 'doc:updateChunk',
   DOC_REPARSE_PAGE: 'doc:reparsePage',
   DOC_GET_ASSETS: 'doc:getAssets',
+  DOC_SET_OFFICIAL: 'doc:setOfficial',
 
   AI_GENERATE_QUESTIONS: 'ai:generateQuestions',
   AI_GRADE_ESSAY: 'ai:gradeEssay',
@@ -130,4 +132,69 @@ export const IPC = {
 
   QUESTION_EXPORT: 'question:export',
   QUESTION_IMPORT_FILE: 'question:importFile',
+
+  // ─── Study Plan Overhaul — Exam Config ─────────────────────────────────────
+  EXAM_CONFIG_GET: 'examConfig:get',
+  EXAM_CONFIG_SAVE: 'examConfig:save',
+
+  // ─── Study Plan Overhaul — Knowledge Domains ───────────────────────────────
+  KD_TREE: 'kd:tree',
+  KD_GET: 'kd:get',
+  KD_UPSERT: 'kd:upsert',
+  KD_DELETE: 'kd:delete',
+  KD_IMPORT_OUTLINE: 'kd:importOutline',
+  KD_MAP_DOC: 'kd:mapDoc',
+  KD_FLAT_LIST: 'kd:flatList',
+  KD_BATCH_UPSERT: 'kd:batchUpsert',
+  KD_GET_CHUNKS_FOR_DOCS: 'kd:getChunksForDocs',
+  AI_EXTRACT_KNOWLEDGE: 'ai:extractKnowledge',
+  AI_EXTRACT_PROGRESS: 'ai:extractKnowledge:progress',
+
+  // ─── Study Plan Overhaul — Learning Logs ───────────────────────────────────
+  LOG_CREATE: 'log:create',
+  LOG_QUERY: 'log:query',
+  LOG_STATS: 'log:stats',
+  LOG_UPDATE: 'log:update',
+  LOG_DELETE: 'log:delete',
+
+  // ─── Study Plan Overhaul — Enhanced Plan Operations ────────────────────────
+  PLAN_GENERATE_PHASED: 'plan:generatePhased',
+  PLAN_LOCK_DAYS: 'plan:lockDays',
+  PLAN_UNLOCK_DAYS: 'plan:unlockDays',
+  PLAN_RESET: 'plan:reset',
+  PLAN_ADD_CUSTOM_TASK: 'plan:addCustomTask',
+  PLAN_MOVE_TASK: 'plan:moveTask',
+  PLAN_SKIP_DAY: 'plan:skipDay',
+  PLAN_RELINK_DOCS: 'plan:relinkDocs',
+  PLAN_REMAP_CHUNK_TAGS: 'plan:remapChunkTags',
+  PLAN_APPLY_AI_SCHEDULE: 'plan:applyAiSchedule',
+
+  // ─── Study Plan Overhaul — Plan Templates ──────────────────────────────────
+  TEMPLATE_LIST: 'template:list',
+  TEMPLATE_CREATE: 'template:create',
+  TEMPLATE_DELETE: 'template:delete',
+  TEMPLATE_APPLY: 'template:apply',
+
+  // ─── Study Plan Overhaul — Sprint Mode ─────────────────────────────────────
+  SPRINT_STATUS: 'sprint:status',
+  SPRINT_ACTIVATE: 'sprint:activate',
+  SPRINT_DAILY_CARD: 'sprint:dailyCard',
+
+  // ─── Study Plan Overhaul — Notifications ───────────────────────────────────
+  NOTIFICATION_LIST: 'notification:list',
+  NOTIFICATION_MARK_READ: 'notification:markRead',
+  NOTIFICATION_CHECK_TRIGGERS: 'notification:checkTriggers',
+
+  // ─── Study Plan Overhaul — Pomodoro Enhanced ───────────────────────────────
+  SESSION_START_POMODORO: 'session:startPomodoro',
+  SESSION_REPORT_INTERRUPTION: 'session:reportInterruption',
+  SESSION_GET_FOCUS_STATS: 'session:getFocusStats',
+
+  // ─── Study Plan Overhaul — AI Integration ──────────────────────────────────
+  AI_PLAN_ADVICE: 'ai:planAdvice',
+  AI_GENERATE_PLAN_TEMPLATE: 'ai:generatePlanTemplate',
+  AI_GENERATE_STUDY_PLAN: 'ai:generateStudyPlan',
+  AI_OPTIMIZE_PLAN: 'ai:optimizePlan',
+  AI_ESSAY_MATERIAL_MATCH: 'ai:essayMaterialMatch',
+  AI_DAILY_RECOMMENDATION: 'ai:dailyRecommendation',
 } as const

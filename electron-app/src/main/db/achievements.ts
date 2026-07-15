@@ -20,8 +20,8 @@ function getDefsPath(): string {
   if (app.isPackaged) {
     return join(process.resourcesPath, 'achievements.json')
   }
-  // Dev: relative to project root
-  return join(__dirname, '../../../../resources/achievements.json')
+  // Dev: app.getAppPath() returns electron-app/ directory reliably
+  return join(app.getAppPath(), '../resources/achievements.json')
 }
 
 export function getAchievementDefs(): AchievementDef[] {

@@ -13,6 +13,7 @@ const navItems = [
   { to: '/ai',        icon: '✦', label: 'AI助手'  },
   { to: '/documents',       icon: '📄', label: '文档库'  },
   { to: '/crawler',         icon: '🕷', label: '爬虫'    },
+  { to: '/knowledge-domains', icon: '🗂', label: '知识领域' },
   { to: '/knowledge-graph', icon: '◈',  label: '知识图谱' },
   { to: '/essay',           icon: '✍', label: '论文写作' },
   { to: '/pomodoro',        icon: '🍅', label: '番茄钟'  },

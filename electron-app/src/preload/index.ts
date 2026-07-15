@@ -93,6 +93,8 @@ const customAPI = {
     invokeWithTimeout<{ is_favorite: number }>('question:toggleFavorite', id),
   getQuestionStats: () =>
     invokeWithTimeout<Record<string, unknown>>('question:getStats'),
+  listKnowledgeTags: () =>
+    invokeWithTimeout<string[]>('question:listTags'),
   exportQuestions: (args: { filter?: Record<string, unknown> }) =>
     invokeWithTimeout<{ count: number; filePath: string; imageCount?: number }>('question:export', args, 60_000),
   importQuestionsFile: (args: { group_id?: string | null; new_group?: unknown | null; group_type?: string }) =>
@@ -159,6 +161,8 @@ const customAPI = {
   deleteDocument: (id: string) => invokeWithTimeout<void>('doc:delete', id),
   getDocChunks: (docId: string) => invokeWithTimeout<unknown[]>('doc:getChunks', docId),
   getDocAssets: (docId: string) => invokeWithTimeout<unknown[]>('doc:getAssets', docId),
+  setDocumentOfficial: (args: { docId: string; isOfficial: boolean }) =>
+    invokeWithTimeout<{ is_official: boolean }>('doc:setOfficial', args),
   searchDocChunks: (args: { query: string; limit?: number; docId?: string }) =>
     invokeWithTimeout<unknown[]>('doc:searchChunks', args),
   updateDocChunk: (chunkId: string, content: string) =>
@@ -286,6 +290,97 @@ const customAPI = {
   restoreBackup: () =>
     invokeWithTimeout<{ restored: boolean }>('backup:restore', undefined, 30_000),
   deleteBackup: (id: string) => invokeWithTimeout<void>('backup:delete', id),
+
+  // ─── Study Plan Overhaul — Exam Config ──────────────────────────────────
+  getExamConfig: () => invokeWithTimeout<unknown | null>('examConfig:get'),
+  saveExamConfig: (args: unknown) => invokeWithTimeout<unknown>('examConfig:save', args),
+
+  // ─── Study Plan Overhaul — Knowledge Domains ─────────────────────────────
+  getDomainTree: () => invokeWithTimeout<unknown[]>('kd:tree'),
+  getDomain: (id: string) => invokeWithTimeout<unknown | null>('kd:get', id),
+  upsertDomain: (args: unknown) => invokeWithTimeout<unknown>('kd:upsert', args),
+  deleteDomain: (id: string) => invokeWithTimeout<{ deleted: number }>('kd:delete', id),
+  importOutline: (args?: { force?: boolean }) =>
+    invokeWithTimeout<{ imported: number; skipped: number }>('kd:importOutline', args ?? {}),
+  mapDocToDomain: (args: unknown) => invokeWithTimeout<unknown[]>('kd:mapDoc', args),
+  getFlatDomainList: () => invokeWithTimeout<unknown[]>('kd:flatList'),
+  batchUpsertDomains: (args: { domains: unknown[] }) =>
+    invokeWithTimeout<{ inserted: number; updated: number }>('kd:batchUpsert', args),
+  getChunksForDocuments: (args: { docIds: string[] }) =>
+    invokeWithTimeout<unknown[]>('kd:getChunksForDocs', args),
+  extractKnowledgePoints: (args: { docIds: string[] }) =>
+    invokeWithTimeout<{ suggestions: unknown[] }>('ai:extractKnowledge', args, 300_000),
+  onExtractKnowledgeProgress: (cb: (msg: { message: string }) => void) => {
+    const handler = (_: unknown, msg: { message: string }) => cb(msg)
+    ipcRenderer.on('ai:extractKnowledge:progress', handler)
+    return () => ipcRenderer.removeListener('ai:extractKnowledge:progress', handler)
+  },
+
+  // ─── Study Plan Overhaul — Learning Logs ─────────────────────────────────
+  createLog: (args: unknown) => invokeWithTimeout<unknown>('log:create', args),
+  queryLogs: (args: { from: string; to: string }) => invokeWithTimeout<unknown[]>('log:query', args),
+  getLogStats: (args?: { days?: number }) => invokeWithTimeout<unknown>('log:stats', args),
+  updateLog: (args: { id: string; changes: unknown }) => invokeWithTimeout<unknown | null>('log:update', args),
+  deleteLog: (id: string) => invokeWithTimeout<void>('log:delete', id),
+
+  // ─── Study Plan Overhaul — Enhanced Plan Operations ──────────────────────
+  generatePhasedPlan: (args: { planId: string; examDate: string }) =>
+    invokeWithTimeout<{ tasksCreated: number }>('plan:generatePhased', args),
+  lockDays: (args: { planId: string; fromDate: string; toDate: string }) =>
+    invokeWithTimeout<{ locked: number }>('plan:lockDays', args),
+  unlockDays: (args: { planId: string; fromDate: string; toDate: string }) =>
+    invokeWithTimeout<{ unlocked: number }>('plan:unlockDays', args),
+  resetPlan: (args: { planId: string; keepLogs?: boolean }) =>
+    invokeWithTimeout<void>('plan:reset', args),
+  addCustomTask: (args: { planId: string; task: unknown }) =>
+    invokeWithTimeout<unknown>('plan:addCustomTask', args),
+  moveTask: (args: { taskId: string; newDate: string }) =>
+    invokeWithTimeout<void>('plan:moveTask', args),
+  skipDay: (args: { planId: string; skipDate: string }) =>
+    invokeWithTimeout<{ distributed: number }>('plan:skipDay', args),
+  relinkPlanDocs: (planId: string) =>
+    invokeWithTimeout<{ scanned: number; linked: number }>('plan:relinkDocs', planId),
+  remapChunkTags: () =>
+    invokeWithTimeout<{ total: number; updated: number }>('plan:remapChunkTags'),
+  applyAiSchedule: (args: { planId: string; dailySchedule: unknown[] }) =>
+    invokeWithTimeout<{ tasksCreated: number }>('plan:applyAiSchedule', args),
+
+  // ─── Study Plan Overhaul — Plan Templates ────────────────────────────────
+  listTemplates: () => invokeWithTimeout<unknown[]>('template:list'),
+  createTemplate: (args: unknown) => invokeWithTimeout<unknown>('template:create', args),
+  deleteTemplate: (id: string) => invokeWithTimeout<void>('template:delete', id),
+  applyTemplate: (args: { planId: string; templateId: string }) =>
+    invokeWithTimeout<{ tasksCreated: number }>('template:apply', args),
+
+  // ─── Sprint Mode ─────────────────────────────────────────────────────────
+  getSprintStatus: () => invokeWithTimeout<unknown>('sprint:status'),
+  activateSprintMode: (planId: string) => invokeWithTimeout<void>('sprint:activate', planId),
+  getDailyCard: () => invokeWithTimeout<unknown>('sprint:dailyCard'),
+
+  // ─── Pomodoro Enhanced ───────────────────────────────────────────────────
+  getFocusStats: (args?: { days?: number }) => invokeWithTimeout<unknown>('session:getFocusStats', args),
+  reportInterruption: (sessionId: string) => invokeWithTimeout<void>('session:reportInterruption', { sessionId }),
+
+  // ─── AI Study Plan ───────────────────────────────────────────────────────
+  aiPlanAdvice: (args: unknown) =>
+    invokeWithTimeout<{ advice: string; suggested_tasks: unknown[] }>('ai:planAdvice', args, 60_000),
+  aiGeneratePlanTemplate: (args: unknown) =>
+    invokeWithTimeout<{ template: unknown }>('ai:generatePlanTemplate', args, 60_000),
+  aiEssayMaterialMatch: (args: unknown) =>
+    invokeWithTimeout<{ matches: unknown[] }>('ai:essayMaterialMatch', args, 30_000),
+  aiDailyRecommendation: (args: unknown) =>
+    invokeWithTimeout<{ recommended_task: unknown; reason: string }>('ai:dailyRecommendation', args, 30_000),
+  aiGenerateStudyPlan: (args: unknown) =>
+    invokeWithTimeout<{ plan_name: string; daily_schedule: unknown[]; total_days: number }>('ai:generateStudyPlan', args, 120_000),
+  aiOptimizePlan: (args: unknown) =>
+    invokeWithTimeout<{ daily_schedule: unknown[]; total_days: number }>('ai:optimizePlan', args, 120_000),
+
+  // ─── Notifications ───────────────────────────────────────────────────────
+  listNotifications: (args?: { isRead?: number; limit?: number }) =>
+    invokeWithTimeout<unknown[]>('notification:list', args),
+  markNotificationRead: (id?: string) =>
+    invokeWithTimeout<void>('notification:markRead', { id }),
+  checkNotificationTriggers: () => invokeWithTimeout<unknown[]>('notification:checkTriggers'),
 }
 
 if (process.contextIsolated) {

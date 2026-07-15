@@ -461,6 +461,24 @@ export function getQuestionStats(db: Database.Database): Record<string, unknown>
   return { total, byType, bySource, byGroupType, favorites, todayAnswered, todayCorrect }
 }
 
+export function listKnowledgeTags(db: Database.Database): string[] {
+  const rows = db.prepare(
+    'SELECT DISTINCT knowledge_tags FROM questions WHERE knowledge_tags IS NOT NULL AND knowledge_tags != \'[]\''
+  ).all() as { knowledge_tags: string }[]
+  const seen = new Set<string>()
+  for (const row of rows) {
+    try {
+      const tags = JSON.parse(row.knowledge_tags)
+      if (Array.isArray(tags)) {
+        for (const tag of tags) {
+          if (typeof tag === 'string' && tag.trim()) seen.add(tag.trim())
+        }
+      }
+    } catch { /* skip malformed JSON */ }
+  }
+  return Array.from(seen).sort()
+}
+
 export function getWrongQuestions(db: Database.Database, limit = 50): Question[] {
   const rows = db.prepare(`
     SELECT

@@ -1,20 +1,69 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { usePracticeStore, type PracticeConfig } from '../stores/practice'
 import { useQuestionStore } from '../stores/question'
 
 const store = usePracticeStore()
 const questionStore = useQuestionStore()
+const route = useRoute()
 
 const config = ref<PracticeConfig>({ mode: 'random', count: 20 })
 const chosenTypes = ref<string[]>(['single'])
 const essayAnswer = ref('')
 const startError = ref('')
 const starting = ref(false)
+// 从学习计划跳转时带入的知识点标签
+const planTag = ref<string | null>(null)
+
+// 知识点筛选
+const allTags = ref<string[]>([])
+const chosenTags = ref<string[]>([])
+const tagSearch = ref('')
+const showTagList = ref(false)
+
+const filteredTags = computed(() => {
+  if (!tagSearch.value.trim()) return allTags.value
+  const q = tagSearch.value.toLowerCase()
+  return allTags.value.filter((t) => t.toLowerCase().includes(q))
+})
+
+function toggleTag(tag: string) {
+  const idx = chosenTags.value.indexOf(tag)
+  if (idx >= 0) chosenTags.value.splice(idx, 1)
+  else chosenTags.value.push(tag)
+  config.value.filterTags = chosenTags.value.length ? [...chosenTags.value] : undefined
+}
+
+function clearTags() {
+  chosenTags.value = []
+  config.value.filterTags = undefined
+}
 
 onMounted(async () => {
-  await questionStore.fetchGroups()
+  await Promise.all([questionStore.fetchGroups(), loadAllTags()])
+  // 从路由 query 中读取学习计划传入的知识点标签
+  const tagParam = route.query.tag
+  if (tagParam && typeof tagParam === 'string') {
+    planTag.value = tagParam
+    chosenTags.value = [tagParam]
+    config.value.filterTags = [tagParam]
+  }
+  const countParam = route.query.count
+  if (countParam && typeof countParam === 'string') {
+    const n = parseInt(countParam, 10)
+    if (n > 0 && n <= 100) config.value.count = n
+  }
 })
+
+async function loadAllTags() {
+  try {
+    const res = await window.electronAPI.listKnowledgeTags()
+    if (res.success) allTags.value = res.data as string[]
+  } catch {
+    // ignore — tags are optional
+  }
+}
 
 // Report image references in current question at info level
 watch(() => store.currentQuestion, (q) => {
@@ -153,6 +202,47 @@ function toggleMultiple(letter: string) {
       </div>
 
       <div class="config-section">
+        <label class="section-label">
+          知识点筛选（可多选）
+          <span v-if="chosenTags.length" class="tag-count-badge">{{ chosenTags.length }}</span>
+          <button v-if="chosenTags.length" class="tag-clear-btn" @click="clearTags">清除</button>
+        </label>
+        <div class="tag-filter-wrap">
+          <div class="tag-search-row">
+            <input
+              v-model="tagSearch"
+              class="tag-search-input"
+              type="text"
+              placeholder="搜索知识点…"
+              @focus="showTagList = true"
+            />
+            <button class="tag-toggle-btn" @click="showTagList = !showTagList">
+              {{ showTagList ? '收起' : '展开' }}（{{ allTags.length }}）
+            </button>
+          </div>
+          <!-- 已选标签 -->
+          <div v-if="chosenTags.length" class="chosen-tags">
+            <span v-for="tag in chosenTags" :key="tag" class="chosen-tag-chip" @click="toggleTag(tag)" title="点击移除">
+              {{ tag }} ✕
+            </span>
+          </div>
+          <!-- 可选标签列表 -->
+          <div v-if="showTagList" class="tag-list">
+            <span
+              v-for="tag in filteredTags"
+              :key="tag"
+              class="tag-chip"
+              :class="{ selected: chosenTags.includes(tag) }"
+              @click="toggleTag(tag)"
+            >
+              {{ tag }}
+            </span>
+            <span v-if="filteredTags.length === 0" class="tag-empty">无匹配知识点</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-section">
         <label class="section-label">题库分组与来源筛选</label>
         <div class="type-checks">
           <select v-model="config.groupId" class="count-input group-filter" style="width:220px;text-align:left">
@@ -187,6 +277,9 @@ function toggleMultiple(letter: string) {
       </div>
 
       <p v-if="startError" class="error-text">{{ startError }}</p>
+      <p v-if="planTag" class="plan-tag-hint">
+        📋 来自学习计划：<strong>{{ planTag }}</strong>
+      </p>
       <button class="btn-primary start-btn" @click="startSession" :disabled="starting || !chosenTypes.length">
         {{ starting ? '加载题目…' : '开始练习' }}
       </button>
@@ -400,6 +493,67 @@ function toggleMultiple(letter: string) {
 .btn-outline { background: none; border: 1px solid var(--c-border-2); border-radius: 8px; color: var(--c-text-2); padding: 8px 20px; font-size: 14px; cursor: pointer; }
 .btn-outline:hover { border-color: var(--c-text-2); color: var(--c-text); }
 .error-text { color: #f87171; font-size: 13px; }
+.plan-tag-hint {
+  font-size: 13px; color: #fbbf24; background: #3b2e10;
+  padding: 8px 14px; border-radius: 6px; border: 1px solid #78350f;
+  margin: 0;
+}
+
+/* Tag filter */
+.tag-count-badge {
+  font-size: 11px; background: #3b82f6; color: #fff;
+  padding: 1px 7px; border-radius: 99px; margin-left: 6px;
+}
+.tag-clear-btn {
+  font-size: 11px; background: none; border: 1px solid var(--c-border); border-radius: 4px;
+  color: var(--c-text-3); cursor: pointer; padding: 1px 8px; margin-left: auto;
+}
+.tag-clear-btn:hover { color: #f87171; border-color: #f87171; }
+.tag-filter-wrap {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.tag-search-row {
+  display: flex; gap: 8px; align-items: center;
+}
+.tag-search-input {
+  flex: 1; background: var(--c-panel); border: 1px solid var(--c-border-2); border-radius: 6px;
+  color: var(--c-text); padding: 6px 10px; font-size: 13px;
+}
+.tag-search-input::placeholder { color: var(--c-text-3); }
+.tag-toggle-btn {
+  background: var(--c-panel); border: 1px solid var(--c-border-2); border-radius: 6px;
+  color: var(--c-text-2); padding: 5px 12px; font-size: 12px; cursor: pointer; white-space: nowrap;
+  transition: border-color 0.15s;
+}
+.tag-toggle-btn:hover { border-color: var(--c-brand); color: var(--c-brand); }
+.chosen-tags {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.chosen-tag-chip {
+  font-size: 12px; background: #1e3a5f; color: #93c5fd;
+  border: 1px solid #3b82f6; border-radius: 99px;
+  padding: 3px 10px; cursor: pointer; transition: background 0.15s;
+}
+.chosen-tag-chip:hover { background: #3b1e1e; color: #f87171; border-color: #f87171; }
+.tag-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  max-height: 180px; overflow-y: auto;
+  background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px;
+  padding: 10px;
+}
+.tag-chip {
+  font-size: 12px; background: var(--c-panel); color: var(--c-text-2);
+  border: 1px solid var(--c-border); border-radius: 99px;
+  padding: 3px 10px; cursor: pointer; transition: all 0.15s;
+  user-select: none;
+}
+.tag-chip:hover { border-color: #3b82f6; color: var(--c-text); }
+.tag-chip.selected {
+  background: #1e3a5f; color: #60a5fa; border-color: #3b82f6;
+}
+.tag-empty {
+  font-size: 12px; color: var(--c-text-3); padding: 8px;
+}
 
 .q-content :deep(img),
 .exp-text :deep(img),

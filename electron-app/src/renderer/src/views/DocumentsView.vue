@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import type { PdfImportSelection } from '../../../preload/shared-types'
 import { useDocumentStore, type Doc, type DocChunk } from '../stores/document'
+
+const route = useRoute()
 
 const store = useDocumentStore()
 
@@ -115,6 +118,15 @@ function resetChunkViewState() {
 
 onMounted(async () => {
   await refreshDocuments()
+  // 如果从学习计划等页面跳转过来并指定了文档 ID，自动打开并跳转到指定页
+  const targetId = route.query.docId as string | undefined
+  const targetPage = route.query.page as string | undefined
+  if (targetId) {
+    await nextTick()
+    await openDocById(targetId)
+    if (targetPage) await jumpToPageNum(Number(targetPage))
+  }
+
   disposeTaskProgress = window.electronAPI.onTaskProgress(async (msg) => {
     if (!store.importingTaskId || msg.taskId !== store.importingTaskId) return
     if (msg.progress >= 100) {
@@ -155,6 +167,18 @@ onBeforeUnmount(() => {
   if (disposeTaskProgress) disposeTaskProgress()
   if (disposeTaskPartial) disposeTaskPartial()
 })
+
+// 当从其他页面跳转过来（已在本页）且 docId query 变化时自动切换
+watch(
+  () => route.query.docId,
+  async (newId) => {
+    if (!newId || typeof newId !== 'string') return
+    if (store.documents.length === 0) await refreshDocuments()
+    await openDocById(newId)
+    const page = route.query.page as string | undefined
+    if (page) await jumpToPageNum(Number(page))
+  },
+)
 
 function resetImportState(file: PdfImportSelection | null) {
   selectedFile.value = file
@@ -287,6 +311,11 @@ async function deleteDoc(doc: Doc) {
     chunks.value = []
     resetChunkViewState()
   }
+}
+
+async function toggleOfficial(doc: Doc) {
+  const newValue = !doc.is_official
+  await store.setOfficial(doc.id, newValue)
 }
 
 function toggleChunk(chunkId: string) {
@@ -535,6 +564,17 @@ function renderMarkdownTable(content: string): string {
   return titleHtml + html
 }
 
+async function jumpToPageNum(page: number) {
+  if (!Number.isInteger(page) || page < 1) return
+  const targetChunk = chunks.value.find((chunk) => chunk.page_num === page)
+  if (!targetChunk) return
+  const next = new Set(expandedChunkIds.value)
+  next.add(targetChunk.id)
+  expandedChunkIds.value = next
+  await nextTick()
+  document.getElementById(`chunk-${targetChunk.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 async function jumpToPage() {
   chunkViewError.value = ''
   const page = Number(pageJumpInput.value)
@@ -570,6 +610,7 @@ function formatDate(iso: string) {
   <div class="doc-view">
     <div class="toolbar">
       <h2 class="view-title">文档库</h2>
+      <span class="toolbar-hint">☆ 可将一本教材设为官方教材，学习计划中会优先关联</span>
       <button class="btn-primary" @click="openImportModal">
         + 导入 PDF
       </button>
@@ -588,12 +629,19 @@ function formatDate(iso: string) {
           v-for="doc in store.documents"
           :key="doc.id"
           class="doc-item"
-          :class="{ active: selectedDoc?.id === doc.id, parsing: !!store.parsingProgress[doc.id] }"
+          :class="{
+            active: selectedDoc?.id === doc.id,
+            parsing: !!store.parsingProgress[doc.id],
+            'doc-official': doc.is_official,
+          }"
           @click="openDoc(doc)"
         >
           <div class="doc-icon">{{ store.parsingProgress[doc.id] ? '⏳' : 'PDF' }}</div>
           <div class="doc-info">
-            <div class="doc-title">{{ doc.title }}</div>
+            <div class="doc-title">
+              {{ doc.title }}
+              <span v-if="doc.is_official" class="official-badge" title="官方教材">⭐ 官方教材</span>
+            </div>
             <div v-if="store.parsingProgress[doc.id]" class="doc-meta parsing">
               <span class="parsing-label">解析中</span>
               <span class="parsing-progress">{{ docProgressText(doc.id) }}</span>
@@ -601,6 +649,12 @@ function formatDate(iso: string) {
             <div v-else class="doc-meta">{{ doc.page_count > 0 ? `${doc.page_count} 页` : '待解析' }} · {{ formatDate(doc.imported_at) }}</div>
             <div v-if="store.parsingProgress[doc.id]" class="doc-progress-detail">{{ docProgressDetail(doc.id) }}</div>
           </div>
+          <button
+            class="icon-btn official-btn"
+            :class="{ active: doc.is_official }"
+            :title="doc.is_official ? '取消官方教材标记' : '设为官方教材'"
+            @click.stop="toggleOfficial(doc)"
+          >{{ doc.is_official ? '★' : '☆' }}</button>
           <button class="icon-btn danger" title="删除" @click.stop="deleteDoc(doc)">×</button>
         </div>
       </div>
@@ -904,7 +958,8 @@ function formatDate(iso: string) {
 <style scoped>
 .doc-view { display: flex; flex-direction: column; height: 100%; gap: 12px; }
 .toolbar { display: flex; align-items: center; gap: 12px; }
-.view-title { font-size: 20px; font-weight: 700; color: var(--c-text); flex: 1; }
+.view-title { font-size: 20px; font-weight: 700; color: var(--c-text); }
+.toolbar-hint { font-size: 11px; color: var(--c-text-3); flex: 1; }
 .error-text { color: #f87171; font-size: 13px; }
 
 .btn-primary,
@@ -995,6 +1050,15 @@ function formatDate(iso: string) {
 .doc-item.parsing {
   border-left: 3px solid #3b82f6;
 }
+.doc-item.doc-official {
+  border-left: 3px solid #f59e0b;
+  background: linear-gradient(90deg, #2d2410 0%, var(--c-panel) 12%);
+}
+.official-badge {
+  font-size: 10px; font-weight: 600; color: #f59e0b;
+  background: #3b2e10; padding: 1px 6px; border-radius: 3px;
+  vertical-align: middle; margin-left: 4px; white-space: nowrap;
+}
 .icon-btn {
   background: none;
   border: 1px solid var(--c-border-2);
@@ -1010,6 +1074,9 @@ function formatDate(iso: string) {
   flex-shrink: 0;
 }
 .icon-btn.danger:hover { border-color: #f87171; color: #f87171; }
+.icon-btn.official-btn { font-size: 16px; }
+.icon-btn.official-btn:hover { border-color: #f59e0b; color: #f59e0b; }
+.icon-btn.official-btn.active { color: #f59e0b; border-color: #f59e0b; background: #3b2e10; }
 
 .chunks-panel {
   background: var(--c-panel);
