@@ -7,6 +7,7 @@ import {
   type QuestionGroup,
   type QuestionGroupDraft,
 } from '../stores/question'
+import { toIpcPayload } from '../utils/ipc'
 import ImageInsert from '../components/ImageInsert.vue'
 
 const store = useQuestionStore()
@@ -57,6 +58,162 @@ const allSelected = computed(() => {
   return list.length > 0 && list.every(q => selectedIds.value.has(q.id))
 })
 const anySelected = computed(() => selectedIds.value.size > 0)
+
+// ─── Auto-tagging ────────────────────────────────────────────────────────
+const autoTagLoading = ref(false)
+const autoTagResult = ref<
+  | ({
+      total: number
+      auto_tagged: number
+      ai_tagged?: number
+      keyword_tagged?: number
+      fts_tagged?: number
+      inherited_count?: number
+      needs_ai: number
+      none_tagged: number
+    } & Record<string, unknown>)
+  | null
+>(null)
+
+async function autoTagSelected() {
+  const ids = selectedIds.value.size > 0
+    ? selectedIds.value
+    : new Set(displayList.value.map(q => q.id))
+  const questions = displayList.value.filter(q => ids.has(q.id))
+  if (!questions.length) return
+
+  // 跳过已有标签的题目
+  const questionsToTag = questions.filter(q => !(q.knowledge_tags?.length > 0))
+  const skippedCount = questions.length - questionsToTag.length
+  if (skippedCount > 0) {
+    console.log(`Auto-tag: skipped ${skippedCount} questions with existing tags`)
+  }
+  if (!questionsToTag.length) {
+    autoTagResult.value = {
+      total: questions.length,
+      auto_tagged: 0,
+      ai_tagged: 0,
+      keyword_tagged: 0,
+      fts_tagged: 0,
+      inherited_count: 0,
+      needs_ai: 0,
+      none_tagged: 0,
+    }
+    return
+  }
+
+  // 按 question_set_id 分组：同组已有标签的优先继承
+  const setKnownTags = new Map<string, string[]>()
+  for (const q of questions) {
+    if (q.question_set_id && q.knowledge_tags?.length) {
+      setKnownTags.set(q.question_set_id, [...q.knowledge_tags])
+    }
+  }
+  const toInherit: Question[] = []
+  const toClassify: Question[] = []
+  for (const q of questionsToTag) {
+    if (q.question_set_id && setKnownTags.has(q.question_set_id)) {
+      toInherit.push(q)
+    } else {
+      toClassify.push(q)
+    }
+  }
+
+  autoTagLoading.value = true
+  autoTagResult.value = null
+  try {
+    // 构造继承结果（直接应用，不走 AI）
+    const inheritedResults = toInherit.map(q => ({
+      question_id: q.id,
+      knowledge_tags: [...(setKnownTags.get(q.question_set_id!) ?? [])],
+      confidence: [1.0],
+      source: 'question_set_sync',
+      reasoning: '',
+    }))
+
+    let classifiedResults: Array<Record<string, unknown>> = []
+    if (toClassify.length > 0) {
+      const res = await window.electronAPI.autoTagQuestions(toIpcPayload({
+        questions: toClassify.map(q => ({
+          id: q.id,
+          type: q.type,
+          content: q.content,
+          options: q.options ?? [],
+          answer: q.answer ?? '',
+          explanation: q.explanation ?? '',
+          content_hash: q.content_hash ?? '',
+          question_set_id: q.question_set_id ?? '',
+        })),
+        minConfidence: 0.0,
+      }))
+      if (!(res as unknown as { success: boolean }).success) {
+        console.error('Auto-tag failed:', (res as unknown as { error: { message: string } }).error)
+        return
+      }
+      const data = (res as unknown as { data: Record<string, unknown> }).data
+      classifiedResults = (data.results as Array<Record<string, unknown>>) ?? []
+    }
+
+    // 统一应用所有有标签的结果（继承 / FTS / AI / 关键词兜底）
+    const toApply = [
+      ...inheritedResults,
+      ...classifiedResults
+        .filter(r => r.knowledge_tags && (r.knowledge_tags as string[]).length > 0)
+        .map(r => ({
+          question_id: r.question_id as string,
+          knowledge_tags: r.knowledge_tags as string[],
+          confidence: r.confidence as number[],
+          source: (r.source as string) ?? 'fts_document',
+          reasoning: (r.reasoning as string) ?? '',
+        })),
+    ]
+    console.log(`Auto-tag: ${toClassify.length} classified, ${toInherit.length} inherited, ${toApply.length} to apply`)
+
+    let applied = { updated: 0, history_count: 0, synced_count: 0 }
+    if (toApply.length > 0) {
+      const applyRes = await window.electronAPI.applyAutoTags({
+        results: toApply as unknown as Array<{
+          question_id: string; knowledge_tags: string[]; confidence: number[]; source: string; reasoning?: string
+        }>,
+      })
+      if ((applyRes as unknown as { success: boolean }).success) {
+        applied = (applyRes as unknown as { data: { updated: number; history_count: number; synced_count: number } }).data
+        console.log(`Auto-tag applied: ${applied.updated} questions, history: ${applied.history_count}, synced: ${applied.synced_count}`)
+      } else {
+        const err = (applyRes as unknown as { error: { message: string } }).error
+        console.error('Auto-tag apply failed:', err.message)
+      }
+    }
+
+    // 前端统计（继承 + 分类）
+    const classifiedTagged = classifiedResults.filter(r => (r.knowledge_tags as string[])?.length > 0)
+    const aiTagged = classifiedTagged.filter(r => r.source === 'ai_classifier').length
+    const keywordTagged = classifiedTagged.filter(r => r.source === 'keyword_fallback').length
+    const ftsTagged = classifiedTagged.filter(r => r.source === 'fts_document').length
+    autoTagResult.value = {
+      total: questionsToTag.length,
+      auto_tagged: classifiedTagged.length + toInherit.length + (applied.synced_count ?? 0),
+      ai_tagged: aiTagged,
+      keyword_tagged: keywordTagged,
+      fts_tagged: ftsTagged,
+      inherited_count: toInherit.length,
+      needs_ai: 0,
+      none_tagged: toClassify.length - classifiedTagged.length,
+    }
+
+    // Refresh list (and current search results if any)
+    if (searchQ.value.trim()) {
+      await doSearch()
+    } else {
+      await store.fetchPage()
+    }
+    console.log('Auto-tag: after refresh, first question tags:', displayList.value[0]?.knowledge_tags)
+  } catch (e) {
+    console.error('Auto-tag error:', e)
+  } finally {
+    autoTagLoading.value = false
+  }
+}
 
 function toggleSelectAll() {
   if (allSelected.value) {
@@ -501,6 +658,11 @@ function setLabel(q: Question): string {
           <option value="">全部难度</option>
           <option v-for="d in [1,2,3,4,5]" :key="d" :value="d">{{ diffLabel(d) }}</option>
         </select>
+        <select class="select-sm" @change="applyFilter({ has_knowledge_tags: ($event.target as HTMLSelectElement).value === '' ? undefined : ($event.target as HTMLSelectElement).value === 'true', page: 1 })">
+          <option value="">全部知识点</option>
+          <option value="true">有知识点</option>
+          <option value="false">无知识点</option>
+        </select>
         <label class="fav-toggle">
           <input type="checkbox" @change="applyFilter({ has_images: ($event.target as HTMLInputElement).checked || undefined, page: 1 })" />
           含图片
@@ -522,8 +684,30 @@ function setLabel(q: Question): string {
         <button class="btn-sm" @click="showImport = true">批量导入</button>
         <button class="btn-sm" @click="openExport">导出题目</button>
         <button v-if="anySelected" class="btn-sm btn-danger" @click="batchDelete" :disabled="batchDeleting">
-          {{ batchDeleting ? '删除中…' : `批量删除 (${selectedIds.size})` }}
+          {{ batchDeleting ? '删除中…' : `���量删除 (${selectedIds.size})` }}
         </button>
+        <button class="btn-sm btn-accent" @click="autoTagSelected" :disabled="autoTagLoading">
+          {{ autoTagLoading ? '标注中…' : '🤖 智能补全知识点' }}
+        </button>
+        <span v-if="autoTagResult" class="autotag-result">
+          已标注 {{ autoTagResult.auto_tagged }}/{{ autoTagResult.total }}
+          <template v-if="(autoTagResult.ai_tagged ?? 0) > 0 || (autoTagResult.keyword_tagged ?? 0) > 0 || (autoTagResult.fts_tagged ?? 0) > 0 || (autoTagResult.inherited_count ?? 0) > 0 || autoTagResult.none_tagged > 0">
+            （
+            <span v-if="(autoTagResult.ai_tagged ?? 0) > 0">AI: {{ autoTagResult.ai_tagged }}</span>
+            <span v-if="(autoTagResult.keyword_tagged ?? 0) > 0">
+              <span v-if="(autoTagResult.ai_tagged ?? 0) > 0">, </span>关键词: {{ autoTagResult.keyword_tagged }}
+            </span>
+            <span v-if="(autoTagResult.fts_tagged ?? 0) > 0">
+              <span v-if="(autoTagResult.ai_tagged ?? 0) + (autoTagResult.keyword_tagged ?? 0) > 0">, </span>FTS: {{ autoTagResult.fts_tagged }}
+            </span>
+            <span v-if="(autoTagResult.inherited_count ?? 0) > 0">
+              <span v-if="(autoTagResult.ai_tagged ?? 0) + (autoTagResult.keyword_tagged ?? 0) + (autoTagResult.fts_tagged ?? 0) > 0">, </span>继承: {{ autoTagResult.inherited_count }}</span>
+            <span v-if="autoTagResult.none_tagged > 0">
+              <span v-if="(autoTagResult.ai_tagged ?? 0) + (autoTagResult.keyword_tagged ?? 0) + (autoTagResult.fts_tagged ?? 0) + (autoTagResult.inherited_count ?? 0) > 0">, </span>未匹配: {{ autoTagResult.none_tagged }}
+            </span>
+            ）
+          </template>
+        </span>
       </div>
     </div>
 
@@ -883,6 +1067,10 @@ function setLabel(q: Question): string {
 .btn-primary:hover:not(:disabled) { background: #2563eb !important; }
 .btn-danger { background: #b91c1c !important; color: #fff !important; }
 .btn-danger:hover:not(:disabled) { background: #dc2626 !important; }
+.btn-accent { background: #4338ca !important; color: #fff !important; }
+.btn-accent:hover:not(:disabled) { background: #6366f1 !important; }
+.autotag-result { font-size: 11px; color: #86efac; margin-left: 6px; font-weight: 600; }
+.autotag-error { color: #fca5a5; display: block; font-size: 11px; margin-top: 2px; }
 
 .table-wrap { flex: 1; overflow: auto; background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 8px; }
 .q-table { width: 100%; border-collapse: collapse; font-size: 13px; }

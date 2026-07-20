@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlanStore } from '../stores/plan'
 import type { PlanTask } from '../stores/plan'
+import { useAiStore } from '../stores/ai'
+import { useQuestionStore } from '../stores/question'
 
 import { useKnowledgeDomainStore } from '../stores/knowledge-domain'
 
 const plan = usePlanStore()
 const router = useRouter()
 const domainStore = useKnowledgeDomainStore()
+const aiStore = useAiStore()
+const questionStore = useQuestionStore()
 
 // Setup form
 const examDate = ref('')
@@ -18,6 +22,12 @@ const aiGenerating = ref(false)
 const dailyHours = ref(2)
 const aiError = ref('')
 const aiOptimizing = ref(false)
+const showOptimizeSummary = ref(false)
+const aiProgressMessage = ref('')
+const aiProgressStartTime = ref<number | null>(null)
+const aiElapsed = ref(0)
+let aiProgressTimer: ReturnType<typeof setInterval> | null = null
+let unsubProgress: (() => void) | null = null
 
 // Calendar view
 const calYear = ref(new Date().getFullYear())
@@ -30,6 +40,15 @@ const adapting = ref(false)
 
 // Doc relink
 const relinking = ref(false)
+
+// AI 出题练习弹窗
+const showAiPracticeModal = ref(false)
+const aiPracticeTask = ref<PlanTask | null>(null)
+const aiPracticeTypes = ref<string[]>(['single'])
+const aiPracticeCount = ref(5)
+const aiPracticeDifficulty = ref<number | undefined>(undefined)
+const aiPracticeGenerating = ref(false)
+const aiPracticeError = ref('')
 
 // Session timer
 const sessionStartTime = ref<number | null>(null)
@@ -360,6 +379,40 @@ function formatMs(ms: number): string {
   return `${m}m`
 }
 
+/** 格式化秒数为 mm:ss */
+function formatElapsedSeconds(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+/** 开始 AI 进度监听 */
+function startAiProgress(): void {
+  aiProgressMessage.value = ''
+  aiProgressStartTime.value = Date.now()
+  aiElapsed.value = 0
+  aiProgressTimer = setInterval(() => {
+    if (aiProgressStartTime.value) {
+      aiElapsed.value = Math.floor((Date.now() - aiProgressStartTime.value) / 1000)
+    }
+  }, 1000)
+  // 监听来自 Python 的进度推送
+  unsubProgress = window.electronAPI.onTaskProgress((msg: { taskId: string; progress: number; message: string }) => {
+    if (msg.message) {
+      aiProgressMessage.value = msg.message
+    }
+  })
+}
+
+/** 停止 AI 进度监听 */
+function stopAiProgress(): void {
+  if (aiProgressTimer) { clearInterval(aiProgressTimer); aiProgressTimer = null }
+  if (unsubProgress) { unsubProgress(); unsubProgress = null }
+  aiProgressMessage.value = ''
+  aiProgressStartTime.value = null
+  aiElapsed.value = 0
+}
+
 function prevMonth(): void {
   if (calMonth.value === 1) { calMonth.value = 12; calYear.value-- }
   else calMonth.value--
@@ -415,6 +468,7 @@ async function handleAiCreate(): Promise<void> {
   if (!examDate.value) return
   aiError.value = ''
   aiGenerating.value = true
+  startAiProgress()
   try {
     await ensureDomainsLoaded()
     const domains = extractDomains()
@@ -425,23 +479,44 @@ async function handleAiCreate(): Promise<void> {
   } catch (e) {
     aiError.value = (e as Error).message
   } finally {
+    stopAiProgress()
     aiGenerating.value = false
   }
 }
 
-/** AI 优化当前计划 */
+/** AI 优化当前计划 — 仅 AI 调用，不直接应用 */
 async function handleAiOptimize(): Promise<void> {
   aiOptimizing.value = true
+  showOptimizeSummary.value = false
+  startAiProgress()
   try {
     await ensureDomainsLoaded()
     const domains = extractDomains().map((d) => ({ name: d.name, weight_pct: d.weight_pct }))
     await plan.optimizePlanWithAi(domains, dailyHours.value)
-    await Promise.all([loadCalendar(), plan.loadSessions()])
+    showOptimizeSummary.value = true
   } catch (e) {
     alert('AI 优化失败：' + (e as Error).message)
   } finally {
+    stopAiProgress()
     aiOptimizing.value = false
   }
+}
+
+/** 用户确认应用优化结果 */
+async function handleApplyOptimize(): Promise<void> {
+  try {
+    await plan.applyOptimizedPlan()
+    showOptimizeSummary.value = false
+    await Promise.all([loadCalendar(), plan.loadSessions(), loadDocuments()])
+  } catch (e) {
+    alert('应用优化失败：' + (e as Error).message)
+  }
+}
+
+/** 用户放弃优化结果 */
+function handleDiscardOptimize(): void {
+  plan.discardOptimizedPlan()
+  showOptimizeSummary.value = false
 }
 
 async function handleAdapt(): Promise<void> {
@@ -501,6 +576,89 @@ function goPractice(task: PlanTask): void {
   router.push({ name: 'practice', query: { tag: task.knowledge_tag, count: String(task.suggested_count || 10) } })
 }
 
+/** 打开 AI 出题练习弹窗 */
+function openAiPractice(task: PlanTask): void {
+  aiPracticeTask.value = task
+  aiPracticeTypes.value = ['single']
+  aiPracticeCount.value = 5
+  aiPracticeDifficulty.value = undefined
+  aiPracticeError.value = ''
+  aiPracticeGenerating.value = false
+  showAiPracticeModal.value = true
+}
+
+/** 关闭 AI 出题练习弹窗 */
+function closeAiPracticeModal(): void {
+  showAiPracticeModal.value = false
+  aiPracticeTask.value = null
+}
+
+/** 判断任务是否支持 AI 出题练习 */
+function canAiPractice(task: PlanTask): boolean {
+  return ['practice', 'review', 'mock_exam', 'custom'].includes(task.task_type || 'practice')
+}
+
+/** AI 出题并跳转练习 */
+async function handleAiPractice(): Promise<void> {
+  const task = aiPracticeTask.value
+  if (!task?.knowledge_tag) return
+  if (!aiPracticeTypes.value.length) {
+    aiPracticeError.value = '请至少选择一种题型'
+    return
+  }
+  const count = Math.max(1, Math.min(50, aiPracticeCount.value || 5))
+  aiPracticeGenerating.value = true
+  aiPracticeError.value = ''
+  try {
+    const generated = await aiStore.generateQuestions({
+      count,
+      types: [...aiPracticeTypes.value],
+      knowledge_tags: [task.knowledge_tag],
+      difficulty: aiPracticeDifficulty.value,
+    })
+    if (!generated.length) throw new Error('AI 未返回任何题目，请重试')
+
+    const now = new Date()
+    const name = `AI练习 ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+    const group = await questionStore.saveGroup({
+      name,
+      group_type: 'ai_generated',
+      description: `AI 根据学习计划「${task.knowledge_tag}」生成`,
+    })
+
+    const tag = task.knowledge_tag
+    const validTypes = new Set(['single', 'multiple', 'case', 'essay'])
+    const drafts = generated.map((q) => {
+      const qType = validTypes.has(q.type) ? q.type : 'single'
+      const tags = Array.isArray(q.knowledge_tags) ? [...q.knowledge_tags] : []
+      if (!tags.includes(tag)) tags.push(tag)
+      return {
+        ...q,
+        type: qType,
+        group_id: group.id,
+        source_type: 'ai_generated',
+        knowledge_tags: tags,
+      }
+    })
+    await questionStore.batchImport(drafts)
+
+    router.push({
+      name: 'practice',
+      query: {
+        tag,
+        count: String(count),
+        groupId: group.id,
+        sourceType: 'ai_generated',
+      },
+    })
+    closeAiPracticeModal()
+  } catch (e) {
+    aiPracticeError.value = (e as Error).message
+  } finally {
+    aiPracticeGenerating.value = false
+  }
+}
+
 /** 按钮文案 */
 function practiceBtnLabel(task: PlanTask): string {
   if (task.task_type === 'reading') return '去阅读'
@@ -536,6 +694,10 @@ onMounted(async () => {
   if (plan.activePlan) {
     await Promise.all([loadCalendar(), plan.loadSessions(), loadDocuments(), plan.loadAllTasks()])
   }
+})
+
+onUnmounted(() => {
+  stopAiProgress()
 })
 </script>
 
@@ -602,7 +764,11 @@ onMounted(async () => {
           :disabled="!examDate || aiGenerating || creating"
           @click="handleAiCreate"
         >
-          {{ aiGenerating ? 'AI 思考中…（可能需要 30 秒）' : '🤖 AI 智能生成计划' }}
+          <template v-if="aiGenerating">
+            🤖 AI 思考中… {{ aiProgressMessage || '可能需要 30 秒 - 2 分钟' }}
+            <span v-if="aiElapsed > 0" class="ai-elapsed">（{{ formatElapsedSeconds(aiElapsed) }}）</span>
+          </template>
+          <template v-else>🤖 AI 智能生成计划</template>
         </button>
         <p class="ai-hint">AI 将根据考试日期、知识点大纲和你的学习时间，生成一份分阶段递进、无重复内容的学习计划</p>
       </div>
@@ -630,7 +796,11 @@ onMounted(async () => {
             @click="handleAiOptimize"
             :disabled="aiOptimizing"
           >
-            {{ aiOptimizing ? 'AI 分析中…' : '🤖 AI 优化计划' }}
+            <template v-if="aiOptimizing">
+              🤖 {{ aiProgressMessage || 'AI 分析中…' }}
+              <span v-if="aiElapsed > 0" class="ai-elapsed">（{{ formatElapsedSeconds(aiElapsed) }}）</span>
+            </template>
+            <template v-else>🤖 AI 优化计划</template>
           </button>
           <button class="btn-ghost btn-sm danger" @click="plan.deletePlan">删除计划</button>
         </div>
@@ -783,6 +953,12 @@ onMounted(async () => {
               >完成</button>
               <span v-else class="done-label">已完成</span>
               <button
+                v-if="canAiPractice(task)"
+                class="btn-ghost btn-xs ai-practice-btn"
+                :disabled="aiPracticeGenerating"
+                @click="openAiPractice(task)"
+              >🤖 AI出题</button>
+              <button
                 class="btn-primary btn-xs practice-go-btn"
                 @click="goPractice(task)"
               >{{ practiceBtnLabel(task) }}</button>
@@ -866,6 +1042,12 @@ onMounted(async () => {
                     @click="handleCompleteTask(task.id)"
                   >完成</button>
                   <span v-else class="row-done">✓</span>
+                  <button
+                    v-if="canAiPractice(task)"
+                    class="btn-ghost btn-xxs ai-practice-btn"
+                    :disabled="aiPracticeGenerating"
+                    @click="openAiPractice(task)"
+                  >🤖 AI出题</button>
                   <button
                     class="btn-primary btn-xxs row-go-btn"
                     @click="goPractice(task)"
@@ -962,7 +1144,141 @@ onMounted(async () => {
         </div>
         <button class="btn-ghost btn-sm" @click="showAdapt = false">收起</button>
       </section>
+
+      <!-- AI optimization summary -->
+      <section v-if="showOptimizeSummary && plan.lastOptimizeSummary" class="section optimize-summary-section">
+        <div class="optimize-summary-header">
+          <h2 class="section-title">🤖 AI 优化结果（预览 · 共 {{ plan.lastOptimizeSummary.total_days }} 天）</h2>
+          <span class="optimize-preview-hint">计划尚未应用，请确认后点击下方按钮</span>
+        </div>
+        <div class="optimize-summary-body">
+          <!-- Highlights -->
+          <div class="optimize-highlights">
+            <div
+              v-for="(h, i) in plan.lastOptimizeSummary.highlights"
+              :key="'h-' + i"
+              class="optimize-highlight-item"
+            >{{ h }}</div>
+          </div>
+
+          <!-- Task type comparison table -->
+          <div class="optimize-compare-grid">
+            <div class="opt-compare-card">
+              <div class="opt-compare-title">任务类型变化</div>
+              <div class="opt-compare-rows">
+                <div v-for="(_count, type) in plan.lastOptimizeSummary.task_type_counts_after" :key="'after-' + type" class="opt-compare-row">
+                  <span class="opt-type-label">{{ taskTypeShort(type) }}</span>
+                  <span class="opt-type-before">{{ plan.lastOptimizeSummary.task_type_counts_before[type as string] || 0 }}</span>
+                  <span class="opt-type-arrow">→</span>
+                  <span
+                    class="opt-type-after"
+                    :class="{
+                      'opt-increased': (plan.lastOptimizeSummary.task_type_counts_after[type as string] || 0) > (plan.lastOptimizeSummary.task_type_counts_before[type as string] || 0),
+                      'opt-decreased': (plan.lastOptimizeSummary.task_type_counts_after[type as string] || 0) < (plan.lastOptimizeSummary.task_type_counts_before[type as string] || 0),
+                    }"
+                  >{{ plan.lastOptimizeSummary.task_type_counts_after[type as string] }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="opt-compare-card">
+              <div class="opt-compare-title">优化统计</div>
+              <div class="opt-stats">
+                <div class="opt-stat">
+                  <span class="opt-stat-val">{{ plan.lastOptimizeSummary.days_changed }}</span>
+                  <span class="opt-stat-lbl">/ {{ plan.lastOptimizeSummary.total_days }} 天被调整</span>
+                </div>
+                <div class="opt-stat">
+                  <span class="opt-stat-val">{{ plan.lastOptimizeSummary.domain_count_before }} → {{ plan.lastOptimizeSummary.domain_count_after }}</span>
+                  <span class="opt-stat-lbl">知识域覆盖变化</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action buttons -->
+          <div class="optimize-actions">
+            <button class="btn-primary optimize-apply-btn" @click="handleApplyOptimize">
+              ✅ 应用优化 — 替换当前计划
+            </button>
+            <button class="btn-ghost optimize-discard-btn" @click="handleDiscardOptimize">
+              🗑 放弃
+            </button>
+          </div>
+        </div>
+      </section>
     </template>
+
+    <!-- AI 出题练习弹窗 -->
+    <div v-if="showAiPracticeModal" class="modal-backdrop" @click.self="closeAiPracticeModal">
+      <div class="ai-practice-modal">
+        <div class="ai-practice-header">
+          <h3>🤖 AI 出题练习</h3>
+          <button class="btn-ghost btn-xs" @click="closeAiPracticeModal">✕</button>
+        </div>
+
+        <div class="ai-practice-body">
+          <div class="form-row">
+            <label>知识点</label>
+            <div class="ai-practice-tag">{{ aiPracticeTask?.knowledge_tag }}</div>
+          </div>
+
+          <div class="form-row">
+            <label>题型（可多选）</label>
+            <div class="type-checks">
+              <label class="check-label">
+                <input type="checkbox" value="single" v-model="aiPracticeTypes" /> 单选
+              </label>
+              <label class="check-label">
+                <input type="checkbox" value="multiple" v-model="aiPracticeTypes" /> 多选
+              </label>
+              <label class="check-label">
+                <input type="checkbox" value="case" v-model="aiPracticeTypes" /> 案例
+              </label>
+              <label class="check-label">
+                <input type="checkbox" value="essay" v-model="aiPracticeTypes" /> 论文
+              </label>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label>数量</label>
+            <div class="hours-row">
+              <input
+                v-model.number="aiPracticeCount"
+                type="number"
+                class="hours-input"
+                min="1"
+                max="50"
+              />
+              <span class="hours-unit">道（1~50）</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label>难度（可选）</label>
+            <select v-model="aiPracticeDifficulty" class="date-input">
+              <option :value="undefined">不限</option>
+              <option v-for="d in [1,2,3,4,5]" :key="d" :value="d">{{ d }} 级</option>
+            </select>
+          </div>
+
+          <p v-if="aiPracticeError" class="error-text">{{ aiPracticeError }}</p>
+        </div>
+
+        <div class="ai-practice-footer">
+          <button class="btn-ghost btn-sm" @click="closeAiPracticeModal" :disabled="aiPracticeGenerating">取消</button>
+          <button
+            class="btn-primary btn-sm ai-practice-confirm"
+            :disabled="aiPracticeGenerating || !aiPracticeTypes.length"
+            @click="handleAiPractice"
+          >
+            {{ aiPracticeGenerating ? 'AI 出题中…' : '生成并去练习' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1021,6 +1337,9 @@ onMounted(async () => {
 .ai-create-btn:hover { background: linear-gradient(135deg, #6d28d9, #2563eb); }
 .ai-hint {
   font-size: 11px; color: var(--c-text-3); text-align: center; margin-top: 8px; line-height: 1.4;
+}
+.ai-elapsed {
+  font-size: 10px; color: var(--c-text-3); font-weight: 400; opacity: 0.7;
 }
 .error-text { color: #f87171; font-size: 13px; margin: 8px 0 0; }
 
@@ -1189,6 +1508,74 @@ onMounted(async () => {
 .adjust-item.decrease .adj-change { color: #f59e0b; }
 .adj-reason { color: var(--c-text-3); font-size: 12px; }
 
+/* ── AI optimization summary ── */
+.optimize-summary-section {
+  background: var(--c-panel); border: 1px solid #4c1d95; border-radius: 10px;
+  padding: 16px 20px;
+}
+.optimize-summary-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;
+}
+.optimize-summary-header .section-title { margin-bottom: 0; }
+.optimize-highlights {
+  display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px;
+}
+.optimize-highlight-item {
+  font-size: 13px; color: #c4b5fd; padding: 6px 10px;
+  background: rgba(124, 58, 237, 0.12); border-radius: 6px;
+  line-height: 1.45;
+}
+.optimize-highlight-item::before { content: '▸ '; color: #7c3aed; }
+.optimize-compare-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.opt-compare-card {
+  background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px;
+  padding: 14px;
+}
+.opt-compare-title {
+  font-size: 12px; font-weight: 600; color: var(--c-text-2); margin-bottom: 10px;
+}
+.opt-compare-rows { display: flex; flex-direction: column; gap: 6px; }
+.opt-compare-row {
+  display: flex; align-items: center; gap: 8px; font-size: 12px;
+}
+.opt-type-label {
+  width: 48px; color: var(--c-text-3); flex-shrink: 0;
+}
+.opt-type-before {
+  color: var(--c-text-3); min-width: 20px; text-align: right;
+}
+.opt-type-arrow {
+  color: var(--c-border-2); margin: 0 2px;
+}
+.opt-type-after {
+  font-weight: 600; min-width: 20px;
+}
+.opt-type-after.opt-increased { color: #22c55e; }
+.opt-type-after.opt-decreased { color: #f59e0b; }
+.opt-stats { display: flex; flex-direction: column; gap: 12px; }
+.opt-stat { display: flex; flex-direction: column; gap: 2px; }
+.opt-stat-val { font-size: 18px; font-weight: 700; color: #a78bfa; }
+.opt-stat-lbl { font-size: 11px; color: var(--c-text-3); }
+.optimize-preview-hint {
+  font-size: 11px; color: #f59e0b; font-weight: 400;
+  background: rgba(245, 158, 11, 0.1); padding: 3px 10px; border-radius: 4px;
+}
+.optimize-actions {
+  display: flex; gap: 12px; margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--c-border);
+}
+.optimize-apply-btn {
+  flex: 1; font-size: 14px; padding: 10px 20px;
+  background: linear-gradient(135deg, #7c3aed, #3b82f6);
+}
+.optimize-apply-btn:hover { background: linear-gradient(135deg, #6d28d9, #2563eb); }
+.optimize-discard-btn {
+  font-size: 13px; color: var(--c-text-3); border-color: var(--c-border);
+}
+.optimize-discard-btn:hover { color: #f87171; border-color: #ef4444; }
+
 /* ── Buttons ── */
 .btn-primary {
   background: #3b82f6; color: #fff; border: none; border-radius: 6px;
@@ -1298,4 +1685,42 @@ onMounted(async () => {
 .row-done { font-size: 14px; color: #22c55e; }
 .task-row .priority-badge { font-size: 10px; }
 .task-row.task-locked { border-left: 3px solid #f59e0b; }
+
+/* ── AI 出题练习弹窗 ── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.ai-practice-modal {
+  background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px;
+  width: 100%; max-width: 460px;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+}
+.ai-practice-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid var(--c-border);
+}
+.ai-practice-header h3 { font-size: 15px; font-weight: 600; color: var(--c-text); margin: 0; }
+.ai-practice-body { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.ai-practice-tag {
+  background: var(--c-bg); border: 1px solid var(--c-border);
+  border-radius: 6px; padding: 8px 12px;
+  font-size: 13px; color: var(--c-text);
+}
+.ai-practice-footer {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 14px 20px; border-top: 1px solid var(--c-border);
+}
+.ai-practice-confirm {
+  background: linear-gradient(135deg, #7c3aed, #3b82f6);
+}
+.ai-practice-confirm:hover { background: linear-gradient(135deg, #6d28d9, #2563eb); }
+.ai-practice-btn {
+  color: #a78bfa; border-color: #4c1d95;
+}
+.ai-practice-btn:hover { border-color: #7c3aed; color: #c4b5fd; }
 </style>

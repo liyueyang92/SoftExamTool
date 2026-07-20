@@ -15,6 +15,7 @@ import { registerHandler } from './ipc-handler'
 import {
   queryQuestions, searchQuestions, insertQuestion, batchInsertQuestions,
   updateQuestion, deleteQuestion, batchDeleteQuestions, toggleFavorite, getQuestionStats, listKnowledgeTags, getWrongQuestions,
+  applyAutoTagResults, getQuestionTagHistory,
   exportQuestions
 } from './db/questions'
 import {
@@ -28,7 +29,9 @@ import {
   deleteDocument, getDocumentById, insertChunks, deleteDocChunks, deleteDocChunksByPage,
   getDocChunkCount, getChunks, remapManagedDocumentPaths, insertAssets, getDocAssets,
   deleteDocAssets, deleteDocAssetsByPage,
-  searchDocChunks, updateChunkContent, setDocumentOfficial
+  searchDocChunks, updateChunkContent, setDocumentOfficial,
+  applyCleanedChunks, getChunksForCleaning, getChunkNeighborContents,
+  insertCleaningLog, getCleaningLogs, rollbackCleaning, updateChunkTags,
 } from './db/documents'
 import {
   listCrawlerRules, upsertCrawlerRule, deleteCrawlerRule,
@@ -62,7 +65,8 @@ import { getExamConfig, saveExamConfig } from './db/exam-config'
 import {
   getDomainTree, getDomainById, upsertDomain, deleteDomain,
   importOutline, getDocMappingsForDomain,
-  getFlatDomainList, batchUpsertDomains, getChunksForDocuments
+  getFlatDomainList, batchUpsertDomains, getChunksForDocuments,
+  formatDomainTreeAsText, getDomainNameMap,
 } from './db/knowledge-domains'
 import {
   createLog, getLogsByDateRange, getDailyStats, updateLog, deleteLog
@@ -172,14 +176,26 @@ function buildProviderConfig(override?: ProviderConfigOverride): Record<string, 
   if (encOpenAI && safeStorage.isEncryptionAvailable()) {
     try {
       cfg.openai = { ...cfg.openai, apiKey: safeStorage.decryptString(Buffer.from(encOpenAI)) }
-    } catch { /* use empty key */ }
+      console.log('OpenAI API key decrypted successfully')
+    } catch (e) {
+      console.error('OpenAI API key decryption FAILED:', e)
+      delete cfg.openai?.encryptedApiKey
+    }
+  } else if (encOpenAI) {
+    console.warn('OpenAI encrypted key exists but safeStorage unavailable')
   }
   // Decrypt Anthropic key
   const encAnthropic = cfg.anthropic?.encryptedApiKey as Buffer | undefined
   if (encAnthropic && safeStorage.isEncryptionAvailable()) {
     try {
       cfg.anthropic = { ...cfg.anthropic, apiKey: safeStorage.decryptString(Buffer.from(encAnthropic)) }
-    } catch { /* use empty key */ }
+      console.log('Anthropic API key decrypted successfully')
+    } catch (e) {
+      console.error('Anthropic API key decryption FAILED:', e)
+      delete cfg.anthropic?.encryptedApiKey
+    }
+  } else if (encAnthropic) {
+    console.warn('Anthropic encrypted key exists but safeStorage unavailable')
   }
 
   if (!override) return cfg
@@ -396,6 +412,13 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => win.show())
 
+  // 不要在这里做清理（关数据库、杀 Python 等）。
+  // 这些同步/耗时操作会阻塞 close 事件，导致用户感觉“点 X 没反应”。
+  // 清理统一放到 closed / before-quit 里执行。
+  win.on('close', () => {
+    console.log('[App] Window close event')
+  })
+
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
@@ -448,9 +471,11 @@ function createWindow(): BrowserWindow {
 function cleanupAppResources(): void {
   if (resourcesCleanedUp) return
   resourcesCleanedUp = true
+  console.log('[App] Cleaning up resources...')
   wsClient.disconnectAll()
   pythonManager.stop()
   closeDatabase()
+  console.log('[App] Cleanup complete')
 }
 
 function checkAndNotify(): void {
@@ -2359,6 +2384,27 @@ function registerIpcHandlers(): void {
   registerHandler(IPC.QUESTION_GET_STATS, async () => getQuestionStats(db))
   registerHandler(IPC.QUESTION_LIST_TAGS, async () => listKnowledgeTags(db))
 
+  // Phase 2/3: Auto-tag result application
+  registerHandler(IPC.QUESTION_APPLY_AUTO_TAGS, async (args) => {
+    const { results } = args as {
+      results: Array<{
+        question_id: string
+        knowledge_tags: string[]
+        confidence: number[]
+        source: string
+        reasoning?: string
+      }>
+    }
+    console.log(`[applyAutoTags] received ${results.length} results, samples:`, results.slice(0, 2).map(r => ({ id: r.question_id, tags: r.knowledge_tags, source: r.source })))
+    const res = applyAutoTagResults(db, results)
+    console.log(`[applyAutoTags] updated=${res.updated}, history_count=${res.history_count}, synced_count=${res.synced_count}`)
+    return res
+  })
+
+  registerHandler(IPC.QUESTION_GET_TAG_HISTORY, async (questionId) => {
+    return getQuestionTagHistory(db, questionId as string)
+  })
+
   // Question export / import
   registerHandler(IPC.QUESTION_EXPORT, async (args) => {
     const { filter } = (args ?? {}) as { filter?: Record<string, unknown> }
@@ -3017,6 +3063,277 @@ function registerIpcHandlers(): void {
     const { docId, isOfficial } = args as { docId: string; isOfficial: boolean }
     setDocumentOfficial(db, docId, isOfficial)
     return { is_official: isOfficial }
+  })
+
+  // ─── Phase 0: Document tag cleaning ────────────────────────────────────────
+
+  registerHandler(IPC.DOC_CLEAN_CHUNKS, async (args) => {
+    const { docId } = args as { docId: string }
+    const doc = getDocumentById(db, docId)
+    if (!doc) throw new Error(`Document not found: ${docId}`)
+    const chunks = getChunksForCleaning(db, docId)
+    if (!chunks.length) return { cleaned_chunks: [], report: { total_chunks: 0, actions: {}, noise_cleared: {}, confidence_levels: { high: 0, medium: 0, low: 0, invalid: 0 }, confidence_stats: {}, needs_ai_reclassification: 0 }, needs_ai: [], updated: 0, corrections: 0 }
+
+    console.log(`[DocClean] Sending ${chunks.length} chunks to Python for cleaning...`)
+
+    // 调用 Python 端清洗端点
+    const cleanPayload = JSON.stringify({
+      chunks: chunks.map(function mapChunk(c) {
+        let tags = c.knowledge_tags
+        if (typeof tags === 'string') {
+          try { tags = JSON.parse(String(tags)) } catch { tags = [] }
+        }
+        if (!Array.isArray(tags)) tags = []
+        return {
+          id: c.id,
+          doc_id: c.doc_id,
+          page_num: c.page_num,
+          content: c.content,
+          knowledge_tags: tags,
+          chunk_type: c.chunk_type,
+          confidence: c.confidence,
+          block_order: c.block_order,
+        }
+      }),
+      total_pages: doc.page_count || chunks.length, // fallback if page_count is 0
+    })
+
+    let data: {
+      cleaned_chunks: Array<Record<string, unknown>>
+      report: Record<string, unknown> | null
+      needs_ai: Array<Record<string, unknown>>
+    }
+
+    try {
+      const resp = await fetch(`http://127.0.0.1:${pythonManager.port}/pdf/clean-chunks`, {
+        method: 'POST',
+        body: cleanPayload,
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+      })
+      if (!resp.ok) throw new Error(`Python service responded with ${resp.status}`)
+      data = (await resp.json()) as typeof data
+      console.log(`[DocClean] Python returned ${data.cleaned_chunks?.length ?? 0} cleaned chunks`)
+    } catch (fetchErr: unknown) {
+      console.error('[DocClean] Python service unavailable:', fetchErr)
+      throw new Error(`清洗标签失败：Python 服务不可用。请确认后端服务已启动。(${(fetchErr as Error).message})`)
+    }
+
+    // 将清洗结果写入 DB
+    const applyResult = applyCleanedChunks(db, data.cleaned_chunks.map((c) => ({
+      id: c.id as string,
+      doc_id: c.doc_id as string,
+      page_num: c.page_num as number,
+      knowledge_tags: Array.isArray(c.knowledge_tags) ? (c.knowledge_tags as string[]) : [],
+      confidence: typeof c.confidence === 'number' ? (c.confidence as number) : 0.0,
+      noise_type: typeof c.noise_type === 'string' ? (c.noise_type as string) : '',
+      action: typeof c.action === 'string' ? (c.action as string) : '',
+      old_tags: Array.isArray(c.old_tags) ? (c.old_tags as string[]) : [],
+    })))
+
+    console.log(`[DocClean] Applied to DB: ${applyResult.updated} updated, ${applyResult.corrections} corrections logged`)
+
+    // 记录清洗日志
+    if (data.report) {
+      const r = data.report as Record<string, unknown>
+      const actions = (r.actions as Record<string, number>) ?? {}
+      insertCleaningLog(db, {
+        doc_id: docId,
+        total_chunks: (r.total_chunks as number) ?? 0,
+        noise_cleared: JSON.stringify(r.noise_cleared ?? {}),
+        ai_reclassified: actions.ai_corrected ?? 0,
+        downgraded: 0,
+        populated: actions.reclassified ?? 0,
+        unchanged: 0,
+        confidence_stats: JSON.stringify(r.confidence_stats ?? {}),
+        snapshot_ids: '[]',
+      })
+    }
+
+    return { ...data, updated: applyResult.updated, corrections: applyResult.corrections }
+  })
+
+  registerHandler(IPC.DOC_UPDATE_CHUNK_TAGS, async (args) => {
+    const { chunkId, tags, confidence } = args as {
+      chunkId: string; tags: string[]; confidence: number | null
+    }
+    updateChunkTags(db, chunkId, tags, confidence, 'human')
+    return { success: true }
+  })
+
+  registerHandler(IPC.DOC_GET_CLEANING_LOGS, async (docId) => {
+    return getCleaningLogs(db, docId as string)
+  })
+
+  registerHandler(IPC.DOC_ROLLBACK_CLEANING, async (args) => {
+    const { cleaningLogId } = args as { cleaningLogId: string }
+    return rollbackCleaning(db, cleaningLogId)
+  })
+
+  // ─── Phase 0: AI chunk reclassification ────────────────────────────────────
+
+  registerHandler(IPC.AI_RECLASSIFY_CHUNK, async (args) => {
+    const { aiConfig, chunkContent, neighborContents, domainTreeText } = args as {
+      aiConfig: Record<string, unknown>
+      chunkContent: string
+      neighborContents: string[]
+      domainTreeText?: string
+    }
+    const domainText = domainTreeText || formatDomainTreeAsText(db)
+    const resp = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/reclassify-chunk`, {
+      method: 'POST',
+      body: JSON.stringify({
+        ai_config: aiConfig,
+        chunk_content: chunkContent,
+        neighbor_contents: neighborContents ?? [],
+        domain_tree_text: domainText,
+      }),
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+    })
+    if (!resp.ok) throw new Error(`Reclassify chunk failed: ${resp.status}`)
+    return resp.json()
+  })
+
+  registerHandler(IPC.AI_RECLASSIFY_CHUNK_BATCH, async (args) => {
+    const { aiConfig, chunks, domainTreeText } = args as {
+      aiConfig: Record<string, unknown>
+      chunks: Array<{ id: string; content: string; neighbor_contents?: string[] }>
+      domainTreeText?: string
+    }
+    const domainText = domainTreeText || formatDomainTreeAsText(db)
+    const resp = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/reclassify-chunk-batch`, {
+      method: 'POST',
+      body: JSON.stringify({
+        ai_config: aiConfig,
+        chunks: chunks.map((c) => ({
+          id: c.id,
+          content: c.content,
+          neighbor_contents: c.neighbor_contents ?? [],
+        })),
+        domain_tree_text: domainText,
+      }),
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+    })
+    if (!resp.ok) throw new Error(`Reclassify batch failed: ${resp.status}`)
+    return resp.json()
+  })
+
+  // ─── Phase 2: Question auto-tagging ─────────────────────────────────────────
+
+  registerHandler(IPC.AI_AUTO_TAG_QUESTIONS, async (args) => {
+    const { questions, minConfidence } = args as {
+      questions: Array<{ id: string; type: string; content: string; options?: string[]; answer?: string; explanation?: string; content_hash?: string }>
+      minConfidence?: number
+    }
+    const domainMap = getDomainNameMap(db)
+    const domainTreeText = formatDomainTreeAsText(db)
+    const domainNames = getFlatDomainList(db).map(d => d.name)
+    const providerCfg = buildProviderConfig()
+
+    // Diagnostic: check chunk availability
+    const chunkCount = (db.prepare('SELECT COUNT(*) as cnt FROM doc_chunks').get() as { cnt: number }).cnt
+    let ftsCount = -1
+    try {
+      ftsCount = (db.prepare('SELECT COUNT(*) as cnt FROM doc_chunks_fts').get() as { cnt: number }).cnt
+    } catch { /* FTS table may not exist */ }
+    console.log(`Auto-tag: ${questions.length} questions, doc_chunks=${chunkCount}, fts_index=${ftsCount}`)
+
+    // 对每道题执行 FTS 检索
+    const searchResults: Array<Array<Record<string, unknown>>> = []
+    for (let qi = 0; qi < questions.length; qi++) {
+      const q = questions[qi]
+      const queryText = [q.content, ...(q.options ?? []), q.explanation ?? ''].join(' ')
+      const chunks = searchDocChunks(db, queryText, {
+        limit: 10,
+        minConfidence: minConfidence ?? 0.15,
+      })
+      if (qi === 0) {
+        console.log(`  FTS sample raw="${queryText.slice(0, 100)}..." → ${chunks.length} chunks`)
+      }
+      // Map _score → score for Python Pydantic compatibility
+      searchResults.push(chunks.map(c => ({
+        id: c.id,
+        doc_id: c.doc_id,
+        page_num: c.page_num,
+        content: c.content,
+        knowledge_tags: c.knowledge_tags,
+        chunk_type: c.chunk_type,
+        confidence: c.confidence,
+        doc_title: c.doc_title,
+        score: c._score,
+        source_engine: c.source_engine,
+        block_order: c.block_order,
+        bbox: c.bbox,
+      })) as unknown as Array<Record<string, unknown>>)
+    }
+
+    // 调用 Python 端标签聚合
+    const matchedChunks = searchResults.reduce((sum, r) => sum + r.length, 0)
+    const chunksWithTags = searchResults.reduce(
+      (sum, r) => sum + r.filter(c => Array.isArray(c.knowledge_tags) && c.knowledge_tags.length > 0).length, 0
+    )
+    console.log(`Auto-tag: ${questions.length} questions → ${matchedChunks} matched chunks (${chunksWithTags} with tags)`)
+    const resp = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/auto-tag-questions`, {
+      method: 'POST',
+      body: JSON.stringify({
+        questions: questions.map((q) => ({
+          id: q.id,
+          type: q.type,
+          content: q.content,
+          options: q.options ?? [],
+          answer: q.answer ?? '',
+          explanation: q.explanation ?? '',
+          content_hash: q.content_hash ?? '',
+        })),
+        search_results: searchResults,
+        domain_map: domainMap,
+        ai_config: providerCfg,
+        domain_tree_text: domainTreeText,
+        domain_names: domainNames,
+      }),
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+    })
+    if (!resp.ok) throw new Error(`Auto-tag failed: ${resp.status}`)
+    const respJson = await resp.json()
+    return { ...respJson, search_results: searchResults }
+  })
+
+  // ─── Phase 3: Layer 2 AI classification fallback ────────────────────────────
+
+  registerHandler(IPC.AI_CLASSIFY_QUESTION_TAGS, async (args) => {
+    const { questions, layer1Results, layer1Chunks, domainTreeText } = args as {
+      questions: Array<{ id: string; type: string; content: string; options?: string[]; answer?: string; explanation?: string }>
+      layer1Results: Array<Record<string, unknown>>
+      layer1Chunks: Array<Array<Record<string, unknown>>>
+      domainTreeText?: string
+    }
+
+    const domainText = domainTreeText || formatDomainTreeAsText(db)
+    const domains = getFlatDomainList(db)
+    const domainNames = domains.map(d => d.name)
+
+    const providerCfg = buildProviderConfig()
+    console.log('AI classify: provider mode={}, domain_names={} items', providerCfg.mode, domainNames.length)
+
+    const resp = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/classify-question-tags`, {
+      method: 'POST',
+      body: JSON.stringify({
+        ai_config: providerCfg,
+        questions,
+        layer1_results: layer1Results,
+        layer1_chunks: layer1Chunks,
+        domain_tree_text: domainText,
+        domain_names: domainNames,
+      }),
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+    })
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => '')
+      console.error(`AI classify failed (${resp.status}):`, err)
+      throw new Error(`AI classify failed (${resp.status}): ${err}`)
+    }
+    const respJson = await resp.json()
+    console.log(`AI classify response: ${respJson.results?.length ?? 0} results, ai_classified=${respJson.ai_classified ?? 0}`)
+    return respJson
   })
 
   // Phase 3 - AI config
@@ -4014,29 +4331,41 @@ function registerIpcHandlers(): void {
   })
 
   registerHandler(IPC.AI_GENERATE_STUDY_PLAN, async (args) => {
-    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/generate-plan`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'AI plan generation failed' }))
-      throw Object.assign(new Error(err.detail ?? 'AI plan generation failed'), { code: 'AI_PLAN_GEN_FAILED' })
+    const taskId = randomUUID()
+    wsClient.connect(taskId)
+    try {
+      const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/generate-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+        body: JSON.stringify({ ai_config: buildProviderConfig(), task_id: taskId, ...(args as object) }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'AI plan generation failed' }))
+        throw Object.assign(new Error(err.detail ?? 'AI plan generation failed'), { code: 'AI_PLAN_GEN_FAILED' })
+      }
+      return res.json()
+    } finally {
+      wsClient.disconnect(taskId)
     }
-    return res.json()
   })
 
   registerHandler(IPC.AI_OPTIMIZE_PLAN, async (args) => {
-    const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/optimize-plan`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
-      body: JSON.stringify({ ai_config: buildProviderConfig(), ...(args as object) }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'AI plan optimization failed' }))
-      throw Object.assign(new Error(err.detail ?? 'AI plan optimization failed'), { code: 'AI_OPTIMIZE_FAILED' })
+    const taskId = randomUUID()
+    wsClient.connect(taskId)
+    try {
+      const res = await fetch(`http://127.0.0.1:${pythonManager.port}/ai/optimize-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Internal-Token': pythonManager.token },
+        body: JSON.stringify({ ai_config: buildProviderConfig(), task_id: taskId, ...(args as object) }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'AI plan optimization failed' }))
+        throw Object.assign(new Error(err.detail ?? 'AI plan optimization failed'), { code: 'AI_OPTIMIZE_FAILED' })
+      }
+      return res.json()
+    } finally {
+      wsClient.disconnect(taskId)
     }
-    return res.json()
   })
 
   // Phase 4 - Study Plans
@@ -4529,8 +4858,12 @@ app.whenReady().then(async () => {
   mainWindow = createWindow()
   mainWindow.on('closed', () => {
     mainWindow = null
-    cleanupAppResources()
-    if (process.platform !== 'darwin') app.quit()
+    // Windows/Linux：窗口关闭即退出应用，在这里清理资源。
+    // macOS：关闭窗口通常只是隐藏窗口，保留在 Dock；清理留到 before-quit。
+    if (process.platform !== 'darwin') {
+      cleanupAppResources()
+      app.quit()
+    }
   })
 
   pythonManager.start(mainWindow).then(() => {
@@ -4557,11 +4890,20 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
+  console.log('[App] before-quit event')
   cleanupAppResources()
 })
 
 app.on('window-all-closed', () => {
-  cleanupAppResources()
-  if (process.platform !== 'darwin') app.quit()
+  console.log('[App] window-all-closed event')
+  // macOS 上通常保持应用在后台运行；其他平台退出应用。
+  // 实际清理在 before-quit / closed 中完成，避免重复调用。
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+
+app.on('quit', () => {
+  console.log('[App] quit event — process exiting')
 })
 

@@ -122,39 +122,358 @@ def classify_knowledge_tags(text: str) -> list[str]:
     return tags[:3]
 
 
-def chunk_text(text: str, page_num: int, doc_id: str, min_length: int = 50) -> list[dict]:
+# ─── A1: Noise page detection ─────────────────────────────────────────────────
+
+PREFACE_KEYWORDS = ["前言", "序言", "编写说明", "编者按", "如何使用本书", "致谢", "出版说明"]
+COPYRIGHT_KEYWORDS = ["ISBN", "CIP", "版权所有", "版次", "印刷", "定价", "开本", "印张", "字数"]
+APPENDIX_KEYWORDS = ["附录", "参考文献", "参考书目", "索引", "名词索引"]
+
+TOC_DOTS_PATTERN = re.compile(r'…+\s*\d+\s*$|\.{3,}\s*\d+\s*$', re.MULTILINE)
+CHAPTER_COUNT_PATTERN = re.compile(r'第[一二三四五六七八九十\d]+章')
+
+
+def is_noise_page(text: str, page_num: int, total_pages: int) -> tuple[bool, str]:
+    """返回 (是否噪音, 噪音类型)
+
+    噪音类型: toc / preface / copyright / chapter_title / appendix
+    """
+    # 目录页检测
+    if TOC_DOTS_PATTERN.search(text) or "目录" in text[:50]:
+        chapters = CHAPTER_COUNT_PATTERN.findall(text)
+        if len(chapters) >= 3 or "目录" in text[:50]:
+            return True, "toc"
+
+    # 前言页检测
+    early_pages = max(15, int(total_pages * 0.05))
+    if page_num <= early_pages:
+        if any(kw in text for kw in PREFACE_KEYWORDS):
+            # 检查是否包含技术关键词
+            has_tech = any(
+                any(keyword in text.lower() for keyword in keywords)
+                for keywords in KNOWLEDGE_TAG_KEYWORDS.values()
+            )
+            if not has_tech:
+                return True, "preface"
+
+    # 版权页检测
+    copyright_hits = sum(1 for kw in COPYRIGHT_KEYWORDS if kw in text)
+    if copyright_hits >= 3:
+        return True, "copyright"
+
+    # 章标题页
+    if len(text.strip()) < 100 and CHAPTER_COUNT_PATTERN.search(text):
+        return True, "chapter_title"
+
+    # 附录/索引页
+    late_pages = max(10, int(total_pages * 0.05))
+    if page_num >= total_pages - late_pages:
+        if any(kw in text[:100] for kw in APPENDIX_KEYWORDS):
+            return True, "appendix"
+
+    return False, ""
+
+
+# ─── A2: Graded keyword matching ──────────────────────────────────────────────
+
+# 关键词特异性权重常量
+HIGH_SPECIFICITY = 3.0
+MEDIUM_SPECIFICITY = 1.5
+LOW_SPECIFICITY = 0.5
+
+# 默认通用词权重阈值（长关键词 > 5 字符视为高特异性，3-5 字符中特异性，其他低特异性）
+_MIN_HIGH_CHARS = 6
+_MIN_MEDIUM_CHARS = 3
+
+
+def _auto_grade_keywords(keywords: list[str]) -> dict[str, list[tuple[str, float]]]:
+    """将平铺关键词列表自动划分 high / medium / low 三级并附加权重。
+
+    启发式规则：
+      - 含中文且 >= 4 个汉字 → high (3.0)
+      - 纯英文/数字且长度 >= 6 → high (3.0)
+      - 否则长度 >= 3 → medium (1.5)
+      - 其余 → low (0.5)
+    """
+    graded: dict[str, list[tuple[str, float]]] = {"high": [], "medium": [], "low": []}
+    for kw in keywords:
+        # 中文字符计数
+        cjk = sum(1 for ch in kw if '一' <= ch <= '鿿')
+        if cjk >= 4:
+            graded["high"].append((kw, HIGH_SPECIFICITY))
+        elif kw.isascii() and len(kw) >= _MIN_HIGH_CHARS:
+            graded["high"].append((kw, HIGH_SPECIFICITY))
+        elif len(kw) >= _MIN_MEDIUM_CHARS:
+            graded["medium"].append((kw, MEDIUM_SPECIFICITY))
+        else:
+            graded["low"].append((kw, LOW_SPECIFICITY))
+    return graded
+
+
+# 构建分级关键词字典（从现有 KNOWLEDGE_TAG_KEYWORDS 自动分级）
+KNOWLEDGE_TAG_KEYWORDS_V2: dict[str, dict[str, list[tuple[str, float]]]] = {
+    tag: _auto_grade_keywords(kws) for tag, kws in KNOWLEDGE_TAG_KEYWORDS.items()
+}
+
+# 负向条件：常见歧义词需要额外验证上下文
+NEGATIVE_CONDITIONS: dict[str, dict] = {
+    "进程": {
+        "require_any": ["操作系统", "死锁", "PCB", "调度", "信号量", "PV操作", "线程", "处理机"],
+        "else_tag": None,
+    },
+    "索引": {
+        "require_any": ["数据库", "SQL", "B+树", "查询优化", "哈希", "事务"],
+        "else_tag": None,
+    },
+    "架构": {
+        "require_any": ["软件架构", "架构设计", "架构风格", "ATAM", "架构评估", "4+1"],
+        "else_tag": "系统设计",
+    },
+    "系统": {
+        "require_any": ["系统设计", "系统规划", "系统架构", "体系结构", "模块"],
+        "else_tag": None,
+    },
+    "安全": {
+        "require_any": ["加密", "认证", "防火墙", "漏洞", "审计", "数据安全"],
+        "else_tag": None,
+    },
+    "网络": {
+        "require_any": ["TCP", "IP", "路由", "HTTP", "OSI", "协议", "子网", "DNS"],
+        "else_tag": None,
+    },
+    "测试": {
+        "require_any": ["单元测试", "集成测试", "测试用例", "覆盖率", "自动化测试", "软件测试"],
+        "else_tag": None,
+    },
+    "可靠性": {
+        "require_any": ["MTBF", "MTTR", "容错", "冗余", "备份", "故障", "高可用", "熔断"],
+        "else_tag": None,
+    },
+}
+
+
+def classify_knowledge_tags_v2(text: str) -> tuple[list[str], float]:
+    """返回 (标签列表, 整体置信度)
+
+    使用分级关键词匹配 + 负向条件过滤，比 v1 有更好的去噪能力。
+    """
+    text_lower = text.lower()
+    tag_scores: dict[str, float] = {}
+
+    for tag, weight_groups in KNOWLEDGE_TAG_KEYWORDS_V2.items():
+        total_weight = 0.0
+        hit_weight = 0.0
+
+        for tier, keywords in weight_groups.items():
+            w = {
+                "high": HIGH_SPECIFICITY,
+                "medium": MEDIUM_SPECIFICITY,
+                "low": LOW_SPECIFICITY,
+            }[tier]
+
+            for keyword, kw_weight in keywords:
+                total_weight += kw_weight
+                if keyword in text_lower:
+                    # 检查负向条件
+                    if keyword in NEGATIVE_CONDITIONS:
+                        cond = NEGATIVE_CONDITIONS[keyword]
+                        if not any(req.lower() in text_lower for req in cond["require_any"]):
+                            continue
+                    hit_weight += kw_weight
+
+        if total_weight > 0:
+            score = hit_weight / total_weight
+            if score >= 0.10:  # 最低阈值
+                tag_scores[tag] = score
+
+    sorted_tags = sorted(tag_scores.items(), key=lambda x: x[1], reverse=True)
+    selected = sorted_tags[:3]
+
+    tags = [t[0] for t in selected]
+    confidence = selected[0][1] if selected else 0.0
+
+    return tags, confidence
+
+
+# ─── C: Confidence scoring ────────────────────────────────────────────────────
+
+
+def _compute_position_score(
+    is_noise: bool, noise_type: str, page_num: int, total_pages: int, text_len: int
+) -> float:
+    """页面位置评分 (0-1)"""
+    if is_noise:
+        return 0.0
+    if text_len < 100:
+        return 0.0
+
+    ratio = page_num / max(total_pages, 1)
+
+    if ratio <= 0.05:
+        return 0.3
+    if ratio <= 0.10:
+        return 0.6
+    if ratio <= 0.90:
+        return 1.0
+    return 0.5
+
+
+def _compute_keyword_score(tags: list[str], tag_confidences: dict[str, float]) -> float:
+    """关键词匹配评分 (0-1)，直接复用 classify 阶段的 top-1 置信度"""
+    if not tags:
+        return 0.0
+    top_conf = tag_confidences.get(tags[0], 0.0)
+    return min(1.0, top_conf)
+
+
+def _compute_content_score(text: str, chunk_type: str = "text") -> float:
+    """内容质量评分 (0-1)"""
+    text_len = len(text)
+
+    # 长度评分
+    if text_len >= 200:
+        length_score = 1.0
+    elif text_len >= 100:
+        length_score = 0.8
+    elif text_len >= 50:
+        length_score = 0.5
+    else:
+        length_score = 0.3
+
+    # 特殊字符占比
+    special_chars = sum(1 for ch in text if not ch.isalnum() and not ch.isspace())
+    special_ratio = special_chars / max(text_len, 1)
+    if special_ratio > 0.4:
+        length_score *= 0.75
+
+    # 按 chunk_type 调整
+    if chunk_type == "table":
+        return length_score * 0.9
+    if chunk_type == "figure":
+        return length_score * 0.6
+    return length_score
+
+
+def compute_chunk_confidence(
+    tags: list[str],
+    tag_confidences: dict[str, float],
+    page_num: int,
+    total_pages: int,
+    text: str,
+    chunk_type: str = "text",
+    noise_type: str = "",
+    neighbor_tags: list[str] | None = None,
+) -> float:
+    """计算 chunk 标签的整体置信度 (0-1)
+
+    公式:
+      position_score   × 0.25
+      + keyword_score  × 0.40
+      + neighbor_score × 0.20
+      + content_score  × 0.15
+
+    neighbor_tags 在解析时可为 None（邻居尚未就绪），此时 neighbor_score 取 0.5。
+    """
+    is_noise = bool(noise_type and noise_type != "")
+
+    position_score = _compute_position_score(is_noise, noise_type, page_num, total_pages, len(text))
+    keyword_score = _compute_keyword_score(tags, tag_confidences)
+    content_score = _compute_content_score(text, chunk_type)
+
+    # 邻居一致性分
+    if is_noise:
+        neighbor_score = 0.0
+    elif neighbor_tags is None:
+        neighbor_score = 0.5  # 解析时无邻居信息，默认中性值
+    elif not tags:
+        neighbor_score = 0.5
+    elif not neighbor_tags:
+        neighbor_score = 1.0  # 邻居均无标签（可能是独立主题），不惩罚
+    else:
+        shared = sum(1 for tag in tags if tag in neighbor_tags)
+        neighbor_score = shared / max(len(tags), 1)
+
+    confidence = (
+        position_score * 0.25
+        + keyword_score * 0.40
+        + neighbor_score * 0.20
+        + content_score * 0.15
+    )
+    return round(min(1.0, max(0.0, confidence)), 4)
+
+
+# ─── Modified chunk_text (uses v2 classifier + noise detection) ────────────────
+
+
+def chunk_text(
+    text: str,
+    page_num: int,
+    doc_id: str,
+    min_length: int = 50,
+    total_pages: int | None = None,
+) -> list[dict]:
     chunks: list[dict] = []
+
+    # 噪声页面检测
+    effective_total = total_pages or page_num  # fallback: assume single-page if unknown
+    is_noise, noise_type = is_noise_page(text, page_num, effective_total)
+
     paragraphs = re.split(r"\n{2,}|(?=第[一二三四五六七八九十\d]+[章节])", text)
     for paragraph in paragraphs:
         paragraph = paragraph.strip()
         if len(paragraph) < min_length:
             continue
+        tags, tag_conf = classify_knowledge_tags_v2(paragraph)
+        if is_noise:
+            tags, tag_conf = [], 0.0
+        confidence = compute_chunk_confidence(
+            tags,
+            {tags[0]: tag_conf} if tags else {},
+            page_num,
+            effective_total,
+            paragraph,
+            "text",
+            noise_type,
+        )
         chunks.append(
             {
                 "doc_id": doc_id,
                 "page_num": page_num,
                 "content": paragraph[:2000],
-                "knowledge_tags": classify_knowledge_tags(paragraph),
+                "knowledge_tags": tags,
                 "chunk_type": "text",
                 "source_engine": "",
-                "confidence": None,
+                "confidence": confidence,
                 "block_order": 0,
                 "bbox": None,
+                "_noise_type": noise_type,
             }
         )
 
     if not chunks and len(text.strip()) >= min_length:
+        tags, tag_conf = classify_knowledge_tags_v2(text)
+        if is_noise:
+            tags, tag_conf = [], 0.0
+        confidence = compute_chunk_confidence(
+            tags,
+            {tags[0]: tag_conf} if tags else {},
+            page_num,
+            effective_total,
+            text,
+            "text",
+            noise_type,
+        )
         chunks.append(
             {
                 "doc_id": doc_id,
                 "page_num": page_num,
                 "content": text.strip()[:2000],
-                "knowledge_tags": classify_knowledge_tags(text),
+                "knowledge_tags": tags,
                 "chunk_type": "text",
                 "source_engine": "",
-                "confidence": None,
+                "confidence": confidence,
                 "block_order": 0,
                 "bbox": None,
+                "_noise_type": noise_type,
             }
         )
     return chunks
@@ -495,6 +814,9 @@ def parse_pdf_pages(
                         bottom_margin_ratio,
                     )
 
+                    # 噪声页面检测（整页只执行一次）
+                    page_is_noise, page_noise_type = is_noise_page(text, page_num, page_count)
+
                     # 表格提取
                     table_blocks = []
                     if extract_tables:
@@ -525,15 +847,20 @@ def parse_pdf_pages(
                                 assets.append(table_asset)
                                 table_asset_id = table_asset["id"]
 
+                        # 使用 v2 分类器（噪声页直接标空）
+                        if page_is_noise:
+                            tb_tags, tb_confidence = [], 0.0
+                        else:
+                            tb_tags, tb_confidence = classify_knowledge_tags_v2(tb["content"])
                         all_chunks.append({
                             "doc_id": doc_id,
                             "page_num": page_num,
                             "content": tb["content"],
-                            "knowledge_tags": classify_knowledge_tags(tb["content"]),
+                            "knowledge_tags": tb_tags,
                             "chunk_type": tb["chunk_type"],
                             "asset_id": table_asset_id,
                             "source_engine": tb["source_engine"],
-                            "confidence": tb["confidence"],
+                            "confidence": tb_confidence,
                             "block_order": tb["block_order"],
                             "bbox": json.dumps(tb["bbox"], ensure_ascii=False),
                         })
@@ -556,11 +883,17 @@ def parse_pdf_pages(
                                     "doc_id": doc_id,
                                     "page_num": page_num,
                                     "content": figure_content[:2000],
-                                    "knowledge_tags": classify_knowledge_tags(figure_result["content"]),
+                                    "knowledge_tags": (
+                                        [] if page_is_noise
+                                        else classify_knowledge_tags_v2(figure_result["content"])[0]
+                                    ),
                                     "chunk_type": "figure",
                                     "asset_id": page_asset_id,
                                     "source_engine": figure_result["source_engine"],
-                                    "confidence": figure_result["confidence"],
+                                    "confidence": (
+                                        0.0 if page_is_noise
+                                        else figure_result["confidence"]
+                                    ),
                                     "block_order": 2,
                                     "bbox": "{}",
                                 })
@@ -578,7 +911,7 @@ def parse_pdf_pages(
 
                 engines_used.add(engine)
                 if not has_sparse_text(text):
-                    text_chunks = chunk_text(text, page_num, doc_id)
+                    text_chunks = chunk_text(text, page_num, doc_id, total_pages=page_count)
                     for tc in text_chunks:
                         if page_asset_id:
                             tc["asset_id"] = page_asset_id
@@ -598,6 +931,10 @@ def parse_pdf_pages(
                         })
                     except Exception as exc:
                         logger.warning("on_page_done callback failed for page {}: {}", page_num, exc)
+
+        # 清理内部字段，仅保留 DB 所需的键
+        for c in all_chunks:
+            c.pop("_noise_type", None)
 
         return {
             "doc_id": doc_id,
@@ -924,3 +1261,43 @@ async def get_md5(req: CheckCacheRequest):
         for chunk in iter(lambda: file_obj.read(8192), b""):
             md5_hash.update(chunk)
     return {"md5": md5_hash.hexdigest()}
+
+
+# ─── Phase 0: Document tag cleaning endpoints ─────────────────────────────────
+
+class CleanChunksRequest(BaseModel):
+    """批量清洗 chunk 标签的请求。"""
+    chunks: list[dict]  # 每个 dict 至少含 content, page_num, id(opt), chunk_type(opt)
+    total_pages: int
+
+
+class CleanChunksResponse(BaseModel):
+    cleaned_chunks: list[dict]
+    report: dict
+    needs_ai: list[dict]  # 需要 AI 重分类的低置信度 chunk
+
+
+@router.post("/clean-chunks", response_model=CleanChunksResponse)
+async def clean_chunks(req: CleanChunksRequest):
+    """对给定 chunk 列表执行标签清洗，返回清洗结果和报告。"""
+    from modules.pdf.cleaner import clean_chunks_batch, generate_cleaning_report, get_chunks_needing_ai
+
+    try:
+        results = clean_chunks_batch(req.chunks, req.total_pages)
+        report = generate_cleaning_report(results)
+        needs_ai = get_chunks_needing_ai(results)
+        logger.info(
+            "Cleaned {} chunks: noise={}, low_conf={}, needs_ai={}",
+            len(results),
+            report.get("noise_cleared", {}),
+            report.get("actions", {}).get("low_confidence_cleared", 0),
+            len(needs_ai),
+        )
+        return CleanChunksResponse(
+            cleaned_chunks=results,
+            report=report,
+            needs_ai=needs_ai,
+        )
+    except Exception as exc:
+        logger.exception("Chunk cleaning failed")
+        raise HTTPException(status_code=500, detail=f"清洗失败: {exc}")

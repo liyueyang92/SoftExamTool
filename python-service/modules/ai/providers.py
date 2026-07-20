@@ -100,7 +100,7 @@ class OpenAICompatProvider:
         return f'{self.base_url}{path}'
 
     async def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 resp = await client.post(
                     self._url('/chat/completions'),
@@ -159,7 +159,7 @@ class OllamaProvider:
         self.model = model
 
     async def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 resp = await client.post(
                     f'{self.base_url}/api/chat',
@@ -227,7 +227,7 @@ class AnthropicProvider:
         if system:
             payload['system'] = system
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 resp = await client.post(
                     'https://api.anthropic.com/v1/messages',

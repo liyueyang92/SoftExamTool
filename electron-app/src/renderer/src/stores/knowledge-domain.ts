@@ -23,11 +23,29 @@ export const useKnowledgeDomainStore = defineStore('knowledgeDomain', () => {
   const flatList = ref<Array<{ id: string; parent_id: string | null; name: string; level: number }>>([])
   const loading = ref(false)
 
+  // Tree expand state — plain ref with full-object replacement to guarantee reactivity
+  const expandedIds = ref<Record<string, boolean>>({})
+
+  function toggleExpand(id: string) {
+    expandedIds.value = { ...expandedIds.value, [id]: !expandedIds.value[id] }
+  }
+
+  function expandL1Nodes() {
+    const next: Record<string, boolean> = {}
+    for (const n of tree.value) {
+      next[n.id] = true
+    }
+    expandedIds.value = next
+  }
+
   async function loadTree() {
     loading.value = true
     try {
       const res = await window.electronAPI.getDomainTree()
-      if (res.success) tree.value = res.data
+      if (res.success) {
+        tree.value = res.data
+        expandL1Nodes()
+      }
     } finally {
       loading.value = false
     }
@@ -71,5 +89,5 @@ export const useKnowledgeDomainStore = defineStore('knowledgeDomain', () => {
     return []
   }
 
-  return { tree, flatList, loading, loadTree, loadFlatList, importOutline, upsert, batchUpsert, remove, getChunksForDocs }
+  return { tree, flatList, loading, expandedIds, toggleExpand, loadTree, loadFlatList, importOutline, upsert, batchUpsert, remove, getChunksForDocs }
 })

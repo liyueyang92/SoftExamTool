@@ -95,6 +95,10 @@ const customAPI = {
     invokeWithTimeout<Record<string, unknown>>('question:getStats'),
   listKnowledgeTags: () =>
     invokeWithTimeout<string[]>('question:listTags'),
+  applyAutoTags: (args: { results: Array<{ question_id: string; knowledge_tags: string[]; confidence: number[]; source: string; reasoning?: string }> }) =>
+    invokeWithTimeout<{ updated: number; history_count: number; synced_count: number }>('question:applyAutoTags', args),
+  getQuestionTagHistory: (questionId: string) =>
+    invokeWithTimeout<unknown[]>('question:getTagHistory', questionId),
   exportQuestions: (args: { filter?: Record<string, unknown> }) =>
     invokeWithTimeout<{ count: number; filePath: string; imageCount?: number }>('question:export', args, 60_000),
   importQuestionsFile: (args: { group_id?: string | null; new_group?: unknown | null; group_type?: string }) =>
@@ -163,6 +167,20 @@ const customAPI = {
   getDocAssets: (docId: string) => invokeWithTimeout<unknown[]>('doc:getAssets', docId),
   setDocumentOfficial: (args: { docId: string; isOfficial: boolean }) =>
     invokeWithTimeout<{ is_official: boolean }>('doc:setOfficial', args),
+  cleanDocChunks: (args: { docId: string }) =>
+    invokeWithTimeout<{
+      cleaned_chunks: unknown[]
+      report: unknown | null
+      needs_ai: unknown[]
+      updated: number
+      corrections: number
+    }>('doc:cleanChunks', args, 120_000),
+  updateChunkTags: (args: { chunkId: string; tags: string[]; confidence: number | null }) =>
+    invokeWithTimeout<{ success: boolean }>('doc:updateChunkTags', args),
+  getCleaningLogs: (docId: string) =>
+    invokeWithTimeout<unknown[]>('doc:getCleaningLogs', docId),
+  rollbackCleaning: (args: { cleaningLogId: string }) =>
+    invokeWithTimeout<{ rolled_back: number }>('doc:rollbackCleaning', args),
   searchDocChunks: (args: { query: string; limit?: number; docId?: string }) =>
     invokeWithTimeout<unknown[]>('doc:searchChunks', args),
   updateDocChunk: (chunkId: string, content: string) =>
@@ -371,9 +389,42 @@ const customAPI = {
   aiDailyRecommendation: (args: unknown) =>
     invokeWithTimeout<{ recommended_task: unknown; reason: string }>('ai:dailyRecommendation', args, 30_000),
   aiGenerateStudyPlan: (args: unknown) =>
-    invokeWithTimeout<{ plan_name: string; daily_schedule: unknown[]; total_days: number }>('ai:generateStudyPlan', args, 120_000),
+    invokeWithTimeout<{ plan_name: string; daily_schedule: unknown[]; total_days: number }>('ai:generateStudyPlan', args, 300_000),
   aiOptimizePlan: (args: unknown) =>
-    invokeWithTimeout<{ daily_schedule: unknown[]; total_days: number }>('ai:optimizePlan', args, 120_000),
+    invokeWithTimeout<{ daily_schedule: unknown[]; total_days: number }>('ai:optimizePlan', args, 300_000),
+  aiReclassifyChunk: (args: {
+    chunkContent: string
+    neighborContents?: string[]
+    domainTreeText?: string
+  }) =>
+    invokeWithTimeout<{ knowledge_tags: string[]; confidence: number[]; reasoning: string }>(
+      'ai:reclassifyChunk', args, 60_000
+    ),
+  aiReclassifyChunkBatch: (args: {
+    chunks: Array<{ id: string; content: string; neighbor_contents?: string[] }>
+    domainTreeText?: string
+  }) =>
+    invokeWithTimeout<{ results: unknown[]; total: number; success: number }>(
+      'ai:reclassifyChunkBatch', args, 300_000
+    ),
+  autoTagQuestions: (args: {
+    questions: Array<{ id: string; type?: string; content: string; options?: string[]; answer?: string; explanation?: string; content_hash?: string; question_set_id?: string }>
+    minConfidence?: number
+  }) =>
+    invokeWithTimeout<{
+      results: unknown[]
+      summary: { total: number; auto_tagged: number; needs_ai: number; none_tagged: number; ai_tagged?: number; keyword_tagged?: number; fts_tagged?: number }
+      search_results: unknown[][]
+    }>('ai:autoTagQuestions', args, 300_000),
+  classifyQuestionTags: (args: {
+    questions: Array<{ id: string; type: string; content: string; options?: string[]; answer?: string; explanation?: string }>
+    layer1Results: unknown[]
+    layer1Chunks: unknown[][]
+    domainTreeText?: string
+  }) =>
+    invokeWithTimeout<{ results: unknown[]; ai_classified: number }>(
+      'ai:classifyQuestionTags', args, 120_000
+    ),
 
   // ─── Notifications ───────────────────────────────────────────────────────
   listNotifications: (args?: { isRead?: number; limit?: number }) =>

@@ -60,6 +60,22 @@ export interface AdaptAdjustment {
   reason: string
 }
 
+export interface AiOptimizeSummary {
+  total_days: number
+  days_changed: number
+  duplicates_removed: number
+  task_type_counts_before: Record<string, number>
+  task_type_counts_after: Record<string, number>
+  domain_count_before: number
+  domain_count_after: number
+  highlights: string[]
+  sample_changes: Array<{
+    date: string
+    added_domains: string[]
+    removed_domains: string[]
+  }>
+}
+
 export interface StudySession {
   id: string
   plan_task_id: string | null
@@ -77,6 +93,8 @@ export const usePlanStore = defineStore('plan', () => {
   const calendarData = ref<CalendarDay[]>([])
   const adaptAdjustments = ref<AdaptAdjustment[]>([])
   const activeSessions = ref<StudySession[]>([])
+  const lastOptimizeSummary = ref<AiOptimizeSummary | null>(null)
+  const pendingOptimizedSchedule = ref<unknown[] | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -232,7 +250,7 @@ export const usePlanStore = defineStore('plan', () => {
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([date, tasks]) => ({ date, tasks }))
 
-      // Call AI to optimize
+      // Call AI to optimize — returns schedule + summary, does NOT apply yet
       const aiRes = await window.electronAPI.aiOptimizePlan({
         daily_schedule: currentSchedule,
         domains,
@@ -241,15 +259,43 @@ export const usePlanStore = defineStore('plan', () => {
       })
       if (!aiRes.success) throw new Error((aiRes.error as { message?: string })?.message ?? 'AI 优化失败')
 
-      const { daily_schedule } = aiRes.data as { daily_schedule: unknown[] }
+      const { daily_schedule, total_days: newTotalDays, changes_summary } = aiRes.data as {
+        daily_schedule: unknown[]
+        total_days?: number
+        changes_summary?: AiOptimizeSummary
+      }
 
-      // Apply optimized schedule
-      const applyRes = await window.electronAPI.applyAiSchedule({
+      // Store for preview — user must explicitly "apply" or "discard"
+      pendingOptimizedSchedule.value = daily_schedule
+
+      // Use the actual new schedule length as the authoritative total_days,
+      // since changes_summary.total_days compares old vs new and may show
+      // the old (truncated) count
+      if (changes_summary && newTotalDays) {
+        changes_summary.total_days = newTotalDays
+      }
+      lastOptimizeSummary.value = (changes_summary as AiOptimizeSummary) ?? null
+    } catch (e) {
+      error.value = (e as Error).message
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 应用 AI 优化后的计划（用户点了"应用优化"） */
+  async function applyOptimizedPlan(): Promise<void> {
+    if (!activePlan.value || !pendingOptimizedSchedule.value) return
+    loading.value = true
+    error.value = null
+    try {
+      const applyRes = await window.electronAPI.applyAiSchedule(toIpcPayload({
         planId: activePlan.value.id,
-        dailySchedule: daily_schedule,
-      })
+        dailySchedule: pendingOptimizedSchedule.value,
+      }))
       if (!applyRes.success) throw new Error('应用优化计划失败')
 
+      pendingOptimizedSchedule.value = null
       await Promise.all([loadTodayTasks(), loadAllTasks(), loadStats()])
     } catch (e) {
       error.value = (e as Error).message
@@ -257,6 +303,12 @@ export const usePlanStore = defineStore('plan', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  /** 放弃 AI 优化结果 */
+  function discardOptimizedPlan(): void {
+    pendingOptimizedSchedule.value = null
+    lastOptimizeSummary.value = null
   }
 
   async function deletePlan(): Promise<void> {
@@ -317,6 +369,8 @@ export const usePlanStore = defineStore('plan', () => {
     calendarData,
     adaptAdjustments,
     activeSessions,
+    lastOptimizeSummary,
+    pendingOptimizedSchedule,
     loading,
     error,
     examDaysLeft,
@@ -330,6 +384,8 @@ export const usePlanStore = defineStore('plan', () => {
     createPlan,
     createPlanWithAi,
     optimizePlanWithAi,
+    applyOptimizedPlan,
+    discardOptimizedPlan,
     deletePlan,
     completeTask,
     startTaskProgress,

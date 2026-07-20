@@ -102,6 +102,15 @@ declare global {
       toggleFavorite: (id: string) => Promise<IpcResponse<{ is_favorite: number }>>
       getQuestionStats: () => Promise<IpcResponse<Record<string, unknown>>>
       listKnowledgeTags: () => Promise<IpcResponse<string[]>>
+      applyAutoTags: (args: {
+        results: Array<{
+          question_id: string
+          knowledge_tags: string[]
+          confidence: number[]
+          source: string
+          reasoning?: string
+        }>
+      }) => Promise<IpcResponse<{ updated: number; history_count: number; synced_count: number }>>
       exportQuestions: (args: { filter?: Record<string, unknown> }) => Promise<IpcResponse<{ count: number; filePath: string; imageCount?: number }>>
       importQuestionsFile: (args: { group_id?: string | null; new_group?: unknown | null; group_type?: string }) => Promise<IpcResponse<{ count: number; imageCount?: number }>>
 
@@ -142,6 +151,31 @@ declare global {
       getAiConfig: () => Promise<IpcResponse<Record<string, unknown>>>
       setAiConfig: (args: unknown) => Promise<IpcResponse<void>>
       testAiConnection: (args?: unknown) => Promise<IpcResponse<{ ok: boolean; reply: string }>>
+      autoTagQuestions: (args: {
+        questions: Array<{
+          id: string
+          type?: string
+          content: string
+          options?: string[]
+          answer?: string
+          explanation?: string
+          content_hash?: string
+          question_set_id?: string
+        }>
+        minConfidence?: number
+      }) => Promise<IpcResponse<{
+        results: unknown[]
+        summary: {
+          total: number
+          auto_tagged: number
+          ai_tagged?: number
+          keyword_tagged?: number
+          fts_tagged?: number
+          needs_ai: number
+          none_tagged: number
+        }
+        search_results: unknown[][]
+      }>>
       generateQuestions: (args: unknown) => Promise<IpcResponse<{ questions: unknown[]; target_group_id?: string | null; new_group?: unknown | null }>>
       gradeEssay: (args: unknown) => Promise<IpcResponse<unknown>>
       aiGenerateStudyPlan: (args: unknown) => Promise<IpcResponse<{ plan_name: string; daily_schedule: unknown[]; total_days: number }>>

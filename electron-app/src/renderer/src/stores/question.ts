@@ -72,6 +72,7 @@ export interface QuestionFilter {
   difficulty?: number
   source_type?: string
   knowledge_tag?: string
+  has_knowledge_tags?: boolean
   is_favorite?: boolean
   has_images?: boolean
   has_img_tags?: boolean
@@ -235,6 +236,7 @@ export const useQuestionStore = defineStore('question', () => {
       f.difficulty !== undefined ||
       f.source_type !== undefined ||
       f.knowledge_tag !== undefined ||
+      f.has_knowledge_tags !== undefined ||
       f.is_favorite !== undefined ||
       f.has_images !== undefined ||
       f.has_img_tags !== undefined

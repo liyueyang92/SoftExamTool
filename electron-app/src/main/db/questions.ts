@@ -53,6 +53,7 @@ export interface QueryFilter {
   difficulty?: number
   source_type?: string
   knowledge_tag?: string
+  has_knowledge_tags?: boolean
   is_favorite?: boolean
   has_images?: boolean
   has_img_tags?: boolean
@@ -385,6 +386,7 @@ function buildFilterConditions(filter: QueryFilter): { conditions: string[]; par
     difficulty,
     source_type,
     knowledge_tag,
+    has_knowledge_tags,
     is_favorite,
     has_images,
     has_img_tags,
@@ -401,6 +403,13 @@ function buildFilterConditions(filter: QueryFilter): { conditions: string[]; par
   if (difficulty) { conditions.push('q.difficulty = ?'); params.push(difficulty) }
   if (source_type) { conditions.push('q.source_type = ?'); params.push(source_type) }
   if (knowledge_tag) { conditions.push('q.knowledge_tags LIKE ?'); params.push(`%${knowledge_tag}%`) }
+  if (has_knowledge_tags !== undefined) {
+    if (has_knowledge_tags) {
+      conditions.push("q.knowledge_tags IS NOT NULL AND q.knowledge_tags != '[]'")
+    } else {
+      conditions.push("(q.knowledge_tags IS NULL OR q.knowledge_tags = '[]')")
+    }
+  }
   if (is_favorite) { conditions.push('q.is_favorite = 1') }
   if (has_images !== undefined) {
     if (has_images) {
@@ -496,4 +505,120 @@ export function getWrongQuestions(db: Database.Database, limit = 50): Question[]
     )
   `).all(limit) as Record<string, unknown>[]
   return rows.map(parseQuestion)
+}
+
+// ─── Phase 2/3: Question tag history ─────────────────────────────────────────
+
+/**
+ * 批量更新题目的 knowledge_tags 并记录标注历史。
+ * 若某题属于 question_set_id，会将其标签同步给同组尚未标注的兄弟题。
+ */
+export function applyAutoTagResults(
+  db: Database.Database,
+  results: Array<{
+    question_id: string
+    knowledge_tags: string[]
+    confidence: number[]
+    source: string
+    reasoning?: string
+  }>,
+): { updated: number; history_count: number; synced_count: number } {
+  const getQuestion = db.prepare('SELECT knowledge_tags, question_set_id FROM questions WHERE id = ?')
+  const getSiblings = db.prepare(`
+    SELECT id, knowledge_tags
+    FROM questions
+    WHERE question_set_id = ? AND id != ? AND (knowledge_tags IS NULL OR knowledge_tags = '[]')
+  `)
+  const updateTags = db.prepare('UPDATE questions SET knowledge_tags = ? WHERE id = ?')
+  const insertHistory = db.prepare(`
+    INSERT INTO question_tag_history (id, question_id, old_tags, new_tags, source, confidence, details)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  let updated = 0
+  let history_count = 0
+  let synced_count = 0
+  const syncedIds = new Set<string>()
+
+  const apply = db.transaction(() => {
+    for (const r of results) {
+      if (!r.question_id) {
+        console.log('[applyAutoTagResults] skip: missing question_id')
+        continue
+      }
+      const q = getQuestion.get(r.question_id) as { knowledge_tags: string; question_set_id: string | null } | undefined
+      if (!q) {
+        console.log(`[applyAutoTagResults] skip: question not found ${r.question_id}`)
+        continue
+      }
+
+      const oldTags = q.knowledge_tags || '[]'
+      const newTags = JSON.stringify(r.knowledge_tags)
+
+      // 跳过无变化的结果
+      if (oldTags === newTags) {
+        console.log(`[applyAutoTagResults] skip: no change for ${r.question_id}`)
+        continue
+      }
+
+      console.log(`[applyAutoTagResults] updating ${r.question_id}: ${oldTags} -> ${newTags}`)
+
+      updateTags.run(newTags, r.question_id)
+      updated++
+
+      const overallConf = r.confidence && r.confidence.length > 0
+        ? r.confidence.reduce((a: number, b: number) => a + b, 0) / r.confidence.length
+        : null
+
+      insertHistory.run(
+        randomUUID(),
+        r.question_id,
+        oldTags,
+        newTags,
+        r.source || 'fts_document',
+        overallConf,
+        r.reasoning ? JSON.stringify({ reasoning: r.reasoning }) : null,
+      )
+      history_count++
+
+      // 同步同 question_set_id 的未标注兄弟题
+      if (q.question_set_id && r.knowledge_tags.length > 0) {
+        const siblings = getSiblings.all(q.question_set_id, r.question_id) as Array<{ id: string; knowledge_tags: string }>
+        for (const sib of siblings) {
+          if (syncedIds.has(sib.id)) continue
+          const sibOldTags = sib.knowledge_tags || '[]'
+          updateTags.run(newTags, sib.id)
+          syncedIds.add(sib.id)
+          synced_count++
+          insertHistory.run(
+            randomUUID(),
+            sib.id,
+            sibOldTags,
+            newTags,
+            'question_set_sync',
+            overallConf,
+            JSON.stringify({ synced_from: r.question_id, source: r.source }),
+          )
+          history_count++
+        }
+      }
+    }
+  })
+  apply()
+
+  return { updated, history_count, synced_count }
+}
+
+/**
+ * 获取题目的标注历史。
+ */
+export function getQuestionTagHistory(
+  db: Database.Database,
+  questionId: string,
+): Array<Record<string, unknown>> {
+  return db.prepare(`
+    SELECT * FROM question_tag_history
+    WHERE question_id = ?
+    ORDER BY created_at DESC
+  `).all(questionId) as Array<Record<string, unknown>>
 }

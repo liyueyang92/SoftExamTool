@@ -723,4 +723,125 @@ ALTER TABLE plan_tasks ADD COLUMN linked_doc_ids TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE documents ADD COLUMN is_official INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  {
+    version: 23,
+    sql: `
+-- Phase 0: 知识点标签清洗与质量保障
+
+-- 标签修正记录（用于反馈闭环与回滚）
+CREATE TABLE IF NOT EXISTS tag_corrections (
+  id              TEXT PRIMARY KEY,
+  chunk_id        TEXT REFERENCES doc_chunks(id) ON DELETE CASCADE,
+  old_tags        TEXT NOT NULL,          -- JSON array
+  new_tags        TEXT NOT NULL,          -- JSON array
+  old_confidence  REAL,
+  new_confidence  REAL,
+  action          TEXT NOT NULL           -- 'noise_cleared' | 'reclassified' | 'low_confidence_cleared' | 'ai_corrected' | 'human_corrected' | 'confirm_empty' | 'confirm_original'
+    CHECK(action IN ('noise_cleared','reclassified','low_confidence_cleared','ai_corrected','human_corrected','confirm_empty','confirm_original')),
+  corrected_by    TEXT NOT NULL DEFAULT 'system',  -- 'system' | 'ai' | 'human'
+  pattern_tag     TEXT,                   -- 常见错误模式标记
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tag_corrections_chunk ON tag_corrections(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_tag_corrections_action ON tag_corrections(action);
+
+-- 清洗操作日志（用于可回滚设计）
+CREATE TABLE IF NOT EXISTS cleaning_log (
+  id              TEXT PRIMARY KEY,
+  doc_id          TEXT REFERENCES documents(id) ON DELETE CASCADE,
+  total_chunks    INTEGER NOT NULL DEFAULT 0,
+  noise_cleared   TEXT NOT NULL DEFAULT '{}',   -- JSON: {toc: N, preface: N, ...}
+  ai_reclassified INTEGER NOT NULL DEFAULT 0,
+  downgraded      INTEGER NOT NULL DEFAULT 0,
+  populated       INTEGER NOT NULL DEFAULT 0,
+  unchanged       INTEGER NOT NULL DEFAULT 0,
+  confidence_stats TEXT NOT NULL DEFAULT '{}',   -- JSON: {mean, median, p10, p90}
+  snapshot_ids    TEXT NOT NULL DEFAULT '[]',    -- JSON: 备份的 tag_corrections IDs
+  cleaned_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cleaning_log_doc ON cleaning_log(doc_id);
+
+-- 题目标注历史（Phase 2/3 使用，提前建表）
+CREATE TABLE IF NOT EXISTS question_tag_history (
+  id            TEXT PRIMARY KEY,
+  question_id   TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  old_tags      TEXT NOT NULL,          -- JSON array
+  new_tags      TEXT NOT NULL,          -- JSON array
+  source        TEXT NOT NULL           -- 'fts_document' | 'ai_classifier' | 'keyword_fallback' | 'manual' | 'question_set_sync'
+    CHECK(source IN ('fts_document','ai_classifier','keyword_fallback','manual','question_set_sync')),
+  confidence    REAL,
+  details       TEXT,                   -- JSON: source chunk info or AI reasoning
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_qth_question ON question_tag_history(question_id);
+CREATE INDEX IF NOT EXISTS idx_qth_source ON question_tag_history(source);
+`,
+  },
+  {
+    version: 24,
+    sql: `
+-- Phase 0 fix: 修复 tag_corrections CHECK 约束，增加 'low_confidence_cleared'
+-- SQLite 不支持 ALTER TABLE 修改 CHECK，需要用重建方式
+CREATE TABLE IF NOT EXISTS tag_corrections_v2 (
+  id              TEXT PRIMARY KEY,
+  chunk_id        TEXT REFERENCES doc_chunks(id) ON DELETE CASCADE,
+  old_tags        TEXT NOT NULL,
+  new_tags        TEXT NOT NULL,
+  old_confidence  REAL,
+  new_confidence  REAL,
+  action          TEXT NOT NULL
+    CHECK(action IN ('noise_cleared','reclassified','low_confidence_cleared','ai_corrected','human_corrected','confirm_empty','confirm_original')),
+  corrected_by    TEXT NOT NULL DEFAULT 'system',
+  pattern_tag     TEXT,
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- 检查旧表是否存在（v23 已创建但 CHECK 不对）
+INSERT OR IGNORE INTO tag_corrections_v2
+  SELECT * FROM tag_corrections
+  WHERE action IN ('noise_cleared','reclassified','low_confidence_cleared','ai_corrected','human_corrected','confirm_empty','confirm_original');
+
+-- 如果有不符合新 CHECK 的行，修正其 action 为 'reclassified'
+INSERT OR IGNORE INTO tag_corrections_v2
+  SELECT id, chunk_id, old_tags, new_tags, old_confidence, new_confidence,
+    'reclassified' AS action, corrected_by, pattern_tag, created_at
+  FROM tag_corrections
+  WHERE action NOT IN ('noise_cleared','reclassified','low_confidence_cleared','ai_corrected','human_corrected','confirm_empty','confirm_original');
+
+DROP TABLE IF EXISTS tag_corrections;
+ALTER TABLE tag_corrections_v2 RENAME TO tag_corrections;
+
+CREATE INDEX IF NOT EXISTS idx_tag_corrections_chunk ON tag_corrections(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_tag_corrections_action ON tag_corrections(action);
+`,
+  },
+  {
+    version: 25,
+    sql: `
+-- 修复 question_tag_history CHECK 约束，增加 'question_set_sync'
+CREATE TABLE IF NOT EXISTS question_tag_history_v2 (
+  id            TEXT PRIMARY KEY,
+  question_id   TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  old_tags      TEXT NOT NULL,
+  new_tags      TEXT NOT NULL,
+  source        TEXT NOT NULL
+    CHECK(source IN ('fts_document','ai_classifier','keyword_fallback','manual','question_set_sync')),
+  confidence    REAL,
+  details       TEXT,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+INSERT OR IGNORE INTO question_tag_history_v2
+  SELECT * FROM question_tag_history;
+
+DROP TABLE IF EXISTS question_tag_history;
+ALTER TABLE question_tag_history_v2 RENAME TO question_tag_history;
+
+CREATE INDEX IF NOT EXISTS idx_qth_question ON question_tag_history(question_id);
+CREATE INDEX IF NOT EXISTS idx_qth_source ON question_tag_history(source);
+`,
+  },
 ]

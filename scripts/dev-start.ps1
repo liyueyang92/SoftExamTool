@@ -57,6 +57,24 @@ if ($oldPid) {
     Start-Sleep -Seconds 1
 }
 
+# Kill any leftover Electron processes from previous runs
+$electronProcs = Get-Process -Name electron -ErrorAction SilentlyContinue
+if ($electronProcs) {
+    Write-Host "[dev] Killing $($electronProcs.Count) leftover Electron process(es)..." -ForegroundColor Yellow
+    $electronProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
+# Kill any leftover Python processes from previous runs (dev mode only)
+$pythonProcs = Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -like '*python-service*' -or $_.CommandLine -like '*main.py*'
+}
+if ($pythonProcs) {
+    Write-Host "[dev] Killing $($pythonProcs.Count) leftover Python process(es)..." -ForegroundColor Yellow
+    $pythonProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
 Write-Host "[dev] Starting Python service on port $env:INTERNAL_PORT ..." -ForegroundColor Cyan
 
 # -Environment is PS 7.3+ only; set vars in parent so the child inherits them.
@@ -79,6 +97,13 @@ try {
 }
 
 Write-Host "[dev] Starting Electron dev server  (Ctrl-C stops both)..." -ForegroundColor Cyan
+
+# Force rebuild: remove stale electron-vite output so main/preload get recompiled
+$OutDir = Join-Path $AppDir 'out'
+if (Test-Path $OutDir) {
+    Write-Host "[dev] Cleaning stale build output (out/) ..." -ForegroundColor DarkGray
+    Remove-Item -Recurse -Force $OutDir
+}
 
 try {
     Push-Location $AppDir

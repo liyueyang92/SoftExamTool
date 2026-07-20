@@ -3,10 +3,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import type { PdfImportSelection } from '../../../preload/shared-types'
 import { useDocumentStore, type Doc, type DocChunk } from '../stores/document'
+import DocTagReview from '../components/DocTagReview.vue'
 
 const route = useRoute()
 
 const store = useDocumentStore()
+
+// ─── Tag review tab ────────────────────────────────────────────────────────
+const chunkPanelTab = ref<'chunks' | 'review'>('chunks')
+
 
 const selectedDoc = ref<Doc | null>(null)
 const chunks = ref<DocChunk[]>([])
@@ -604,6 +609,113 @@ function formatDate(iso: string) {
     day: '2-digit',
   })
 }
+
+// ─── Tag cleaning & review handlers ────────────────────────────────────────
+const cleaningLoading = ref(false)
+const cleaningMessage = ref('')
+const cleaningError = ref('')
+const lastCleaningResult = ref<Record<string, unknown> | null>(null)  // 持久化清洗报告的引用
+
+async function handleCleanChunks() {
+  if (!selectedDoc.value || cleaningLoading.value) return
+  cleaningLoading.value = true
+  cleaningMessage.value = '🧹 正在分析标签…'
+  cleaningError.value = ''
+  lastCleaningResult.value = null
+  try {
+    const res = await store.cleanDocumentChunks(selectedDoc.value.id)
+    if (!res || !(res as Record<string, unknown>).success) {
+      const err = (res as Record<string, unknown>)?.error as Record<string, string>
+      cleaningError.value = err?.message ?? '清洗失败：服务无响应'
+      cleaningMessage.value = ''
+      return
+    }
+
+    const result = ((res as Record<string, unknown>).data as Record<string, unknown>) ?? {}
+    const report = (result.report as Record<string, unknown>) ?? {}
+    const updated = (result.updated as number) ?? 0
+    const corrections = (result.corrections as number) ?? 0
+
+    cleaningMessage.value = `✅ 已清洗并保存到数据库 — ${updated} 块更新，${corrections} 条修正记录`
+    cleaningError.value = ''
+    lastCleaningResult.value = result
+
+    // 强制重新加载 chunks（从 DB 读回清洗后的数据）
+    if (selectedDoc.value) {
+      loadingChunks.value = true
+      chunks.value = await store.getChunks(selectedDoc.value.id)
+      loadingChunks.value = false
+    }
+  } catch (e) {
+    cleaningError.value = `清洗失败：${(e as Error).message}`
+    cleaningMessage.value = ''
+  } finally {
+    cleaningLoading.value = false
+  }
+}
+
+async function handleRollback() {
+  if (!selectedDoc.value) return
+  const logs = await store.getCleaningLogs(selectedDoc.value.id)
+  if (!logs.length) {
+    cleaningError.value = '没有可回滚的清洗记录'
+    return
+  }
+  const latest = logs[0] as Record<string, unknown>
+  try {
+    cleaningLoading.value = true
+    const res = await store.rollbackCleaning(latest.id as string)
+    if ((res as unknown as Record<string, unknown>)?.success) {
+      cleaningMessage.value = '✅ 已回滚清洗操作'
+      cleaningError.value = ''
+      // 重新加载
+      await openDoc(selectedDoc.value)
+    }
+  } catch (e) {
+    cleaningError.value = `回滚失败：${(e as Error).message}`
+  } finally {
+    cleaningLoading.value = false
+  }
+}
+
+async function handleUpdateChunkTag(chunkId: string, tags: string[], confidence: number | null) {
+  try {
+    const res = await store.updateChunkTags(chunkId, tags, confidence)
+    if (res && (res as Record<string, unknown>).success) {
+      if (selectedDoc.value) {
+        chunks.value = await store.getChunks(selectedDoc.value.id)
+      }
+      cleaningMessage.value = '✅ 标签已保存到数据库'
+      cleaningError.value = ''
+      setTimeout(() => { if (cleaningMessage.value === '✅ 标签已保存到数据库') cleaningMessage.value = '' }, 3000)
+    } else {
+      cleaningError.value = '保存失败'
+    }
+  } catch (e) {
+    cleaningError.value = `保存失败：${(e as Error).message}`
+    console.error('Update tag failed:', e)
+  }
+}
+
+// ─── Review state for ⚠️ icon in chunks tab ─────────────────────────────────
+function reviewedStorageKey(): string {
+  return `tag-review:${selectedDoc.value?.id ?? 'unknown'}`
+}
+function isChunkReviewed(chunk: DocChunk): boolean {
+  try {
+    const raw = localStorage.getItem(reviewedStorageKey())
+    if (raw) {
+      const ids: string[] = JSON.parse(raw)
+      return ids.includes(chunk.id)
+    }
+  } catch { /* ignore */ }
+  return false
+}
+function showWarning(chunk: DocChunk): boolean {
+  // 人工审核过的块不显示警告
+  if (isChunkReviewed(chunk)) return false
+  return chunk.confidence != null && chunk.confidence < 0.7
+}
 </script>
 
 <template>
@@ -669,7 +781,19 @@ function formatDate(iso: string) {
         <template v-else>
           <div class="chunks-header">
             <h3>{{ selectedDoc.title }}</h3>
-            <span class="chunk-count">{{ loadingChunks ? '…' : filteredChunks.length }} / {{ chunks.length }} 个内容块</span>
+            <div class="chunks-tabs">
+              <button
+                class="tab-btn"
+                :class="{ active: chunkPanelTab === 'chunks' }"
+                @click="chunkPanelTab = 'chunks'"
+              >内容块</button>
+              <button
+                class="tab-btn"
+                :class="{ active: chunkPanelTab === 'review' }"
+                @click="chunkPanelTab = 'review'"
+              >🔍 标签审核</button>
+            </div>
+            <span class="chunk-count" v-if="chunkPanelTab === 'chunks'">{{ loadingChunks ? '…' : filteredChunks.length }} / {{ chunks.length }} 个内容块</span>
           </div>
           <!-- 解析中提示 -->
           <div v-if="store.parsingProgress[selectedDoc.id]" class="parsing-bar">
@@ -678,6 +802,24 @@ function formatDate(iso: string) {
             </div>
             <span class="parsing-bar-text">{{ docProgressText(selectedDoc.id) }}</span>
           </div>
+
+          <!-- 标签审核 Tab -->
+          <template v-if="chunkPanelTab === 'review'">
+            <!-- Cleaning status banner -->
+            <div v-if="cleaningMessage" class="cleaning-banner cleaning-ok">{{ cleaningMessage }}</div>
+            <div v-if="cleaningError" class="cleaning-banner cleaning-err">{{ cleaningError }}</div>
+            <DocTagReview
+              :chunks="chunks"
+              :doc-page-count="selectedDoc.page_count"
+              :loading="cleaningLoading"
+              @clean="handleCleanChunks"
+              @rollback="handleRollback"
+              @update-tag="handleUpdateChunkTag"
+            />
+          </template>
+
+          <!-- 内容块 Tab -->
+          <template v-else>
           <div class="chunks-toolbar">
             <div class="search-wrap">
               <input
@@ -718,8 +860,7 @@ function formatDate(iso: string) {
                   <span class="chunk-type-tag" :class="`tag-${chunk.chunk_type || 'text'}`">
                     {{ typeLabel(chunk.chunk_type || 'text') }}
                   </span>
-                  <span v-if="chunk.confidence != null && chunk.confidence < 0.7"
-                        class="chunk-low-conf" title="建议校对">
+                  <span v-if="showWarning(chunk)" class="chunk-low-conf" title="低置信度，建议在标签审核中确认">
                     ⚠️
                   </span>
                 </div>
@@ -777,6 +918,7 @@ function formatDate(iso: string) {
               </div>
             </div>
           </div>
+        </template>
         </template>
       </div>
     </div>
@@ -956,7 +1098,7 @@ function formatDate(iso: string) {
 </template>
 
 <style scoped>
-.doc-view { display: flex; flex-direction: column; height: 100%; gap: 12px; }
+.doc-view { display: flex; flex-direction: column; height: 100%; gap: 12px; overflow: hidden; }
 .toolbar { display: flex; align-items: center; gap: 12px; }
 .view-title { font-size: 20px; font-weight: 700; color: var(--c-text); }
 .toolbar-hint { font-size: 11px; color: var(--c-text-3); flex: 1; }
@@ -979,7 +1121,7 @@ function formatDate(iso: string) {
 .btn-primary:disabled,
 .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.main-layout { flex: 1; display: grid; grid-template-columns: 280px 1fr; gap: 12px; overflow: hidden; }
+.main-layout { flex: 1; display: grid; grid-template-columns: 280px 1fr; gap: 12px; min-height: 0; }
 
 .doc-list {
   background: var(--c-panel);
@@ -988,6 +1130,7 @@ function formatDate(iso: string) {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 .doc-item {
   display: flex;
@@ -1082,9 +1225,9 @@ function formatDate(iso: string) {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
   border-radius: 10px;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
 }
 .chunks-header {
   display: flex;
@@ -1095,6 +1238,27 @@ function formatDate(iso: string) {
 }
 .chunks-header h3 { font-size: 15px; font-weight: 600; color: var(--c-text); }
 .chunk-count { font-size: 12px; color: var(--c-text-3); }
+.chunks-tabs {
+  display: flex;
+  gap: 4px;
+}
+.tab-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--c-border-2);
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--c-bg);
+  color: var(--c-text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.tab-btn.active {
+  background: #1e3a5f;
+  color: #93c5fd;
+  border-color: #33527d;
+}
+.tab-btn:hover:not(.active) { background: #1e293b; }
 .chunks-toolbar {
   display: flex;
   align-items: center;
@@ -1104,6 +1268,15 @@ function formatDate(iso: string) {
   border-bottom: 1px solid var(--c-border);
 }
 .chunk-error { padding: 0 16px; }
+.cleaning-banner {
+  margin: 8px 14px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cleaning-ok { background: #14532d; color: #86efac; border: 1px solid #166534; }
+.cleaning-err { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
 .search-wrap,
 .jump-wrap {
   display: flex;
@@ -1124,8 +1297,9 @@ function formatDate(iso: string) {
 .jump-input { width: 88px; }
 .chunks-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 8px;
+  padding: 8px 8px 40px 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;

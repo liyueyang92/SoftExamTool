@@ -54,6 +54,15 @@ onMounted(async () => {
     const n = parseInt(countParam, 10)
     if (n > 0 && n <= 100) config.value.count = n
   }
+  // 从路由 query 中读取 AI 出题练习传入的分组与来源
+  const groupIdParam = route.query.groupId
+  if (groupIdParam && typeof groupIdParam === 'string') {
+    config.value.groupId = groupIdParam
+  }
+  const sourceTypeParam = route.query.sourceType
+  if (sourceTypeParam && typeof sourceTypeParam === 'string') {
+    config.value.sourceType = sourceTypeParam as PracticeConfig['sourceType']
+  }
 })
 
 async function loadAllTags() {

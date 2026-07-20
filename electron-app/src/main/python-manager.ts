@@ -123,7 +123,9 @@ export class PythonManager {
     if (!pid || pid <= 0) return
 
     if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      // 使用异步 spawn 代替 spawnSync，避免 taskkill 阻塞主进程事件循环。
+      const child = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      child.on('error', (err) => console.warn('[Python] taskkill failed:', err))
       return
     }
 
@@ -203,8 +205,10 @@ export class PythonManager {
   stop(): void {
     this.stopPolling()
     if (this.process?.pid) {
+      console.log(`[Python] Stopping spawned process tree at PID ${this.process.pid}`)
       this.killProcessTree(this.process.pid)
     } else if (this.externalMode) {
+      console.log(`[Python] External mode: stopping service on port ${this.port}`)
       this.stopExternalServiceIfOwned()
     }
     this.process = null

@@ -56,6 +56,10 @@ export const IPC = {
   DOC_REPARSE_PAGE: 'doc:reparsePage',
   DOC_GET_ASSETS: 'doc:getAssets',
   DOC_SET_OFFICIAL: 'doc:setOfficial',
+  DOC_CLEAN_CHUNKS: 'doc:cleanChunks',
+  DOC_UPDATE_CHUNK_TAGS: 'doc:updateChunkTags',
+  DOC_GET_CLEANING_LOGS: 'doc:getCleaningLogs',
+  DOC_ROLLBACK_CLEANING: 'doc:rollbackCleaning',
 
   AI_GENERATE_QUESTIONS: 'ai:generateQuestions',
   AI_GRADE_ESSAY: 'ai:gradeEssay',
@@ -132,6 +136,8 @@ export const IPC = {
 
   QUESTION_EXPORT: 'question:export',
   QUESTION_IMPORT_FILE: 'question:importFile',
+  QUESTION_APPLY_AUTO_TAGS: 'question:applyAutoTags',
+  QUESTION_GET_TAG_HISTORY: 'question:getTagHistory',
 
   // ─── Study Plan Overhaul — Exam Config ─────────────────────────────────────
   EXAM_CONFIG_GET: 'examConfig:get',
@@ -149,6 +155,10 @@ export const IPC = {
   KD_GET_CHUNKS_FOR_DOCS: 'kd:getChunksForDocs',
   AI_EXTRACT_KNOWLEDGE: 'ai:extractKnowledge',
   AI_EXTRACT_PROGRESS: 'ai:extractKnowledge:progress',
+  AI_RECLASSIFY_CHUNK: 'ai:reclassifyChunk',
+  AI_RECLASSIFY_CHUNK_BATCH: 'ai:reclassifyChunkBatch',
+  AI_AUTO_TAG_QUESTIONS: 'ai:autoTagQuestions',
+  AI_CLASSIFY_QUESTION_TAGS: 'ai:classifyQuestionTags',
 
   // ─── Study Plan Overhaul — Learning Logs ───────────────────────────────────
   LOG_CREATE: 'log:create',

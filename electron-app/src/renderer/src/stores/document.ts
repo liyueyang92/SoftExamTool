@@ -180,6 +180,44 @@ export const useDocumentStore = defineStore('document', () => {
     }
   }
 
+  // ─── Phase 4: Tag cleaning & review ──────────────────────────────────────
+
+  const cleaningDocId = ref<string | null>(null)
+  const cleaningResult = ref<Record<string, unknown> | null>(null)
+
+  async function cleanDocumentChunks(docId: string) {
+    cleaningDocId.value = docId
+    cleaningResult.value = null
+    try {
+      const res = await window.electronAPI.cleanDocChunks({ docId } as unknown as Record<string, unknown>)
+      if ((res as unknown as { success: boolean }).success) {
+        cleaningResult.value = (res as unknown as { data: Record<string, unknown> }).data
+      }
+      return res
+    } finally {
+      cleaningDocId.value = null
+    }
+  }
+
+  async function rollbackCleaning(cleaningLogId: string) {
+    const res = await window.electronAPI.rollbackCleaning({ cleaningLogId } as unknown as Record<string, unknown>)
+    if ((res as unknown as { success: boolean }).success) {
+      cleaningResult.value = null
+    }
+    return res
+  }
+
+  async function updateChunkTags(chunkId: string, tags: string[], confidence: number | null) {
+    const res = await window.electronAPI.updateChunkTags({ chunkId, tags, confidence } as unknown as Record<string, unknown>)
+    return res
+  }
+
+  async function getCleaningLogs(docId: string) {
+    const res = await window.electronAPI.getCleaningLogs(docId)
+    if ((res as unknown as { success: boolean }).success) return (res as unknown as { data: unknown[] }).data
+    return []
+  }
+
   return {
     documents,
     loading,
@@ -196,5 +234,11 @@ export const useDocumentStore = defineStore('document', () => {
     updateParsingProgress,
     onImportComplete,
     clearParsingProgress,
+    cleaningDocId,
+    cleaningResult,
+    cleanDocumentChunks,
+    rollbackCleaning,
+    updateChunkTags,
+    getCleaningLogs,
   }
 })

@@ -10,7 +10,6 @@ const documentStore = useDocumentStore()
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-const expandedIds = ref<Set<string>>(new Set())
 const selectedId = ref<string | null>(null)
 const editing = ref(false)
 const editingId = ref<string | null>(null)
@@ -60,13 +59,6 @@ const parentOptions = computed(() => {
 })
 
 // ─── Tree operations ────────────────────────────────────────────────────────
-
-function toggleExpand(id: string) {
-  const next = new Set(expandedIds.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  expandedIds.value = next
-}
 
 function selectNode(id: string) {
   selectedId.value = id
@@ -170,12 +162,6 @@ async function handleImportOutline() {
     const res = await domainStore.importOutline(true)
     if (res.success) {
       importMsg.value = `成功导入 ${res.data?.imported ?? 0} 条知识点`
-      // Auto-expand L1 nodes
-      const next = new Set<string>()
-      for (const n of domainStore.tree) {
-        next.add(n.id)
-      }
-      expandedIds.value = next
     } else {
       const errDetail = typeof res.error === 'object' ? (res.error as any).message : String(res.error)
       importMsg.value = '导入失败: ' + (errDetail || '未知错误')
@@ -218,12 +204,6 @@ onMounted(async () => {
     documentStore.fetchAll(),
   ])
 
-  // Auto-expand all L1 nodes
-  const next = new Set<string>()
-  for (const n of domainStore.tree) {
-    next.add(n.id)
-  }
-  expandedIds.value = next
 })
 </script>
 
@@ -251,10 +231,8 @@ onMounted(async () => {
           v-for="node in domainStore.tree"
           :key="node.id"
           :node="node"
-          :expanded-ids="expandedIds"
           :depth="0"
           :selected-id="selectedId"
-          @toggle-expand="toggleExpand"
           @select="selectNode"
           @add-child="startAddChild"
           @edit="startEdit"

@@ -88,6 +88,18 @@ export function getDomainHierarchyPath(db: Database.Database, id: string): Knowl
   return path
 }
 
+/** 构建 name → {id, parent_id, name, level} 映射，用于层次去重。 */
+export function getDomainNameMap(db: Database.Database): Record<string, { id: string; parent_id: string | null; name: string; level: number }> {
+  const all = db.prepare(
+    'SELECT id, parent_id, name, level FROM knowledge_domains ORDER BY level, sort_order'
+  ).all() as Array<{ id: string; parent_id: string | null; name: string; level: number }>
+  const map: Record<string, { id: string; parent_id: string | null; name: string; level: number }> = {}
+  for (const d of all) {
+    map[d.name] = d
+  }
+  return map
+}
+
 export function getDomainByName(db: Database.Database, name: string): KnowledgeDomain | null {
   const row = db.prepare(
     'SELECT * FROM knowledge_domains WHERE name = ? LIMIT 1'
@@ -261,6 +273,33 @@ export function batchUpsertDomains(
 }
 
 // ─── Chunks for multiple documents ─────────────────────────────────────────────
+
+// ─── Domain tree text formatter (for AI prompts) ─────────────────────────────
+
+/**
+ * 将知识领域树格式化为缩进文本，用于 AI 分类 prompt。
+ * 示例输出：
+ *   · 计算机组成与体系结构
+ *     - 存储系统
+ *       · Cache映射方式（直接/组相联/全相联）
+ */
+export function formatDomainTreeAsText(db: Database.Database): string {
+  const tree = getDomainTree(db)
+  const lines: string[] = []
+
+  function walk(nodes: KnowledgeDomainTreeNode[], indent: number) {
+    for (const node of nodes) {
+      const prefix = '  '.repeat(indent) + (node.level === 1 ? '· ' : node.level === 2 ? '- ' : '  · ')
+      lines.push(`${prefix}${node.name}`)
+      if (node.children.length > 0) {
+        walk(node.children, indent + 1)
+      }
+    }
+  }
+
+  walk(tree, 0)
+  return lines.join('\n')
+}
 
 export function getChunksForDocuments(
   db: Database.Database,
