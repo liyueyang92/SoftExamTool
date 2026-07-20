@@ -282,11 +282,14 @@ export function searchDocChunks(
   const limit = options?.limit ?? 10
   const preferTypes = options?.preferTypes ?? detectPreferredTypes(query)
   const minConf = options?.minConfidence ?? 0.15
-  // Strip HTML tags first, then keep only FTS5-safe characters:
-  // CJK, letters, digits, whitespace, and common punctuation.
+  // Strip HTML tags, then strip FTS5 operator characters (“, *, ^, -)
+  // before keeping only CJK/letter/digit/whitespace/safe punctuation.
+  // Double quotes (ASCII U+0022 and curly U+201C/201D) are phrase delimiters
+  // in FTS5 and must be removed to avoid “unterminated string” errors.
   const ftsQuery = query
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/[^\p{L}\p{N}\s，。？！：；（）【】“”‘’"'、]/gu, ' ')
+    .replace(/<[^>]*>/g,  ' ')
+    .replace(/["\u201C\u201D'\u2018\u2019*^]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s，。？！：；（）【】、]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 
